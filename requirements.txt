@@ -1,0 +1,8 @@
+# 핵심 파이프라인
+PyMuPDF>=1.23        # PDF 폰트/레이아웃 추출 (fitz)
+
+# 평가 (선택)
+numpy>=1.24
+# 덴스 임베딩 평가를 돌릴 때만 (둘 중 택1)
+# sentence-transformers>=2.2
+# openai>=1.0

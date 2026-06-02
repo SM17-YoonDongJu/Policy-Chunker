@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "policy-chunker"
+version = "0.1.0"
+description = "한국 보험약관(약관) PDF를 RAG 임베딩용 청크로 자르는 파이프라인"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["PyMuPDF>=1.23"]
+
+[project.optional-dependencies]
+eval = ["numpy>=1.24"]
+dense = ["numpy>=1.24", "sentence-transformers>=2.2"]
+
+[project.scripts]
+policy-chunker = "policy_chunker.cli:main"
+
+[tool.setuptools]
+packages = ["policy_chunker"]
