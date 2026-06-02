@@ -25,6 +25,9 @@ data/
 !data/.gitkeep
 outputs/*
 !outputs/.gitkeep
+# 평가셋(실데이터일 수 있음) — 예제만 커밋
+eval/*.jsonl
+!eval/*.example.jsonl
 
 # ============================================================
 #  Python

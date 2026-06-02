@@ -128,6 +128,29 @@ $ python -m policy_chunker 표중심약관.pdf --extract -o out.json
 헤더를 본문에 prepend하는 이유: 임베딩 벡터에 "어느 약관 어느 조인지"를 같이 담아야
 동일한 준용규정도 특약별로 구분되고 검색 정확도가 오른다.
 
+## 평가 (측정으로 판단)
+
+청크를 눈으로 보는 대신 **Recall@k로 측정**한다. `eval/`에 베이스라인과 덴스 러너가 있다.
+
+```bash
+# 키워드(BM25) 베이스라인 — 의존성 없이 바로 동작
+python eval/eval_bm25.py --chunks out.json --eval eval/eval_set.example.jsonl --k 1 3 5 10
+
+# 덴스 임베딩 (모델 정해지면)
+pip install numpy sentence-transformers
+python eval/eval_rag.py --chunks out.json --eval eval/eval_set.example.jsonl \
+    --backend st --model BAAI/bge-m3 --k 1 3 5 10
+```
+
+**중요**: 평가 질문은 실제 사용자 구어체·동의어로 써야 한다. 약관과 같은 단어를 쓰면 BM25가
+거저 맞혀 점수가 부풀고(무의미), 말을 바꾸면 진짜 약점이 드러난다. 이 프로젝트의 측정에서:
+
+- 단어를 그대로 쓴 질문 → BM25 Recall@5 ≈ **1.00** (의미 없음)
+- 실제 구어체 질문 → BM25 Recall@5 ≈ **0.58**, 특히 **표 조회 0.00**
+
+즉 표·법률용어를 일상어로 물으면 키워드 검색은 못 잡는다 → **덴스/하이브리드가 필요한 지점**.
+이게 청크 결함이 아니라 검색 방법의 문제라는 점이 핵심이다(청크 본문엔 정답이 들어 있다).
+
 ## 한계 (정직하게)
 
 - **텍스트 PDF 전제.** 스캔본은 OCR 단계가 따로 필요하고 폰트 신호가 없어 다른 접근이 필요하다.

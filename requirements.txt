@@ -10,3 +10,9 @@ opencv-python-headless>=4.8,<4.11
 
 # VLM 표 추출은 별도 패키지 불필요 — 로컬 `claude` CLI(비전)를 subprocess로 호출
 # (Claude Code CLI 설치 + 로그인만 돼 있으면 됨. API 키 불필요)
+
+# 평가 (선택)
+numpy>=1.24
+# 덴스 임베딩 평가를 돌릴 때만 (둘 중 택1)
+# sentence-transformers>=2.2
+# openai>=1.0
