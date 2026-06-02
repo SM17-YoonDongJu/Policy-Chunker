@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "insurance-chunker"
+version = "0.1.0"
+description = "보험 약관 RAG 청킹 파이프라인 (Policy-Chunker 구조 + rag/ 메타데이터 보완)"
+requires-python = ">=3.12"
+dependencies = [
+    # PDF 파싱
+    "pdfplumber>=0.11",
+    "pymupdf>=1.24",          # fitz: 폰트 기반 경계 감지 + 표 추출
+    # Claude Vision
+    "anthropic>=0.40",
+    # 토크나이저
+    "kiwipiepy>=0.18",
+    "tiktoken>=0.7",
+    # 임베딩 (택1)
+    "requests>=2.31",          # Ollama 백엔드
+    # "sentence-transformers>=3.0",  # BGE-M3 백엔드 (선택)
+    "more-itertools>=10",
+    # 저장
+    "psycopg2-binary>=2.9",
+    "pgvector>=0.3",
+    "numpy>=1.26",
+    # 기타
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+ocr = ["paddleocr>=2.7", "paddlepaddle-gpu>=2.6"]
+st  = ["sentence-transformers>=3.0"]
+dev = ["pytest>=8", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["insurance_chunker*", "db*", "eval*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.pdf
+*.json
+!eval/eval_set.example.jsonl
+dry_run_out/
+*.egg-info/
+dist/
+.pytest_cache/
