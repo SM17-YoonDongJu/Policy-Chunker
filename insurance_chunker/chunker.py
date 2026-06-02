@@ -114,11 +114,12 @@ def chunk_document(
         pdf_path: policy_terms에서 폰트 기반 경계 감지에 사용. None이면 건너뜀.
         target: 목표 토큰 수 (병합 기준)
         hard_max: 강제 분할 상한 토큰 수
+
+    Note:
+        product_summary(요약서)는 ingest 대상이 아님. ingest.py에서 진입 전 차단.
     """
     if meta.doc_type == "policy_terms":
         return _chunk_policy_terms(pages, meta, pdf_path, target, hard_max)
-    elif meta.doc_type == "product_summary":
-        return _chunk_product_summary(pages, meta)
     elif meta.doc_type == "schedule":
         return _chunk_schedule(pages, meta)
     else:
@@ -212,41 +213,6 @@ def _pages_to_base_chunks(pages: list[PageResult], meta: DocMeta) -> list[dict]:
                     "page": pno,
                 })
 
-    return chunks
-
-
-# ── product_summary ───────────────────────────────────────────────────────────
-
-def _chunk_product_summary(pages: list[PageResult], meta: DocMeta) -> list[InsuranceChunk]:
-    chunks: list[InsuranceChunk] = []
-    section = meta.product_name
-
-    for page in pages:
-        pfx = _prefix(meta, section)
-
-        # 표 (마크다운)
-        for tbl in page.tables:
-            md = tbl.get("markdown", "")
-            if not md.strip():
-                continue
-            content = f"{pfx}\n{md}"
-            chunks.append(_make(
-                content=content, page_num=page.page_num, idx=len(chunks),
-                section_path=[section], chunk_type=_classify(md),
-                meta=meta, structured_json={"markdown": md},
-            ))
-
-        # 텍스트
-        for para in _split_paragraphs(page.text, max_tok=450):
-            if not para.strip():
-                continue
-            content = f"{pfx}\n{para}"
-            chunks.append(_make(
-                content=content, page_num=page.page_num, idx=len(chunks),
-                section_path=[section], chunk_type=_classify(para), meta=meta,
-            ))
-
-    logger.info(f"[product_summary] {len(chunks)}청크")
     return chunks
 
 

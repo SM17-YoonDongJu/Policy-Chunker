@@ -69,8 +69,11 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     if not pdf_path.exists():
         return {"pdf": str(pdf_path), "status": "ERROR", "error": "파일 없음"}
 
-    t0 = time.time()
     doc_type = doc.get("doc_type") or auto_doc_type(pdf_path.name)
+    if doc_type == "product_summary":
+        return {"pdf": pdf_path.name, "status": "SKIPPED", "reason": "요약서는 ingest 대상 제외"}
+
+    t0 = time.time()
     meta = DocMeta(
         source_pdf=pdf_path.name,
         doc_hash=compute_doc_hash(str(pdf_path)),
@@ -110,7 +113,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     vr = validate_chunks(chunks)
     chunks = vr.valid_chunks
 
-    if not args.no_embed:
+    if not args.no_embed and doc_type != "product_summary":
         from insurance_chunker.embedder import embed_chunks
         chunks = embed_chunks(chunks, ollama_url=args.ollama_url, model=args.embed_model)
 

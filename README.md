@@ -125,6 +125,76 @@ EMBED_BACKEND=sentence_transformers python ingest.py ...
 
 ---
 
+## InsuranceChunk 메타데이터 필드 상세
+
+RAG 검색 및 필터링에 사용되는 필드 전체 설명.
+
+### 문서 식별
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `chunk_id` | str | 청크 고유 ID. `source_pdf + page + seq` 조합의 SHA256 앞 24자 |
+| `parent_id` | str \| None | 긴 조항을 분할했을 때 원본 청크 ID. 분할 없으면 None |
+| `source_pdf` | str | 원본 PDF 파일명 (경로 제외) |
+| `doc_hash` | str | PDF 전체 SHA256. 동일 파일 중복 ingest 방지용 |
+
+### 보험 상품 식별
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `insurer` | str | 보험사명. 예: `"메리츠화재"` |
+| `product_name` | str | 상품명. 예: `"무배당 메리츠 The건강한 5.10.5 보장보험"` |
+| `product_code` | str \| None | 상품 코드. 선택 입력 |
+| `effective_date` | str \| None | 약관 시행일. `YYYY-MM-DD` 형식. 세대별 실손 구분 등에 활용 |
+
+### 문서 구조
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `doc_type` | str | 문서 종류. `policy_terms`(약관) / `schedule`(장해분류표·산출기준표). **`product_summary`(요약서)는 ingest 대상 자체에서 제외** |
+| `yakwan` | str \| None | 약관명. 폰트 크기 기반 경계 감지로 추출. 예: `"무배당 메리츠 The건강한 보통약관"`, `"암 진단특별약관"`. 보통약관·별표는 None |
+| `section_path` | list[str] | 문서 내 위치 경로. 예: `["암 진단특별약관"]`. 편/장이 있으면 `["제1편 일반사항"]` 형식으로 하위 추가 |
+| `page_number` | int | 청크 시작 페이지 번호 (1-based) |
+
+### 약관 조항 (policy_terms 전용)
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `article_number` | str \| None | 조항 번호. 예: `"제12조"`. 조항 경계가 확인된 경우에만 채움 |
+| `article_title` | str \| None | 조항 제목. 예: `"보험금을 지급하지 않는 사유"` |
+
+### 청크 분류
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `chunk_type` | str | 내용 기반 자동 분류. 아래 8종 참고 |
+| `token_count` | int | tiktoken(cl100k) 기준 토큰 수 |
+
+**chunk_type 8종:**
+
+| 값 | 해당 내용 |
+|---|---|
+| `coverage` | 보장 범위, 지급사유, 보험금 지급 조건 |
+| `exclusion` | 면책사항, 보험금을 지급하지 않는 사유 |
+| `duty` | 계약 전 알릴 의무, 고지의무, 통지의무 |
+| `claim` | 보험금 청구 절차, 제출서류 |
+| `termination` | 계약 해지, 효력상실, 소멸 |
+| `schedule` | 별표, 장해분류표, 지급률표, 산출기준표 |
+| `definition` | 용어 정의 |
+| `special_clause` | 특약 관련 내용 |
+| `general` | 위 분류에 해당하지 않는 일반 조항 |
+
+### 검색·임베딩
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `content` | str | 임베딩 대상 전문. `"보험사 \| 상품명 \| 약관명 \| 제N조(제목)"` prefix + `[약관 > 제N조]` header + 본문 순으로 구성. prefix가 붙어야 상품 맥락 없이 보장명만 검색해도 올바른 상품 청크가 우선 노출됨 |
+| `content_tokens` | str | Kiwi 형태소 분석 결과 (공백 구분). pg_trgm 인덱스를 통한 BM25 키워드 검색에 사용 |
+| `structured_json` | dict \| None | 표 청크의 경우 `{"markdown": "..."}` 형태로 원본 마크다운 보존 |
+| `embedding` | list[float] \| None | 1024d 임베딩 벡터. Ollama(qwen3:embedding) 또는 BGE-M3 |
+
+---
+
 ## 환경변수
 
 | 변수 | 기본값 | 설명 |

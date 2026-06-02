@@ -73,6 +73,10 @@ def main() -> None:
         effective_date=args.effective_date,
     )
 
+    if doc_type == "product_summary":
+        logger.info("요약서(product_summary)는 ingest 대상 제외 — 건너뜀")
+        return
+
     conn = None
     if not args.dry_run:
         from db.storage import get_connection, init_schema, doc_already_ingested, delete_by_doc_hash
