@@ -5,13 +5,16 @@ Policy-Chunker — 한국 보험약관(약관) PDF를 RAG 임베딩용 청크로
 PDF 조판 신호(제목 폰트 크기)에서 직접 가져온다. 그 위에 조번호 재추출,
 인용 가드, 호→항→조 병합, 헤더 prepend, 중복 제거를 얹는다.
 """
-from .boundaries import Boundary, Detection, detect, find, label_for
+from .boundaries import Boundary, Detection, detect, find, label_for, assess
 from .rechunk import clean, merge, finalize, report
+from .combine import combine
+from .extract import extract
 
 __version__ = "0.1.0"
 __all__ = [
-    "Boundary", "Detection", "detect", "find", "label_for",
+    "Boundary", "Detection", "detect", "find", "label_for", "assess",
     "clean", "merge", "finalize", "report", "run",
+    "combine", "extract",
 ]
 
 
