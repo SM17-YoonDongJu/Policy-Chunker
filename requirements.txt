@@ -1,0 +1,8 @@
+# 핵심 파이프라인 — 표 추출 4-도구 전부 필수
+PyMuPDF>=1.23        # PDF 폰트/레이아웃 + 본문/표 추출, 페이지 렌더 (fitz)
+pdfplumber>=0.10     # 표 추출(보조)
+camelot-py[cv]>=0.11 # 표 추출(보조). ⚠️ 별도로 ghostscript 시스템 설치 필요
+                     #   macOS: brew install ghostscript / Ubuntu: apt install ghostscript
+
+# VLM 표 추출은 별도 패키지 불필요 — 로컬 `claude` CLI(비전)를 subprocess로 호출
+# (Claude Code CLI 설치 + 로그인만 돼 있으면 됨. API 키 불필요)
