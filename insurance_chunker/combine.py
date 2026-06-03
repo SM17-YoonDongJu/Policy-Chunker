@@ -1,4 +1,4 @@
-"""combine.py — 페이지별로 PyMuPDF vs Vision 중 더 깨끗한 표를 고른다.
+"""combine.py — 페이지별로 PyMuPDF vs VLM 중 더 깨끗한 표를 고른다.
 
 품질 지표: 연속 공백(더블스페이스) 수 — 적을수록 셀 정렬이 깨끗함.
 출처: Policy-Chunker (팀 채택 코드).
@@ -14,16 +14,14 @@ def _double_spaces(md: str) -> int:
 
 def best_table(
     page: int,
-    pymupdf_tables: dict[int, str],
-    vision_tables: dict[int, str],
-    prefer: tuple[str, ...] = ("vision", "pymupdf"),
+    table_sources: dict[str, dict[int, str]],
+    prefer: tuple[str, ...] = ("vlm", "pymupdf"),
 ) -> tuple[str | None, str | None]:
-    """페이지의 두 소스 중 더블스페이스가 적은 쪽 반환. (markdown, source)"""
-    sources = {"pymupdf": pymupdf_tables, "vision": vision_tables}
+    """페이지의 소스들 중 더블스페이스가 적은 쪽 반환. (markdown, source)"""
     cands = []
-    order = list(prefer) + [s for s in sources if s not in prefer]
+    order = list(prefer) + [s for s in table_sources if s not in prefer]
     for src in order:
-        md = sources[src].get(page)
+        md = table_sources.get(src, {}).get(page)
         if md and md.strip():
             cands.append((_double_spaces(md), src, md))
     if not cands:
@@ -34,19 +32,20 @@ def best_table(
 
 
 def select_best_tables(
-    pymupdf_tables: dict[int, str],
-    vision_tables: dict[int, str],
-    prefer: tuple[str, ...] = ("vision", "pymupdf"),
+    table_sources: dict[str, dict[int, str]],
+    prefer: tuple[str, ...] = ("vlm", "pymupdf"),
 ) -> dict[int, tuple[str, str]]:
     """전체 문서의 페이지별 베스트 표 선택.
 
     Returns:
         {page: (markdown, source)}
     """
-    all_pages = set(pymupdf_tables) | set(vision_tables)
+    all_pages: set[int] = set()
+    for pages in table_sources.values():
+        all_pages |= set(pages)
     result: dict[int, tuple[str, str]] = {}
     for page in all_pages:
-        md, src = best_table(page, pymupdf_tables, vision_tables, prefer)
+        md, src = best_table(page, table_sources, prefer)
         if md:
             result[page] = (md, src)
     return result

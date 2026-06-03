@@ -1,7 +1,6 @@
 """rechunk.py — 경계 라벨 부여 + 조번호 재추출 + 호→조 병합 + InsuranceChunk 출력.
 
 Policy-Chunker의 rechunk.py 뼈대를 유지하되 아래를 보완:
-  - tiktoken 실측 토큰 기반 크기 판단 (Policy-Chunker는 글자 수)
   - 8종 chunk_type 분류 + contextual prefix (rag/ 방식)
   - article_number / article_title 메타데이터
   - yakwan 필드 (약관명)
@@ -17,15 +16,8 @@ from typing import Optional
 from .boundaries import Boundary, label_for
 from .models import DocMeta, InsuranceChunk
 
-# ── 토큰 계산 ─────────────────────────────────────────────────────────────────
-try:
-    import tiktoken
-    _enc = tiktoken.get_encoding("cl100k_base")
-    def _tok(text: str) -> int:
-        return len(_enc.encode(text))
-except ImportError:
-    def _tok(text: str) -> int:  # type: ignore[misc]
-        return max(1, int(len(text) / 2.5))
+def _tok(text: str) -> int:
+    return len(text)
 
 # ── 범용 패턴 (한국 약관 공통) ────────────────────────────────────────────────
 FOOTER = re.compile(r"^\s*[-‐–—]\s*\d{1,3}\s*[-‐–—]\s*$")

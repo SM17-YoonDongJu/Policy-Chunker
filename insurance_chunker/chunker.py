@@ -16,14 +16,8 @@ from .tokenizer import tokenize_korean
 
 logger = logging.getLogger(__name__)
 
-try:
-    import tiktoken
-    _enc = tiktoken.get_encoding("cl100k_base")
-    def _tok(text: str) -> int:
-        return len(_enc.encode(text))
-except ImportError:
-    def _tok(text: str) -> int:  # type: ignore[misc]
-        return max(1, int(len(text) / 2.5))
+def _tok(text: str) -> int:
+    return len(text)
 
 _TYPE_MAP: dict[str, str] = {
     "면책": "exclusion", "부지급": "exclusion", "지급하지 않": "exclusion",
@@ -143,9 +137,17 @@ def _chunk_policy_terms(
     if pdf_path:
         try:
             import fitz
+            from .boundaries import assess
             with fitz.open(pdf_path) as doc:
                 bounds, det = find_bounds(doc)
+                level, reasons = assess(doc, det, bounds)
             logger.info(f"폰트 경계 감지: {len(bounds)}개 (본문폰트={det.body_size}, 제목폰트={det.title_size})")
+            if level == "weak":
+                for r in reasons:
+                    logger.warning(f"[신뢰도 WEAK] {r}")
+                logger.warning("경계 신뢰도가 낮습니다 — 청킹 결과를 확인하세요")
+            else:
+                logger.info(f"[신뢰도 OK] {reasons[0]}")
         except Exception as e:
             logger.warning(f"폰트 경계 감지 실패, 경계 없이 진행: {e}")
 

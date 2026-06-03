@@ -15,9 +15,32 @@ _STOPWORDS = {
 _KEEP_TAGS = ("NN", "VV", "VA", "SN", "SL", "XR")
 
 _kiwi = None
+_kiwi_available: bool | None = None  # None=미확인, True=사용가능, False=불가
+
+
+def _check_kiwi_subprocess() -> bool:
+    """subprocess로 Kiwi() 초기화를 격리 테스트 — C 레벨 exit 오염 방지."""
+    import subprocess, sys
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c",
+             "from kiwipiepy import Kiwi; Kiwi().tokenize('테스트'); print('ok')"],
+            capture_output=True, text=True, timeout=30,
+        )
+        return r.returncode == 0 and r.stdout.strip() == "ok"
+    except Exception:
+        return False
 
 
 def _get_kiwi():
+    global _kiwi_available
+    if _kiwi_available is False:
+        return None
+    if _kiwi_available is None:
+        _kiwi_available = _check_kiwi_subprocess()
+        if not _kiwi_available:
+            logger.warning("kiwipiepy 사용 불가 (Python 버전 비호환 등) — raw text 폴백")
+            return None
     try:
         from kiwipiepy import Kiwi  # type: ignore
         return Kiwi()

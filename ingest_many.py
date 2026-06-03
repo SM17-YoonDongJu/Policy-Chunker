@@ -70,9 +70,6 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
         return {"pdf": str(pdf_path), "status": "ERROR", "error": "파일 없음"}
 
     doc_type = doc.get("doc_type") or auto_doc_type(pdf_path.name)
-    if doc_type == "product_summary":
-        return {"pdf": pdf_path.name, "status": "SKIPPED", "reason": "요약서는 ingest 대상 제외"}
-
     t0 = time.time()
     meta = DocMeta(
         source_pdf=pdf_path.name,
@@ -96,16 +93,8 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
                 conn.close()
                 return {"pdf": pdf_path.name, "status": "SKIPPED", "reason": "already ingested"}
 
-    anthropic_client = None
-    if not args.no_vision:
-        try:
-            import anthropic  # type: ignore
-            anthropic_client = anthropic.Anthropic()
-        except ImportError:
-            pass
-
     pages = parse_pdf(str(pdf_path), use_ocr=not args.no_ocr,
-                      anthropic_client=anthropic_client)
+                      use_vision=not args.no_vision)
     chunks = chunk_document(pages, meta,
                             pdf_path=str(pdf_path) if doc_type == "policy_terms" else None,
                             target=args.target_tokens,

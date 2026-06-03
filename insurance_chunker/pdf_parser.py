@@ -1,118 +1,98 @@
-"""PDF 파싱: pdfplumber 텍스트 + PaddleOCR(스캔본).
+"""PDF 파싱: PyMuPDF 텍스트(표 영역 제외).
 
-표 추출은 extractor.py / combine.py 에서 별도 처리.
-출처: rag/pipeline/pdf_parser.py 기반, 표 추출 분리.
+Policy-Chunker(main) extract.py와 동일한 텍스트 추출 방식:
+  - PyMuPDF get_text("blocks") 로 텍스트 블록 추출
+  - 표 bbox와 겹치는 블록은 제외 (본문·표 중복 방지)
+
+스캔본(이미지 PDF)은 지원하지 않는다. 폰트 신호가 없어 경계 감지가
+실패하므로 OCR 전처리 후 텍스트 PDF로 변환해서 입력해야 한다.
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
-import pdfplumber
+import fitz  # PyMuPDF
 
 from .models import PageResult
 
 logger = logging.getLogger(__name__)
 
-_SCAN_DENSITY_THRESHOLD = 0.05
-_ocr_instance = None
 
-
-def _get_ocr():
-    global _ocr_instance
-    if _ocr_instance is not None:
-        return _ocr_instance
-    try:
-        from paddleocr import PaddleOCR  # type: ignore
-        _ocr_instance = PaddleOCR(use_angle_cls=True, lang="korean", use_gpu=True, show_log=False)
-        logger.info("PaddleOCR 초기화 완료")
-        return _ocr_instance
-    except ImportError:
-        logger.warning("PaddleOCR 미설치 — 스캔 페이지 OCR 불가")
-        return None
-    except Exception as e:
-        logger.warning(f"PaddleOCR 초기화 실패: {e}")
-        return None
-
-
-def _text_density(text: str, page_area: float) -> float:
-    expected_chars = page_area / (8 * 12)
-    return len(text.replace(" ", "").replace("\n", "")) / max(expected_chars, 1)
-
-
-def _ocr_page(page) -> str:
-    ocr = _get_ocr()
-    if ocr is None:
-        return ""
-    try:
-        import numpy as np
-        img = page.to_image(resolution=200).original
-        result = ocr.ocr(np.array(img), cls=True)
-        if result and result[0]:
-            return "\n".join(line[1][0] for line in result[0])
-    except Exception as e:
-        logger.warning(f"OCR 실패 (p{page.page_number}): {e}")
-    return ""
+def _overlap(a, b, tol: float = 1.0) -> bool:
+    return not (a[2] <= b[0] + tol or b[2] <= a[0] + tol
+                or a[3] <= b[1] + tol or b[3] <= a[1] + tol)
 
 
 def parse_text(
     pdf_path: str,
-    use_ocr: bool = True,
-) -> tuple[list[PageResult], list]:
-    """PDF 텍스트만 파싱. 표는 포함하지 않음.
+    use_ocr: bool = True,  # 하위 호환성 유지, 현재 미사용
+) -> tuple[list[PageResult], list[int]]:
+    """PyMuPDF get_text("blocks")로 텍스트 추출. 표 영역 제외.
 
     Returns:
-        (pages, pdfplumber_pages_raw)
-        pdfplumber_pages_raw: extractor.py가 이미지 렌더링에 재사용할 수 있도록 반환.
+        (pages, page_numbers)
+        page_numbers: 1-based 페이지 번호 목록. extractor.py에 전달.
     """
     path = str(Path(pdf_path).resolve())
     results: list[PageResult] = []
-    raw_pages = []
+    page_numbers: list[int] = []
 
-    with pdfplumber.open(path) as pdf:
-        total = len(pdf.pages)
+    with fitz.open(path) as doc:
+        total = doc.page_count
         logger.info(f"PDF 파싱 시작: {Path(pdf_path).name} ({total}페이지)")
 
-        for page in pdf.pages:
-            raw_pages.append(page)
-            text = page.extract_text() or ""
-            area = page.width * page.height
-            is_ocr = False
+        for pno in range(1, total + 1):
+            page = doc[pno - 1]
+            page_numbers.append(pno)
 
-            if _text_density(text, area) < _SCAN_DENSITY_THRESHOLD and use_ocr:
-                logger.debug(f"  p{page.page_number}: 스캔본 → OCR")
-                text = _ocr_page(page)
-                is_ocr = True
+            # 표 bbox 탐지 (표 영역 텍스트 제외용)
+            try:
+                found = page.find_tables()
+                tboxes = [t.bbox for t in (found.tables if found else [])]
+            except Exception:
+                tboxes = []
+
+            # 텍스트 블록 추출 — 표 영역과 겹치는 블록 제외
+            blocks_text: list[str] = []
+            for blk in page.get_text("blocks"):
+                x0, y0, x1, y1, txt, _bno, btype = blk
+                if btype != 0:  # 텍스트 블록만
+                    continue
+                txt = txt.strip()
+                if not txt:
+                    continue
+                if any(_overlap((x0, y0, x1, y1), tb) for tb in tboxes):
+                    continue
+                blocks_text.append(txt)
 
             results.append(PageResult(
-                page_num=page.page_number,
-                text=text,
-                tables=[],   # extractor.py에서 채움
-                is_ocr=is_ocr,
+                page_num=pno,
+                text="\n".join(blocks_text),
+                tables=[],
+                is_ocr=False,
             ))
 
-        scanned = sum(1 for r in results if r.is_ocr)
-        logger.info(f"텍스트 파싱 완료: {total}페이지 | OCR: {scanned}페이지")
+        logger.info(f"텍스트 파싱 완료: {total}페이지")
 
-    return results, raw_pages
+    return results, page_numbers
 
 
 def parse_pdf(
     pdf_path: str,
     use_ocr: bool = True,
-    anthropic_client=None,
+    use_vision: bool = True,
 ) -> list[PageResult]:
-    """전체 파싱: 텍스트 + 표(PyMuPDF+Vision → best-of). 최종 PageResult 반환."""
+    """전체 파싱: 텍스트 + 표(다중 소스 best-of). 최종 PageResult 반환."""
     from .extractor import extract_tables_for_doc
     from .combine import select_best_tables
 
-    pages, raw_pages = parse_text(pdf_path, use_ocr=use_ocr)
+    pages, page_numbers = parse_text(pdf_path, use_ocr=use_ocr)
 
-    pymupdf_tables, vision_tables = extract_tables_for_doc(
-        pdf_path, raw_pages, anthropic_client=anthropic_client
+    table_sources = extract_tables_for_doc(
+        pdf_path, page_numbers, use_vision=use_vision
     )
-    best = select_best_tables(pymupdf_tables, vision_tables)
+    best = select_best_tables(table_sources)
 
     for page in pages:
         entry = best.get(page.page_num)

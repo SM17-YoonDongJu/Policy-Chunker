@@ -11,11 +11,8 @@ dependencies = [
     # PDF 파싱
     "pdfplumber>=0.11",
     "pymupdf>=1.24",          # fitz: 폰트 기반 경계 감지 + 표 추출
-    # Claude Vision
-    "anthropic>=0.40",
     # 토크나이저
     "kiwipiepy>=0.18",
-    "tiktoken>=0.7",
     # 임베딩 (택1)
     "requests>=2.31",          # Ollama 백엔드
     # "sentence-transformers>=3.0",  # BGE-M3 백엔드 (선택)
@@ -30,7 +27,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ocr = ["paddleocr>=2.7", "paddlepaddle-gpu>=2.6"]
 st  = ["sentence-transformers>=3.0"]
 dev = ["pytest>=8", "ruff>=0.4"]
 

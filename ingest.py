@@ -73,10 +73,6 @@ def main() -> None:
         effective_date=args.effective_date,
     )
 
-    if doc_type == "product_summary":
-        logger.info("요약서(product_summary)는 ingest 대상 제외 — 건너뜀")
-        return
-
     conn = None
     if not args.dry_run:
         from db.storage import get_connection, init_schema, doc_already_ingested, delete_by_doc_hash
@@ -90,20 +86,11 @@ def main() -> None:
                 conn.close()
                 return
 
-    # Claude Vision 클라이언트
-    anthropic_client = None
-    if not args.no_vision:
-        try:
-            import anthropic  # type: ignore
-            anthropic_client = anthropic.Anthropic()
-        except ImportError:
-            logger.warning("anthropic 미설치 — Vision 비활성화")
-
     # Phase 1: 파싱
     logger.info("Phase 1: PDF 파싱")
     from insurance_chunker.pdf_parser import parse_pdf
     pages = parse_pdf(str(pdf_path), use_ocr=not args.no_ocr,
-                      anthropic_client=anthropic_client)
+                      use_vision=not args.no_vision)
 
     # Phase 2: 청킹
     logger.info("Phase 2: 청킹")
