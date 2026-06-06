@@ -3,7 +3,6 @@
 Policy-Chunker의 rechunk.py 뼈대를 유지하되 아래를 보완:
   - 8종 chunk_type 분류 + contextual prefix (rag/ 방식)
   - article_number / article_title 메타데이터
-  - yakwan 필드 (약관명)
   - 출력: dict → InsuranceChunk
 """
 from __future__ import annotations
@@ -61,10 +60,10 @@ def _classify(text: str, label: Optional[str] = None) -> str:
     return "general"
 
 
-def _prefix(meta: DocMeta, yakwan: Optional[str], art: Optional[int], atitle: Optional[str]) -> str:
+def _prefix(meta: DocMeta, section_label: Optional[str], art: Optional[int], atitle: Optional[str]) -> str:
     parts = [meta.insurer, meta.product_name]
-    if yakwan:
-        parts.append(yakwan)
+    if section_label:
+        parts.append(section_label)
     if art is not None:
         parts.append(f"제{art}조({atitle})" if atitle else f"제{art}조")
     return " | ".join(parts)
@@ -184,7 +183,6 @@ def merge(
         merged.append({
             "source": f0["source"],
             "page_start": min(pages), "page_end": max(pages),
-            "yakwan": yn,
             "section": f0["_label"], "section_kind": f0["_kind"],
             "article_no": f0["_art"], "article_title": f0["_atitle"],
             "chunk_type": ctype, "is_table": False,
@@ -242,7 +240,7 @@ def merge(
         final.append({
             "source": t["source"],
             "page_start": t["_key"][0], "page_end": t["_key"][0],
-            "yakwan": yn, "section": t["_label"], "section_kind": t["_kind"],
+            "section": t["_label"], "section_kind": t["_kind"],
             "article_no": t["_art"], "article_title": t["_atitle"],
             "chunk_type": ctype, "is_table": True,
             "header": h, "prefix": pfx, "body": body,
@@ -277,7 +275,6 @@ def _merge_title_runs(final: list[dict]) -> list[dict]:
         if title_only(m):
             run, j = [], i
             while (j < len(final) and title_only(final[j])
-                   and final[j]["yakwan"] == m["yakwan"]
                    and final[j]["section"] == m["section"]):
                 run.append(final[j])
                 j += 1
@@ -341,7 +338,7 @@ def report(chunks: list[InsuranceChunk], bounds: list[Boundary]) -> dict:
     toks = [c.token_count for c in chunks]
     return {
         "n_chunks": len(chunks),
-        "n_yakwan_bounds": sum(1 for b in bounds if b.kind in ("yak", "base")),
+        "n_special_bounds": sum(1 for b in bounds if b.kind in ("yak", "base")),
         "n_byeolpyo_bounds": sum(1 for b in bounds if b.kind == "byeolpyo"),
         "tok_median": int(statistics.median(toks)) if toks else 0,
         "tok_mean": int(statistics.mean(toks)) if toks else 0,
