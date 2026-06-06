@@ -33,13 +33,15 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--insurer", required=True)
     p.add_argument("--product", required=True)
     p.add_argument("--product-code", default=None)
-    p.add_argument("--effective-date", default=None)
+    p.add_argument("--effective-date", default=None, help="시행일 YYYY-MM-DD")
+    p.add_argument("--yakwan", default=None, help="특약명 (예: '실손의료비 특약') — 폰트 감지 실패 시 fallback")
+    p.add_argument("--generation", default=None, help="세대 (예: '4세대')")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-ocr", action="store_true")
     p.add_argument("--no-vision", action="store_true")
-    p.add_argument("--no-embed", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--dry-run-out", default=None)
+    p.add_argument("--no-embed", action="store_true", help="임베딩 건너뜀 (청킹 테스트 시 사용)")
+    p.add_argument("--dry-run", action="store_true", help="DB 저장 없이 청킹 결과 JSON 출력 (DB 불필요)")
+    p.add_argument("--dry-run-out", default=None, help="dry-run 결과 저장 경로 (없으면 stdout)")
     p.add_argument("--db-url", default=None)
     p.add_argument("--ollama-url", default=None)
     p.add_argument("--embed-model", default=None)
@@ -71,6 +73,8 @@ def main() -> None:
         product_name=args.product,
         product_code=args.product_code,
         effective_date=args.effective_date,
+        yakwan=args.yakwan,
+        generation=args.generation,
     )
 
     conn = None
@@ -121,6 +125,8 @@ def main() -> None:
             "doc_type": meta.doc_type,
             "insurer": meta.insurer,
             "product_name": meta.product_name,
+            "yakwan": meta.yakwan,
+            "generation": meta.generation,
             "chunk_count": len(chunks),
             "chunk_type_counts": dict(Counter(c.chunk_type for c in chunks)),
             "token_stats": {
