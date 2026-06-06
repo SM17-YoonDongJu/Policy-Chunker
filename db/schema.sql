@@ -2,12 +2,12 @@
 -- 출력 컬럼 = DB 컬럼 원칙: InsuranceChunk의 DB 저장 대상 필드와 1:1 대응
 
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS pg_search;
 
 CREATE TABLE IF NOT EXISTS policy_chunks (
     chunk_id        TEXT PRIMARY KEY,
     content         TEXT        NOT NULL,   -- 임베딩 원문
-    content_tokens  TEXT,                   -- Kiwi 형태소 결과 (공백 구분) → tsvector/trgm 검색
+    content_tokens  TEXT,                   -- Kiwi 형태소 결과 (공백 구분) → pg_search BM25 검색
     embedding       vector(1024),           -- qwen3:embedding 1024d / BGE-M3 1024d
     token_count     INT,
     chunk_type      TEXT        NOT NULL,   -- coverage|exclusion|definition|special_clause|duty|claim|termination|schedule|general
@@ -35,14 +35,13 @@ CREATE INDEX IF NOT EXISTS idx_policy_hnsw
     ON policy_chunks USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
--- 키워드 검색: kiwi 형태소 토큰 → tsvector (full-text search)
--- search_term 테이블에서 trigram 보정 후 이 인덱스로 BM25-like 검색
-CREATE INDEX IF NOT EXISTS idx_policy_tsvec
-    ON policy_chunks USING gin (to_tsvector('simple', coalesce(content_tokens, '')));
-
--- 키워드 검색: trigram 부분 일치 (단어 보정 보조용)
-CREATE INDEX IF NOT EXISTS idx_policy_trgm
-    ON policy_chunks USING gin (content_tokens gin_trgm_ops);
+-- 키워드 검색 — pg_search BM25 (tsvector + trigram 대체)
+-- 검색: WHERE content_tokens @@@ '보험금 지급'
+-- 랭킹: ORDER BY paradedb.score(chunk_id) DESC
+CREATE INDEX IF NOT EXISTS idx_policy_bm25
+    ON policy_chunks
+    USING bm25 (chunk_id, content_tokens)
+    WITH (key_field = 'chunk_id');
 
 -- 메타 필터 (보험사·청크타입·시행일)
 CREATE INDEX IF NOT EXISTS idx_policy_meta
