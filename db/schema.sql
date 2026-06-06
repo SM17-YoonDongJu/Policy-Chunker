@@ -3,6 +3,7 @@
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_search;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE IF NOT EXISTS policy_chunks (
     chunk_id        TEXT PRIMARY KEY,
@@ -50,3 +51,14 @@ CREATE INDEX IF NOT EXISTS idx_policy_meta
 -- doc_hash 중복 방지 조회
 CREATE INDEX IF NOT EXISTS idx_policy_doc_hash
     ON policy_chunks (doc_hash);
+
+-- ── search_terms: 쿼리 단어 보정용 용어 사전 ────────────────────────────────
+-- 적재: rebuild_search_terms.py 로 policy_chunks.content_tokens에서 자동 추출
+-- 사용: 검색 쿼리 입력 → trigram 유사 term 조회 → 보정된 term으로 BM25 검색
+
+CREATE TABLE IF NOT EXISTS search_terms (
+    term        TEXT PRIMARY KEY
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_terms_trgm
+    ON search_terms USING gin (term gin_trgm_ops);
