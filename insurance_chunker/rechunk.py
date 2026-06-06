@@ -8,7 +8,6 @@ Policy-Chunker의 rechunk.py 뼈대를 유지하되 아래를 보완:
 """
 from __future__ import annotations
 
-import collections
 import hashlib
 import re
 from typing import Optional
@@ -333,7 +332,6 @@ def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
             article_number=f"제{m['article_no']}조" if m["article_no"] else None,
             article_title=m["article_title"],
             generation=meta.generation,
-            yakwan=m.get("yakwan"),
         ))
     return chunks
 
@@ -341,7 +339,6 @@ def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
 def report(chunks: list[InsuranceChunk], bounds: list[Boundary]) -> dict:
     import statistics
     toks = [c.token_count for c in chunks]
-    yk = collections.Counter(c.yakwan for c in chunks if c.yakwan)
     return {
         "n_chunks": len(chunks),
         "n_yakwan_bounds": sum(1 for b in bounds if b.kind in ("yak", "base")),
@@ -350,5 +347,4 @@ def report(chunks: list[InsuranceChunk], bounds: list[Boundary]) -> dict:
         "tok_mean": int(statistics.mean(toks)) if toks else 0,
         "tok_max": max(toks) if toks else 0,
         "over_600": sum(1 for t in toks if t > 600),
-        "n_unique_yakwan": len(yk),
     }
