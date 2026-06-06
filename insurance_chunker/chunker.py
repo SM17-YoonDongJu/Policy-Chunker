@@ -78,6 +78,7 @@ def _make(
         structured_json=structured_json,
         token_count=_tok(content),
         section_path=section_path,
+        section=" > ".join(section_path) if section_path else "",
         page_number=page_num,
         doc_type=meta.doc_type,
         chunk_type=chunk_type,
@@ -89,7 +90,8 @@ def _make(
         effective_date=meta.effective_date,
         article_number=article_number,
         article_title=article_title,
-        yakwan=yakwan,
+        yakwan=yakwan or meta.yakwan,
+        generation=meta.generation,
     )
 
 

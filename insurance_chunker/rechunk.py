@@ -311,6 +311,7 @@ def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
         text = m["text"]
         key = f"{meta.source_pdf}:{m['page_start']}:{i}"
         chunk_id = hashlib.sha256(key.encode()).hexdigest()[:24]
+        sec = m["section"] or ""
         chunks.append(InsuranceChunk(
             chunk_id=chunk_id,
             parent_id=None,
@@ -318,7 +319,8 @@ def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
             content_tokens=tokenize_korean(text),
             structured_json=None,
             token_count=_tok(text),
-            section_path=[m["section"]] if m["section"] else [],
+            section_path=[sec] if sec else [],
+            section=sec,
             page_number=m["page_start"],
             doc_type="policy_terms",
             chunk_type=m["chunk_type"],
@@ -330,7 +332,8 @@ def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
             effective_date=meta.effective_date,
             article_number=f"제{m['article_no']}조" if m["article_no"] else None,
             article_title=m["article_title"],
-            yakwan=m["yakwan"],
+            yakwan=m["yakwan"] or meta.yakwan,
+            generation=meta.generation,
         ))
     return chunks
 
