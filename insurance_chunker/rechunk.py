@@ -333,6 +333,7 @@ def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
             article_number=f"제{m['article_no']}조" if m["article_no"] else None,
             article_title=m["article_title"],
             generation=meta.generation,
+            yakwan=m.get("yakwan"),
         ))
     return chunks
 

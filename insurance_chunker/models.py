@@ -49,6 +49,7 @@ class InsuranceChunk:
     article_number: Optional[str] = None   # "제12조"
     article_title: Optional[str] = None    # "보험금을 지급하지 않는 사유"
     generation: Optional[str] = None       # 세대
+    yakwan: Optional[str] = None           # 약관명 (특약명 등)
 
     embedding: Optional[list[float]] = None
 
