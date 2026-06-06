@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """BM25 키워드 검색 베이스라인 평가.
-출처: Policy-Chunker/eval/eval_bm25.py
-
-사용:
-  python eval/eval_bm25.py --chunks out.json --eval eval/eval_set.example.jsonl --k 1 3 5 10
+bm25와 hybrid search 비교 위한 베이스라인 코드
 """
 from __future__ import annotations
 

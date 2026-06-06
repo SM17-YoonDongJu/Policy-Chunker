@@ -34,7 +34,6 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--product", required=True)
     p.add_argument("--product-code", default=None)
     p.add_argument("--effective-date", default=None, help="시행일 YYYY-MM-DD")
-    p.add_argument("--yakwan", default=None, help="특약명 (예: '실손의료비 특약') — 폰트 감지 실패 시 fallback")
     p.add_argument("--generation", default=None, help="세대 (예: '4세대')")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-ocr", action="store_true")
@@ -73,7 +72,6 @@ def main() -> None:
         product_name=args.product,
         product_code=args.product_code,
         effective_date=args.effective_date,
-        yakwan=args.yakwan,
         generation=args.generation,
     )
 
@@ -125,7 +123,6 @@ def main() -> None:
             "doc_type": meta.doc_type,
             "insurer": meta.insurer,
             "product_name": meta.product_name,
-            "yakwan": meta.yakwan,
             "generation": meta.generation,
             "chunk_count": len(chunks),
             "chunk_type_counts": dict(Counter(c.chunk_type for c in chunks)),

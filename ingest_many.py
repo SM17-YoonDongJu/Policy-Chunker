@@ -79,7 +79,6 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
         product_name=doc["product_name"],
         product_code=doc.get("product_code"),
         effective_date=doc.get("effective_date"),
-        yakwan=doc.get("yakwan"),
         generation=doc.get("generation"),
     )
 

@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS policy_chunks (
     -- 약관 구조 메타
     article_number  TEXT,                   -- "제12조"
     article_title   TEXT,                   -- "보험금을 지급하지 않는 사유"
-    yakwan          TEXT,                   -- 특약명 (폰트 감지 우선, CLI 인수 fallback)
     generation      TEXT,                   -- 세대 (예: "4세대")
     section         TEXT                    -- 경계 라벨 또는 편/장 경로
 );

@@ -22,7 +22,6 @@ class DocMeta:
     product_name: str
     product_code: Optional[str] = None
     effective_date: Optional[str] = None  # YYYY-MM-DD
-    yakwan: Optional[str] = None          # 특약명 (예: "실손의료비 특약") — 폰트 감지가 없을 때 fallback
     generation: Optional[str] = None      # 세대 (예: "4세대")
 
 
@@ -49,7 +48,6 @@ class InsuranceChunk:
 
     article_number: Optional[str] = None   # "제12조"
     article_title: Optional[str] = None    # "보험금을 지급하지 않는 사유"
-    yakwan: Optional[str] = None           # 특약명 (폰트 감지 우선, meta.yakwan fallback)
     generation: Optional[str] = None       # 세대
 
     embedding: Optional[list[float]] = None

@@ -68,7 +68,6 @@ def _make(
     article_number: Optional[str] = None,
     article_title: Optional[str] = None,
     structured_json=None,
-    yakwan: Optional[str] = None,
 ) -> InsuranceChunk:
     return InsuranceChunk(
         chunk_id=make_chunk_id(meta.source_pdf, page_num, idx),
@@ -90,7 +89,6 @@ def _make(
         effective_date=meta.effective_date,
         article_number=article_number,
         article_title=article_title,
-        yakwan=yakwan or meta.yakwan,
         generation=meta.generation,
     )
 

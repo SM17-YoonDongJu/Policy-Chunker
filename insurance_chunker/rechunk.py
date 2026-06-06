@@ -332,7 +332,6 @@ def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
             effective_date=meta.effective_date,
             article_number=f"제{m['article_no']}조" if m["article_no"] else None,
             article_title=m["article_title"],
-            yakwan=m["yakwan"] or meta.yakwan,
             generation=meta.generation,
         ))
     return chunks
