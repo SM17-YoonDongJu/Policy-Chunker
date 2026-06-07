@@ -18,7 +18,7 @@ from .models import DocMeta, InsuranceChunk, TableMeta
 ROWS_PER_TABLE_CHUNK = 20  # 이 행 수를 초과하면 표를 child 청크로 분할
 
 def _tok(text: str) -> int:
-    return len(text)
+    return int(len(text) * 0.6)  # 글자 수 × 0.6 ≈ Kiwi 형태소 토큰 수 근사
 
 # ── 범용 패턴 (한국 약관 공통) ────────────────────────────────────────────────
 FOOTER = re.compile(r"^\s*[-‐–—]\s*\d{1,3}\s*[-‐–—]\s*$")

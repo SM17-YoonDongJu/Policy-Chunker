@@ -17,7 +17,7 @@ from .tokenizer import tokenize_korean
 logger = logging.getLogger(__name__)
 
 def _tok(text: str) -> int:
-    return len(text)
+    return int(len(text) * 0.6)  # 글자 수 × 0.6 ≈ Kiwi 형태소 토큰 수 근사
 
 _TYPE_MAP: dict[str, str] = {
     "면책": "exclusion", "부지급": "exclusion", "지급하지 않": "exclusion",
