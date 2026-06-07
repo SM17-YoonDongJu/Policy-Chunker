@@ -166,7 +166,7 @@ def _chunk_policy_terms(
     logger.info(
         f"[policy_terms] {stats['n_chunks']}청크 | "
         f"tok_mean={stats['tok_mean']} | over_600={stats['over_600']} | "
-        f"yakwan={stats['n_unique_yakwan']}종"
+        f"특약경계={stats['n_unique_yakwan']}종"
     )
     return chunks
 

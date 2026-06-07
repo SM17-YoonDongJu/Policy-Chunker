@@ -135,7 +135,7 @@ python ingest_many.py --manifest docs.yaml
 
   // 문서 구조
   "doc_type":      "policy_terms",         // policy_terms | schedule
-  "yakwan":        "암 진단특별약관",      // 보통약관·별표는 null
+  "section":       "암 진단특별약관",      // 경계 라벨 (보통약관·별표는 null)
   "section_path":  ["암 진단특별약관"],
   "page_number":   42,
 
