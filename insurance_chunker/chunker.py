@@ -132,6 +132,7 @@ def _chunk_policy_terms(
 
     # 폰트 기반 경계 감지
     bounds = None
+    det = None
     if pdf_path:
         try:
             import fitz
@@ -148,6 +149,13 @@ def _chunk_policy_terms(
                 logger.info(f"[신뢰도 OK] {reasons[0]}")
         except Exception as e:
             logger.warning(f"폰트 경계 감지 실패, 경계 없이 진행: {e}")
+
+    # 서식 페이지 스킵 (제1조 이전 표지·목차·안내문 페이지)
+    if det and det.base_start_page:
+        front = [p for p in pages if p.page_num < det.base_start_page]
+        pages = [p for p in pages if p.page_num >= det.base_start_page]
+        if front:
+            logger.info(f"서식 페이지 스킵: p1~p{front[-1].page_num} ({len(front)}페이지)")
 
     # 페이지 텍스트 → base_chunks (rechunk 입력 형식)
     base_chunks = _pages_to_base_chunks(pages, meta)
