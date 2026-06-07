@@ -49,20 +49,7 @@ pip install -e ".[dev]"
 
 VLM 기능(표 추출)을 사용하려면 [Claude Code CLI](https://claude.ai/code) 설치·로그인 필요 (API 키 불필요).
 
-### 단일 PDF — dry-run (DB 없이 청킹 결과 확인)
-
-```bash
-python ingest.py \
-  --pdf 약관.pdf \
-  --insurer 메리츠화재 \
-  --product "단체안심생활보험" \
-  --no-embed --dry-run --dry-run-out out.json
-```
-
-dry-run은 DB, S3, Ollama 없이 청킹 결과만 JSON으로 출력한다.  
-`--no-vision`을 추가하면 Claude CLI 없이도 실행된다.
-
-### DB 저장
+### 단일 PDF — DB 저장
 
 ```bash
 DATABASE_URL=postgresql://user:pass@host/db \
@@ -95,6 +82,50 @@ documents:
     insurer: KB손해보험
     product_name: 실손보험
     doc_type: policy_terms   # 없으면 파일명으로 자동 판별
+```
+
+---
+
+## dry-run — DB 없이 청킹 결과만 확인
+
+`--dry-run` 플래그를 붙이면 DB·S3·Ollama 없이 청킹 결과만 JSON으로 출력한다.  
+청킹이 제대로 됐는지 확인하거나, 로컬 환경에서 빠르게 테스트할 때 사용한다.
+
+```bash
+# 결과를 파일로 저장
+python ingest.py \
+  --pdf 약관.pdf \
+  --insurer 메리츠화재 \
+  --product "단체안심생활보험" \
+  --no-embed --dry-run --dry-run-out out.json
+
+# VLM(Claude CLI)도 없는 환경
+python ingest.py \
+  --pdf 약관.pdf \
+  --insurer 메리츠화재 \
+  --product "단체안심생활보험" \
+  --no-embed --no-vision --dry-run
+```
+
+`ingest_many.py`도 동일하게 `--dry-run` 플래그를 지원한다.
+
+```bash
+python ingest_many.py --manifest docs.yaml --dry-run --dry-run-dir out/
+```
+
+dry-run 결과 JSON 구조:
+
+```jsonc
+{
+  "summary": {
+    "chunk_count": 312,
+    "chunk_type_counts": { "coverage": 88, "exclusion": 42, … },
+    "token_stats": { "min": 24, "max": 980, "avg": 410 },
+    "over_600": 15,      // 600 토큰 초과 청크 수
+    "warnings": []
+  },
+  "chunks": [ … ]        // InsuranceChunk 목록
+}
 ```
 
 ---
