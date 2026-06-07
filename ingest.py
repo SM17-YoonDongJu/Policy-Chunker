@@ -97,11 +97,13 @@ def main() -> None:
     # Phase 2: 청킹
     logger.info("Phase 2: 청킹")
     from insurance_chunker.chunker import chunk_document
-    chunks = chunk_document(pages, meta,
-                            pdf_path=str(pdf_path) if doc_type == "policy_terms" else None,
-                            target=args.target_tokens,
-                            hard_max=args.hard_max_tokens)
-    logger.info(f"  {len(chunks)}개 청크 생성")
+    chunks, table_metas = chunk_document(
+        pages, meta,
+        pdf_path=str(pdf_path) if doc_type == "policy_terms" else None,
+        target=args.target_tokens,
+        hard_max=args.hard_max_tokens,
+    )
+    logger.info(f"  {len(chunks)}개 청크 생성 | 표 분할 {len(table_metas)}건")
 
     # Phase 2.5: 품질 검증
     from insurance_chunker.validator import validate_chunks
@@ -150,7 +152,17 @@ def main() -> None:
             print(text)
     else:
         logger.info("Phase 4: pgvector 저장")
-        from db.storage import upsert_chunks, verify_upsert
+        from db.storage import upsert_chunks, upsert_table, verify_upsert
+
+        # 표 메타 먼저 저장 (policy_chunks.table_id FK 참조 선행 필요)
+        if table_metas:
+            logger.info(f"  표 메타 저장: {len(table_metas)}건")
+            for tm in table_metas:
+                upsert_table(conn, tm)
+                # TODO: S3 업로드 — boto3 설정 후 활성화
+                # s3.put_object(Bucket=S3_BUCKET, Key=f"policy-tables/{tm.table_id}.md",
+                #               Body=tm.markdown.encode())
+
         upsert_chunks(conn, chunks)
         verify_upsert(conn, doc_hash)
         conn.close()

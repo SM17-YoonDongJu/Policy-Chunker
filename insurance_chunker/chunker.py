@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Optional
 
-from .models import DocMeta, InsuranceChunk, PageResult, make_chunk_id
+from .models import DocMeta, InsuranceChunk, PageResult, TableMeta, make_chunk_id
 from .tokenizer import tokenize_korean
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def chunk_document(
     pdf_path: Optional[str] = None,
     target: int = 500,
     hard_max: int = 1000,
-) -> list[InsuranceChunk]:
+) -> tuple[list[InsuranceChunk], list[TableMeta]]:
     """PDF 페이지 목록 → InsuranceChunk 목록.
 
     Args:
@@ -115,9 +115,9 @@ def chunk_document(
     if meta.doc_type == "policy_terms":
         return _chunk_policy_terms(pages, meta, pdf_path, target, hard_max)
     elif meta.doc_type == "schedule":
-        return _chunk_schedule(pages, meta)
+        return _chunk_schedule(pages, meta), []
     else:
-        return _chunk_plain_text(pages, meta)
+        return _chunk_plain_text(pages, meta), []
 
 
 # ── policy_terms: boundaries + rechunk ────────────────────────────────────────
@@ -128,7 +128,7 @@ def _chunk_policy_terms(
     pdf_path: Optional[str],
     target: int,
     hard_max: int,
-) -> list[InsuranceChunk]:
+) -> tuple[list[InsuranceChunk], list[TableMeta]]:
     from .boundaries import find as find_bounds
     from .rechunk import clean, merge, finalize, report
 
@@ -157,18 +157,18 @@ def _chunk_policy_terms(
     if not bounds:
         # 경계 없으면 단순 텍스트 청킹으로 폴백
         logger.warning("경계 없음 → 단순 페이지 청킹으로 폴백")
-        return _chunk_plain_text(pages, meta)
+        return _chunk_plain_text(pages, meta), []
 
     cleaned = clean(base_chunks, bounds)
     merged = merge(cleaned, meta, target=target, hard_max=hard_max)
-    chunks = finalize(merged, meta)
+    chunks, table_metas = finalize(merged, meta)
     stats = report(chunks, bounds)
     logger.info(
         f"[policy_terms] {stats['n_chunks']}청크 | "
         f"tok_mean={stats['tok_mean']} | over_600={stats['over_600']} | "
-        f"특약경계={stats['n_unique_yakwan']}종"
+        f"특약경계={stats['n_special_bounds']}종 | 표분할={len(table_metas)}건"
     )
-    return chunks
+    return chunks, table_metas
 
 
 def _pages_to_base_chunks(pages: list[PageResult], meta: DocMeta) -> list[dict]:

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+import uuid as _uuid
 from typing import Optional
 
 from .boundaries import Boundary, label_for
-from .models import DocMeta, InsuranceChunk
+from .models import DocMeta, InsuranceChunk, TableMeta
+
+ROWS_PER_TABLE_CHUNK = 20  # 이 행 수를 초과하면 표를 child 청크로 분할
 
 def _tok(text: str) -> int:
     return len(text)
@@ -97,6 +100,20 @@ def _pageseq(cid: str) -> tuple:
 
 def _is_toc(t: str) -> bool:
     return bool(TOC.search(t)) or "- 목 차 -" in t
+
+
+def _parse_markdown_table(body: str) -> tuple[list[str], list[str]]:
+    """markdown 표에서 헤더 행(컬럼명 + 구분선)과 데이터 행 분리."""
+    lines = [l for l in body.split("\n") if l.strip().startswith("|")]
+    if not lines:
+        return [], []
+    sep_idx = next(
+        (i for i, l in enumerate(lines) if re.match(r"^\|[-| :]+\|?\s*$", l.strip())),
+        None,
+    )
+    if sep_idx is not None:
+        return lines[: sep_idx + 1], lines[sep_idx + 1:]
+    return lines[:1], lines[1:]
 
 
 # ── clean ─────────────────────────────────────────────────────────────────────
@@ -298,12 +315,81 @@ def _merge_title_runs(final: list[dict]) -> list[dict]:
 
 # ── finalize → InsuranceChunk ─────────────────────────────────────────────────
 
-def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
-    """dict 목록 → InsuranceChunk 목록. chunk_id 부여 + Kiwi 토크나이저."""
+def finalize(
+    dedup: list[dict],
+    meta: DocMeta,
+    rows_per_table_chunk: int = ROWS_PER_TABLE_CHUNK,
+) -> tuple[list[InsuranceChunk], list[TableMeta]]:
+    """dict 목록 → (InsuranceChunk 목록, TableMeta 목록).
+
+    큰 표(rows_per_table_chunk 초과)는 row 단위 child 청크로 분할하고
+    TableMeta를 반환한다. TableMeta.markdown은 호출 측에서 S3에 업로드한다.
+    """
     from .tokenizer import tokenize_korean
 
-    chunks = []
+    chunks: list[InsuranceChunk] = []
+    table_metas: list[TableMeta] = []
+
     for i, m in enumerate(dedup, 1):
+        # ── 표 청크 ──────────────────────────────────────────────────────────
+        if m["is_table"]:
+            header_lines, data_rows = _parse_markdown_table(m["body"])
+            if len(data_rows) > rows_per_table_chunk and header_lines:
+                # 큰 표 → TableMeta 생성 + row child 청크 분할
+                table_id = str(_uuid.uuid4())
+                col_count = max(0, len(header_lines[0].split("|")) - 2)
+                table_metas.append(TableMeta(
+                    doc_hash=meta.doc_hash,
+                    source_pdf=meta.source_pdf,
+                    insurer=meta.insurer,
+                    product_name=meta.product_name,
+                    effective_date=meta.effective_date,
+                    section=m["section"] or None,
+                    page_number=m["page_start"],
+                    caption=m.get("article_title") or None,
+                    extractor=m.get("table_source", "pdfplumber"),
+                    row_count=len(data_rows),
+                    col_count=col_count,
+                    markdown=m["body"],
+                    table_id=table_id,
+                ))
+                header_text = "\n".join(header_lines)
+                for j in range(0, len(data_rows), rows_per_table_chunk):
+                    batch = data_rows[j: j + rows_per_table_chunk]
+                    row_start = j + 1
+                    row_end = j + len(batch)
+                    child_body = header_text + "\n" + "\n".join(batch)
+                    text = m["prefix"] + "\n" + m["header"] + "\n" + child_body
+                    key = f"{meta.source_pdf}:{m['page_start']}:tbl:{table_id}:{row_start}"
+                    chunk_id = hashlib.sha256(key.encode()).hexdigest()[:24]
+                    chunks.append(InsuranceChunk(
+                        chunk_id=chunk_id,
+                        parent_id=None,
+                        content=text,
+                        content_tokens=tokenize_korean(text),
+                        structured_json=None,
+                        token_count=_tok(text),
+                        section_path=[m["section"]] if m["section"] else [],
+                        section=m["section"] or "",
+                        page_number=m["page_start"],
+                        doc_type="policy_terms",
+                        chunk_type=m["chunk_type"],
+                        source_pdf=meta.source_pdf,
+                        doc_hash=meta.doc_hash,
+                        insurer=meta.insurer,
+                        product_name=meta.product_name,
+                        product_code=meta.product_code,
+                        effective_date=meta.effective_date,
+                        article_number=f"제{m['article_no']}조" if m.get("article_no") else None,
+                        article_title=m.get("article_title"),
+                        generation=meta.generation,
+                        table_id=table_id,
+                        row_start=row_start,
+                        row_end=row_end,
+                    ))
+                continue
+
+        # ── 텍스트 청크 + 작은 표 (분할 불필요) ──────────────────────────────
         text = m["text"]
         key = f"{meta.source_pdf}:{m['page_start']}:{i}"
         chunk_id = hashlib.sha256(key.encode()).hexdigest()[:24]
@@ -330,7 +416,8 @@ def finalize(dedup: list[dict], meta: DocMeta) -> list[InsuranceChunk]:
             article_title=m["article_title"],
             generation=meta.generation,
         ))
-    return chunks
+
+    return chunks, table_metas
 
 
 def report(chunks: list[InsuranceChunk], bounds: list[Boundary]) -> dict:
