@@ -1,0 +1,18 @@
+# 핵심 파이프라인 — 표 추출 4-도구 전부 필수
+PyMuPDF>=1.23        # PDF 폰트/레이아웃 + 본문/표 추출, 페이지 렌더 (fitz)
+pdfplumber>=0.10     # 표 추출(보조)
+camelot-py[cv]>=0.11 # 표 추출(보조). ⚠️ 별도로 ghostscript 시스템 설치 필요
+                     #   macOS: brew install ghostscript / Ubuntu: apt install ghostscript
+# camelot이 끌어오는 opencv는 최신(4.11+)이 arm64/일부 파이썬에서 prebuilt 휠이 없어
+# 소스 빌드→깨지는 경우가 있다. prebuilt가 있는 버전으로 고정.
+opencv-python-headless>=4.8,<4.11
+# Python 3.13+ 는 opencv/camelot 휠이 아직 없을 수 있으니 Python 3.12 권장.
+
+# VLM 표 추출은 별도 패키지 불필요 — 로컬 `claude` CLI(비전)를 subprocess로 호출
+# (Claude Code CLI 설치 + 로그인만 돼 있으면 됨. API 키 불필요)
+
+# 평가 (선택)
+numpy>=1.24
+# 덴스 임베딩 평가를 돌릴 때만 (둘 중 택1)
+# sentence-transformers>=2.2
+# openai>=1.0
