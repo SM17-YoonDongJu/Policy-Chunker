@@ -229,7 +229,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
 | `CLAUDE_BIN` | `claude` | VLM 표 추출에 사용하는 Claude CLI 실행 경로 |
 | `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
-| `VLM_TIMEOUT` | `300` | Claude CLI 호출 타임아웃(초) |
+| `VLM_TIMEOUT` | `600` | Claude CLI 호출 타임아웃(초) |
 | `VISION_MAX_PAGES` | `9999` | VLM 호출 상한 페이지 수 |
 
 ---

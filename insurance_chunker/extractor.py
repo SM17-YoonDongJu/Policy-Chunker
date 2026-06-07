@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 VISION_MAX_PAGES = int(os.environ.get("VISION_MAX_PAGES", "9999"))
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 VLM_DPI = int(os.environ.get("VLM_DPI", "150"))
-VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "300"))
+VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "600"))
 
 _vision_call_count = 0
 
