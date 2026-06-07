@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS policy_chunks (
     row_end         SMALLINT
 );
 
+-- ── 마이그레이션: 기존 DB에 신규 컬럼 추가 ──────────────────────────────────
+-- CREATE TABLE IF NOT EXISTS는 기존 테이블에 컬럼을 추가하지 않으므로
+-- 운영 DB 또는 이미 초기화된 DB에는 아래 ALTER TABLE을 별도 실행한다.
+ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS chunk_index INT;
+ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS table_id    UUID;
+ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_start   SMALLINT;
+ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_end     SMALLINT;
+
+
 -- ── 검색 인덱스 ──────────────────────────────────────────────────────────────
 
 -- 벡터 검색 (ANN, cosine similarity) — HNSW
@@ -76,10 +85,3 @@ CREATE TABLE IF NOT EXISTS search_terms (
 CREATE INDEX IF NOT EXISTS idx_search_terms_trgm
     ON search_terms USING gin (term gin_trgm_ops);
 
--- ── 마이그레이션: 기존 DB에 신규 컬럼 추가 ──────────────────────────────────
--- CREATE TABLE IF NOT EXISTS는 기존 테이블에 컬럼을 추가하지 않으므로
--- 운영 DB 또는 이미 초기화된 DB에는 아래 ALTER TABLE을 별도 실행한다.
-ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS chunk_index INT;
-ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS table_id    UUID;
-ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_start   SMALLINT;
-ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_end     SMALLINT;

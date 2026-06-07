@@ -198,7 +198,6 @@ def merge(
         pfx = _prefix(meta, yn, f0["_art"], f0["_atitle"])
         ctype = _classify(body, f0["_label"])
         merged.append({
-            "source": f0["source"],
             "page_start": min(pages), "page_end": max(pages),
             "section": f0["_label"], "section_kind": f0["_kind"],
             "article_no": f0["_art"], "article_title": f0["_atitle"],
@@ -255,7 +254,6 @@ def merge(
         body = t["text"].strip()
         ctype = _classify(body, t["_label"])
         final.append({
-            "source": t["source"],
             "page_start": t["_key"][0], "page_end": t["_key"][0],
             "section": t["_label"], "section_kind": t["_kind"],
             "article_no": t["_art"], "article_title": t["_atitle"],
