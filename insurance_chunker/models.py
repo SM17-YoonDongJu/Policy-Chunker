@@ -14,6 +14,25 @@ class PageResult:
 
 
 @dataclass
+class TableMeta:
+    """policy_tables 행 + S3 업로드 대상."""
+    doc_hash: str
+    source_pdf: str
+    insurer: str
+    product_name: str
+    page_number: int
+    extractor: str              # 'pymupdf' | 'pdfplumber' | 'camelot' | 'vlm'
+    markdown: str               # S3 저장 원본
+    effective_date: Optional[str] = None
+    section: Optional[str] = None
+    table_index: int = 0
+    caption: Optional[str] = None
+    row_count: Optional[int] = None
+    col_count: Optional[int] = None
+    table_id: Optional[str] = None  # gen_random_uuid() — DB 저장 후 채워짐
+
+
+@dataclass
 class DocMeta:
     source_pdf: str
     doc_hash: str
@@ -49,6 +68,11 @@ class InsuranceChunk:
     article_number: Optional[str] = None   # "제12조"
     article_title: Optional[str] = None    # "보험금을 지급하지 않는 사유"
     generation: Optional[str] = None       # 세대
+
+    # 표 row 청크 전용 (텍스트 청크는 None)
+    table_id: Optional[str] = None         # FK → policy_tables.table_id
+    row_start: Optional[int] = None
+    row_end: Optional[int] = None
 
     embedding: Optional[list[float]] = None
 

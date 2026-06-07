@@ -5,6 +5,37 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_search;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- ── policy_tables: 표 원본 메타 (markdown 원본은 S3에 저장) ─────────────────
+-- S3 경로: policy-tables/{table_id}.md
+CREATE TABLE IF NOT EXISTS policy_tables (
+    table_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- 문서 식별
+    doc_hash        TEXT        NOT NULL,
+    source_pdf      TEXT        NOT NULL,
+    insurer         TEXT        NOT NULL,
+    product_name    TEXT        NOT NULL,
+    effective_date  DATE,
+
+    -- 위치
+    section         TEXT,                   -- 소속 특약 (policy_chunks.section과 동일값)
+    page_number     INT         NOT NULL,
+    table_index     SMALLINT    NOT NULL DEFAULT 0,  -- 같은 페이지 내 순서
+
+    -- 표 식별
+    caption         TEXT,                   -- 표 제목 (child chunk content 구성에 사용)
+    extractor       TEXT        NOT NULL,   -- 'pymupdf' | 'pdfplumber' | 'camelot' | 'vlm'
+    row_count       SMALLINT,
+    col_count       SMALLINT,
+
+    ingested_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tables_doc_hash
+    ON policy_tables (doc_hash);
+
+-- ── policy_chunks: 약관(policy_terms) 청크 테이블 ────────────────────────────
+-- 출력 컬럼 = DB 컬럼 원칙: InsuranceChunk의 DB 저장 대상 필드와 1:1 대응
 CREATE TABLE IF NOT EXISTS policy_chunks (
     chunk_id        TEXT PRIMARY KEY,
     content         TEXT        NOT NULL,   -- 임베딩 원문
@@ -26,7 +57,12 @@ CREATE TABLE IF NOT EXISTS policy_chunks (
     article_number  TEXT,                   -- "제12조"
     article_title   TEXT,                   -- "보험금을 지급하지 않는 사유"
     generation      TEXT,                   -- 세대 (예: "4세대")
-    section         TEXT                    -- 경계 라벨 또는 편/장 경로
+    section         TEXT,                   -- 경계 라벨 또는 편/장 경로
+
+    -- 표 row 청크 전용 (텍스트 청크는 NULL)
+    table_id        UUID REFERENCES policy_tables(table_id),
+    row_start       SMALLINT,
+    row_end         SMALLINT
 );
 
 -- ── 검색 인덱스 ──────────────────────────────────────────────────────────────
@@ -51,6 +87,10 @@ CREATE INDEX IF NOT EXISTS idx_policy_meta
 -- doc_hash 중복 방지 조회
 CREATE INDEX IF NOT EXISTS idx_policy_doc_hash
     ON policy_chunks (doc_hash);
+
+-- 표 row 청크 조회 (table_id로 child 전체 fetch)
+CREATE INDEX IF NOT EXISTS idx_policy_table_id
+    ON policy_chunks (table_id);
 
 -- ── search_terms: 쿼리 단어 보정용 용어 사전 ────────────────────────────────
 -- 적재: rebuild_search_terms.py 로 policy_chunks.content_tokens에서 자동 추출

@@ -10,7 +10,7 @@ import numpy as np
 import psycopg2
 from pgvector.psycopg2 import register_vector
 
-from ..insurance_chunker.models import InsuranceChunk
+from ..insurance_chunker.models import InsuranceChunk, TableMeta
 
 logger = logging.getLogger(__name__)
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -70,10 +70,14 @@ def upsert_chunks(
             article_number,
             article_title,
             generation,
-            section
+            section,
+            table_id,
+            row_start,
+            row_end
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s
         )
         ON CONFLICT (chunk_id) DO UPDATE SET
             content        = EXCLUDED.content,
@@ -84,7 +88,10 @@ def upsert_chunks(
             article_number = EXCLUDED.article_number,
             article_title  = EXCLUDED.article_title,
             generation     = EXCLUDED.generation,
-            section        = EXCLUDED.section
+            section        = EXCLUDED.section,
+            table_id       = EXCLUDED.table_id,
+            row_start      = EXCLUDED.row_start,
+            row_end        = EXCLUDED.row_end
     """
     total = len(chunks)
     with conn.cursor() as cur:
@@ -108,6 +115,9 @@ def upsert_chunks(
                     c.article_title,
                     c.generation,
                     c.section,
+                    c.table_id,
+                    c.row_start,
+                    c.row_end,
                 )
                 for c in batch
             ]
@@ -115,6 +125,30 @@ def upsert_chunks(
             logger.info(f"  저장 {min(i+batch_size, total)}/{total}")
     conn.commit()
     logger.info(f"총 {total}개 청크 저장 완료")
+
+
+def upsert_table(
+    conn: psycopg2.extensions.connection,
+    table: TableMeta,
+) -> str:
+    """policy_tables에 표 메타를 저장하고 table_id(UUID str)를 반환."""
+    sql = """
+        INSERT INTO policy_tables (
+            doc_hash, source_pdf, insurer, product_name, effective_date,
+            section, page_number, table_index, caption, extractor,
+            row_count, col_count
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING table_id
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (
+            table.doc_hash, table.source_pdf, table.insurer, table.product_name,
+            table.effective_date, table.section, table.page_number, table.table_index,
+            table.caption, table.extractor, table.row_count, table.col_count,
+        ))
+        table_id = str(cur.fetchone()[0])
+    conn.commit()
+    return table_id
 
 
 def verify_upsert(conn: psycopg2.extensions.connection, doc_hash: str) -> dict:
