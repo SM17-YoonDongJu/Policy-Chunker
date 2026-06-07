@@ -344,4 +344,5 @@ def report(chunks: list[InsuranceChunk], bounds: list[Boundary]) -> dict:
         "tok_mean": int(statistics.mean(toks)) if toks else 0,
         "tok_max": max(toks) if toks else 0,
         "over_600": sum(1 for t in toks if t > 600),
+        "n_unique_yakwan": len({b.label for b in bounds if b.kind == "yak"}),
     }
