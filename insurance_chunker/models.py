@@ -47,13 +47,10 @@ class DocMeta:
 @dataclass
 class InsuranceChunk:
     chunk_id: str
-    parent_id: Optional[str]           # 내부용 — DB 저장 안 함
     content: str
     content_tokens: str                 # Kiwi 형태소 결과 (공백 구분)
-    structured_json: Optional[dict]     # 내부용 — DB 저장 안 함
     token_count: int
-    section_path: list[str]             # 내부용
-    section: str                        # DB 저장용: section_path 또는 경계 라벨 평탄화
+    section: str                        # 경계 라벨 또는 편/장 경로
     page_number: int
     doc_type: str                       # 내부용 — DB 저장 안 함
     chunk_type: str                     # coverage | exclusion | definition | special_clause | duty | claim | termination | schedule | general

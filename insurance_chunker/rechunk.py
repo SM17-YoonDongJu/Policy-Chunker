@@ -365,12 +365,9 @@ def finalize(
                     chunk_id = hashlib.sha256(key.encode()).hexdigest()[:24]
                     chunks.append(InsuranceChunk(
                         chunk_id=chunk_id,
-                        parent_id=None,
                         content=text,
                         content_tokens=tokenize_korean(text),
-                        structured_json=None,
                         token_count=_tok(text),
-                        section_path=[m["section"]] if m["section"] else [],
                         section=m["section"] or "",
                         page_number=m["page_start"],
                         doc_type="policy_terms",
@@ -399,12 +396,9 @@ def finalize(
         sec = m["section"] or ""
         chunks.append(InsuranceChunk(
             chunk_id=chunk_id,
-            parent_id=None,
             content=text,
             content_tokens=tokenize_korean(text),
-            structured_json=None,
             token_count=_tok(text),
-            section_path=[sec] if sec else [],
             section=sec,
             page_number=m["page_start"],
             doc_type="policy_terms",

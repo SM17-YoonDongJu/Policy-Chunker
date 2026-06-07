@@ -62,23 +62,19 @@ def _make(
     content: str,
     page_num: int,
     idx: int,
-    section_path: list[str],
+    section: str,
     chunk_type: str,
     meta: DocMeta,
     article_number: Optional[str] = None,
     article_title: Optional[str] = None,
-    structured_json=None,
     chunk_index: int = 0,
 ) -> InsuranceChunk:
     return InsuranceChunk(
         chunk_id=make_chunk_id(meta.source_pdf, page_num, idx, meta.doc_hash),
-        parent_id=None,
         content=content,
         content_tokens=tokenize_korean(content),
-        structured_json=structured_json,
         token_count=_tok(content),
-        section_path=section_path,
-        section=" > ".join(section_path) if section_path else "",
+        section=section,
         page_number=page_num,
         doc_type=meta.doc_type,
         chunk_type=chunk_type,
@@ -234,9 +230,8 @@ def _chunk_schedule(pages: list[PageResult], meta: DocMeta) -> list[InsuranceChu
             content = f"{pfx}\n{md}"
             chunks.append(_make(
                 content=content, page_num=page.page_num, idx=len(chunks),
-                section_path=[meta.product_name], chunk_type="schedule",
-                meta=meta, structured_json={"markdown": md},
-                chunk_index=len(chunks),
+                section=meta.product_name, chunk_type="schedule",
+                meta=meta, chunk_index=len(chunks),
             ))
 
     logger.info(f"[schedule] {len(chunks)}청크")
@@ -255,7 +250,7 @@ def _chunk_plain_text(pages: list[PageResult], meta: DocMeta) -> list[InsuranceC
             chunks.append(_make(
                 content=f"{pfx}\n{para}",
                 page_num=page.page_num, idx=len(chunks),
-                section_path=[meta.product_name], chunk_type=_classify(para), meta=meta,
+                section=meta.product_name, chunk_type=_classify(para), meta=meta,
                 chunk_index=len(chunks),
             ))
     logger.info(f"[plain_text] {len(chunks)}청크")
