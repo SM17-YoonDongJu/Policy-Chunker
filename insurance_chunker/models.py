@@ -78,8 +78,8 @@ class InsuranceChunk:
     embedding: Optional[list[float]] = None
 
 
-def make_chunk_id(source_pdf: str, page_num: int, idx: int) -> str:
-    key = f"{source_pdf}:{page_num}:{idx}"
+def make_chunk_id(source_pdf: str, page_num: int, idx: int, doc_hash: str = "") -> str:
+    key = f"{doc_hash}:{source_pdf}:{page_num}:{idx}"
     return hashlib.sha256(key.encode()).hexdigest()[:24]
 
 

@@ -361,7 +361,7 @@ def finalize(
                     row_end = j + len(batch)
                     child_body = header_text + "\n" + "\n".join(batch)
                     text = m["prefix"] + "\n" + m["header"] + "\n" + child_body
-                    key = f"{meta.source_pdf}:{m['page_start']}:tbl:{table_id}:{row_start}"
+                    key = f"{meta.doc_hash}:{meta.source_pdf}:{m['page_start']}:tbl:{table_id}:{row_start}"
                     chunk_id = hashlib.sha256(key.encode()).hexdigest()[:24]
                     chunks.append(InsuranceChunk(
                         chunk_id=chunk_id,
@@ -394,7 +394,7 @@ def finalize(
 
         # ── 텍스트 청크 + 작은 표 (분할 불필요) ──────────────────────────────
         text = m["text"]
-        key = f"{meta.source_pdf}:{m['page_start']}:{i}"
+        key = f"{meta.doc_hash}:{meta.source_pdf}:{m['page_start']}:{i}"
         chunk_id = hashlib.sha256(key.encode()).hexdigest()[:24]
         sec = m["section"] or ""
         chunks.append(InsuranceChunk(

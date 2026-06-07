@@ -96,10 +96,12 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
 
     pages = parse_pdf(str(pdf_path), use_ocr=not args.no_ocr,
                       use_vision=not args.no_vision)
-    chunks = chunk_document(pages, meta,
-                            pdf_path=str(pdf_path) if doc_type == "policy_terms" else None,
-                            target=args.target_tokens,
-                            hard_max=args.hard_max_tokens)
+    chunks, table_metas = chunk_document(
+        pages, meta,
+        pdf_path=str(pdf_path) if doc_type == "policy_terms" else None,
+        target=args.target_tokens,
+        hard_max=args.hard_max_tokens,
+    )
     vr = validate_chunks(chunks)
     chunks = vr.valid_chunks
 
@@ -124,6 +126,9 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
         )
     else:
         from db.storage import upsert_chunks, verify_upsert
+        from ingest import _upload_tables_to_s3
+        if table_metas:
+            _upload_tables_to_s3(table_metas)
         upsert_chunks(conn, chunks)
         verify_upsert(conn, meta.doc_hash)
         conn.close()

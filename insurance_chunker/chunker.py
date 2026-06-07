@@ -68,9 +68,10 @@ def _make(
     article_number: Optional[str] = None,
     article_title: Optional[str] = None,
     structured_json=None,
+    chunk_index: int = 0,
 ) -> InsuranceChunk:
     return InsuranceChunk(
-        chunk_id=make_chunk_id(meta.source_pdf, page_num, idx),
+        chunk_id=make_chunk_id(meta.source_pdf, page_num, idx, meta.doc_hash),
         parent_id=None,
         content=content,
         content_tokens=tokenize_korean(content),
@@ -90,6 +91,7 @@ def _make(
         article_number=article_number,
         article_title=article_title,
         generation=meta.generation,
+        chunk_index=chunk_index,
     )
 
 
@@ -234,6 +236,7 @@ def _chunk_schedule(pages: list[PageResult], meta: DocMeta) -> list[InsuranceChu
                 content=content, page_num=page.page_num, idx=len(chunks),
                 section_path=[meta.product_name], chunk_type="schedule",
                 meta=meta, structured_json={"markdown": md},
+                chunk_index=len(chunks),
             ))
 
     logger.info(f"[schedule] {len(chunks)}청크")
@@ -253,6 +256,7 @@ def _chunk_plain_text(pages: list[PageResult], meta: DocMeta) -> list[InsuranceC
                 content=f"{pfx}\n{para}",
                 page_num=page.page_num, idx=len(chunks),
                 section_path=[meta.product_name], chunk_type=_classify(para), meta=meta,
+                chunk_index=len(chunks),
             ))
     logger.info(f"[plain_text] {len(chunks)}청크")
     return chunks
