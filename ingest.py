@@ -49,6 +49,39 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _upload_tables_to_s3(table_metas: list) -> None:
+    """표 원본 markdown을 S3에 업로드. S3_BUCKET 환경변수 미설정 시 로컬 캐시로 대체."""
+    import os
+    bucket = os.environ.get("S3_BUCKET")
+    if not bucket:
+        _cache_tables_locally(table_metas)
+        return
+    try:
+        import boto3
+        s3 = boto3.client("s3")
+        for tm in table_metas:
+            s3.put_object(
+                Bucket=bucket,
+                Key=f"policy-tables/{tm.table_id}.md",
+                Body=tm.markdown.encode("utf-8"),
+                ContentType="text/markdown",
+            )
+            logger.info(f"  S3 업로드: {tm.table_id} ({tm.row_count}행)")
+    except Exception as e:
+        logger.warning(f"S3 업로드 실패, 로컬 캐시로 대체: {e}")
+        _cache_tables_locally(table_metas)
+
+
+def _cache_tables_locally(table_metas: list) -> None:
+    """S3 미설정 시 .table_cache/ 폴더에 markdown 저장."""
+    from pathlib import Path
+    cache_dir = Path(".table_cache")
+    cache_dir.mkdir(exist_ok=True)
+    for tm in table_metas:
+        (cache_dir / f"{tm.table_id}.md").write_text(tm.markdown, encoding="utf-8")
+    logger.info(f"  로컬 캐시 저장: .table_cache/ ({len(table_metas)}건)")
+
+
 def main() -> None:
     args = _parse_args()
     pdf_path = Path(args.pdf)
@@ -152,16 +185,12 @@ def main() -> None:
             print(text)
     else:
         logger.info("Phase 4: pgvector 저장")
-        from db.storage import upsert_chunks, upsert_table, verify_upsert
+        from db.storage import upsert_chunks, verify_upsert
 
-        # 표 메타 먼저 저장 (policy_chunks.table_id FK 참조 선행 필요)
+        # 표 원본 S3 업로드 (table_id = S3 key, FK 없음)
         if table_metas:
-            logger.info(f"  표 메타 저장: {len(table_metas)}건")
-            for tm in table_metas:
-                upsert_table(conn, tm)
-                # TODO: S3 업로드 — boto3 설정 후 활성화
-                # s3.put_object(Bucket=S3_BUCKET, Key=f"policy-tables/{tm.table_id}.md",
-                #               Body=tm.markdown.encode())
+            logger.info(f"  표 S3 업로드: {len(table_metas)}건")
+            _upload_tables_to_s3(table_metas)
 
         upsert_chunks(conn, chunks)
         verify_upsert(conn, doc_hash)

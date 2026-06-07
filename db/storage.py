@@ -10,7 +10,7 @@ import numpy as np
 import psycopg2
 from pgvector.psycopg2 import register_vector
 
-from ..insurance_chunker.models import InsuranceChunk, TableMeta
+from ..insurance_chunker.models import InsuranceChunk
 
 logger = logging.getLogger(__name__)
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -125,36 +125,6 @@ def upsert_chunks(
             logger.info(f"  저장 {min(i+batch_size, total)}/{total}")
     conn.commit()
     logger.info(f"총 {total}개 청크 저장 완료")
-
-
-def upsert_table(
-    conn: psycopg2.extensions.connection,
-    table: TableMeta,
-) -> str:
-    """policy_tables에 표 메타를 저장하고 table_id(UUID str)를 반환.
-
-    table.table_id가 finalize()에서 미리 생성된 UUID이므로 명시적으로 INSERT.
-    policy_chunks.table_id FK가 이 값을 참조하므로 chunks 저장 전에 호출해야 한다.
-    """
-    sql = """
-        INSERT INTO policy_tables (
-            table_id,
-            doc_hash, source_pdf, insurer, product_name, effective_date,
-            section, page_number, table_index, caption, extractor,
-            row_count, col_count
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (table_id) DO NOTHING
-        RETURNING table_id
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql, (
-            table.table_id,
-            table.doc_hash, table.source_pdf, table.insurer, table.product_name,
-            table.effective_date, table.section, table.page_number, table.table_index,
-            table.caption, table.extractor, table.row_count, table.col_count,
-        ))
-    conn.commit()
-    return table.table_id
 
 
 def verify_upsert(conn: psycopg2.extensions.connection, doc_hash: str) -> dict:
