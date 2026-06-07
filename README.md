@@ -169,6 +169,7 @@ DB에 저장되는 청크 단위. `insurance_chunker/models.py`에 dataclass로 
   "chunk_index":    17,                    // 문서 내 전체 순서 — 조항 복원 시 ORDER BY에 사용
 
   // ── 조항 메타 ─────────────────────────────────────────────────────────
+  // article_number가 null인 청크가 발생할 수 있다 (아래 한계 참고)
   "article_number": "제2조",
   "article_title":  "보험금의 지급",
 
@@ -203,6 +204,19 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `definition` | 정의, 용어 |
 | `schedule` | 별표, 장해분류표, 지급률표 (doc_type=schedule에서 주로 출현) |
 | `general` | 위 분류 외 일반 조항 |
+
+### article_number 구조적 한계
+
+`article_number`는 `제N조(제목)` 패턴을 폰트·텍스트 기반으로 탐지해 채운다.  
+아래 경우에는 탐지가 안 되어 `null`이 된다.
+
+| 상황 | 이유 |
+|---|---|
+| 각 섹션(특약)의 첫 번째 `제1조` 이전 도입 문장 | 섹션 경계 마다 `cur_art`가 리셋됨 |
+| 약관별로 고유한 비표준 조항 표기 | 패턴이 커버 못 하는 형식 존재 가능 |
+
+`article_number=null` 청크는 RAG 검색에서 완전히 배제되지 않는다.  
+조항 단위 복원이 필요한 경우 `section + chunk_index`로 ORDER BY 하면 된다.
 
 ---
 
