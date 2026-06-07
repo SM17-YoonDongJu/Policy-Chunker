@@ -68,9 +68,10 @@ class InsuranceChunk:
     article_number: Optional[str] = None   # "제12조"
     article_title: Optional[str] = None    # "보험금을 지급하지 않는 사유"
     generation: Optional[str] = None       # 세대
+    chunk_index: int = 0                   # 문서 전체 기준 순서 (조항 복원 시 ORDER BY)
 
     # 표 row 청크 전용 (텍스트 청크는 None)
-    table_id: Optional[str] = None         # FK → policy_tables.table_id
+    table_id: Optional[str] = None         # S3 key: policy-tables/{table_id}.md
     row_start: Optional[int] = None
     row_end: Optional[int] = None
 

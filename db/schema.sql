@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS policy_chunks (
     article_title   TEXT,                   -- "보험금을 지급하지 않는 사유"
     generation      TEXT,                   -- 세대 (예: "4세대")
     section         TEXT,                   -- 경계 라벨 또는 편/장 경로
+    chunk_index     INT,                    -- 문서 전체 순서 (조항 복원 시 ORDER BY)
 
     -- 표 row 청크 전용 (텍스트 청크는 NULL)
     -- table_id: S3 key → policy-tables/{table_id}.md (FK 없음, S3 참조)

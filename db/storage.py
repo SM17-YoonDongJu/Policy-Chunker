@@ -71,13 +71,14 @@ def upsert_chunks(
             article_title,
             generation,
             section,
+            chunk_index,
             table_id,
             row_start,
             row_end
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s
+            %s, %s, %s, %s
         )
         ON CONFLICT (chunk_id) DO UPDATE SET
             content        = EXCLUDED.content,
@@ -89,6 +90,7 @@ def upsert_chunks(
             article_title  = EXCLUDED.article_title,
             generation     = EXCLUDED.generation,
             section        = EXCLUDED.section,
+            chunk_index    = EXCLUDED.chunk_index,
             table_id       = EXCLUDED.table_id,
             row_start      = EXCLUDED.row_start,
             row_end        = EXCLUDED.row_end
@@ -115,6 +117,7 @@ def upsert_chunks(
                     c.article_title,
                     c.generation,
                     c.section,
+                    c.chunk_index,
                     c.table_id,
                     c.row_start,
                     c.row_end,

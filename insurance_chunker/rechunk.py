@@ -329,6 +329,7 @@ def finalize(
 
     chunks: list[InsuranceChunk] = []
     table_metas: list[TableMeta] = []
+    chunk_idx = 1  # 문서 전체 순서 카운터
 
     for i, m in enumerate(dedup, 1):
         # ── 표 청크 ──────────────────────────────────────────────────────────
@@ -383,10 +384,12 @@ def finalize(
                         article_number=f"제{m['article_no']}조" if m.get("article_no") else None,
                         article_title=m.get("article_title"),
                         generation=meta.generation,
+                        chunk_index=chunk_idx,
                         table_id=table_id,
                         row_start=row_start,
                         row_end=row_end,
                     ))
+                    chunk_idx += 1
                 continue
 
         # ── 텍스트 청크 + 작은 표 (분할 불필요) ──────────────────────────────
@@ -415,7 +418,9 @@ def finalize(
             article_number=f"제{m['article_no']}조" if m["article_no"] else None,
             article_title=m["article_title"],
             generation=meta.generation,
+            chunk_index=chunk_idx,
         ))
+        chunk_idx += 1
 
     return chunks, table_metas
 
