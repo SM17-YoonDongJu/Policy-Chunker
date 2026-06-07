@@ -3,21 +3,21 @@
 policy_chunks.content_tokens (Kiwi 형태소 토큰)에서 고유 term을 추출해
 search_terms 테이블에 upsert한다.
 
-멀티 머신 동시 ingest 시 race condition 방지:
+동시 실행 방지:
+  - pg_try_advisory_lock으로 non-blocking lock 획득
+  - 다른 프로세스가 이미 실행 중이면 즉시 건너뜀
   - ON CONFLICT DO NOTHING → 같은 term 중복 삽입 무시
-  - search_terms는 policy_chunks에서 언제든 재생성 가능한 파생 테이블이므로
-    인라인(ingest 중) 갱신이 아닌 별도 rebuild 스크립트로 운영
 """
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import psycopg2
 
 logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 2000
+_LOCK_KEY = 202606011  # search_terms rebuild 전용 advisory lock 키
 
 
 def extract_terms(conn: psycopg2.extensions.connection) -> list[str]:
@@ -53,17 +53,34 @@ def upsert_terms(
 
 
 def rebuild(conn: psycopg2.extensions.connection) -> dict:
-    """search_terms 전체 재구성. 반환값: 통계 dict."""
-    terms = extract_terms(conn)
-    inserted = upsert_terms(conn, terms)
+    """search_terms 전체 재구성. 반환값: 통계 dict.
 
+    pg_try_advisory_lock으로 non-blocking lock을 획득한다.
+    다른 프로세스가 이미 실행 중이면 즉시 건너뛰고 skipped=True를 반환한다.
+    """
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM search_terms")
-        total = cur.fetchone()[0]
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (_LOCK_KEY,))
+        acquired = cur.fetchone()[0]
 
-    result = {"extracted": len(terms), "inserted": inserted, "total": total}
-    logger.info(
-        f"[search_terms] 추출 {result['extracted']}개 | "
-        f"신규 {result['inserted']}개 | 누계 {result['total']}개"
-    )
-    return result
+    if not acquired:
+        logger.info("search_terms rebuild: 다른 프로세스가 실행 중 — 건너뜀")
+        return {"extracted": 0, "inserted": 0, "total": 0, "skipped": True}
+
+    try:
+        terms = extract_terms(conn)
+        inserted = upsert_terms(conn, terms)
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM search_terms")
+            total = cur.fetchone()[0]
+
+        result = {"extracted": len(terms), "inserted": inserted, "total": total, "skipped": False}
+        logger.info(
+            f"[search_terms] 추출 {result['extracted']}개 | "
+            f"신규 {result['inserted']}개 | 누계 {result['total']}개"
+        )
+        return result
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_KEY,))
+        logger.debug("advisory lock 해제")

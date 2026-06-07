@@ -48,10 +48,13 @@ def main() -> None:
     result = rebuild(conn)
     conn.close()
 
-    logger.info(
-        f"완료 — 추출 {result['extracted']}개 | "
-        f"신규 {result['inserted']}개 | 누계 {result['total']}개"
-    )
+    if result.get("skipped"):
+        logger.info("건너뜀 — 다른 프로세스가 이미 실행 중")
+    else:
+        logger.info(
+            f"완료 — 추출 {result['extracted']}개 | "
+            f"신규 {result['inserted']}개 | 누계 {result['total']}개"
+        )
 
 
 if __name__ == "__main__":
