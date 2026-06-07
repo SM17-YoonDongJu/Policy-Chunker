@@ -22,14 +22,21 @@ def _tok(text: str) -> int:
 
 # ── 범용 패턴 (한국 약관 공통) ────────────────────────────────────────────────
 FOOTER = re.compile(r"^\s*[-‐–—]\s*\d{1,3}\s*[-‐–—]\s*$")
-ART = re.compile(r"^제\s*(\d+)\s*조(?:의\s*\d+)?\s*\(([^)]+)\)")
-# 인용 가드: "제N조(...)에 따라" 등 — 조항 시작이 아니라 인용
-CITE = re.compile(
-    r"^제\s*\d+\s*조(?:의\s*\d+)?\s*\([^)]+\)\s*"
+# 괄호 변형: ()  （）  【】 모두 허용
+_ART_NUM   = r"제\s*(\d+)\s*조(?:의\s*\d+)?\s*"
+_ART_TITLE = r"(?:[\(（]([^)）]{1,40})[\)）]|【([^】]{1,40})】)"
+_PARTICLES = (
     r"(?:의|에|는|은|을|를|와|과|도|만|부터|이라|라고|에서|에도|제\s*\d|"
     r"를\s*준용|의\s*죄|에\s*따|에\s*의|에\s*기재)"
 )
-TITLE_ONLY = re.compile(r"^제\d+조(?:의\d+)?\s*[\(（][^)）]*[\)）]\s*$")
+
+ART       = re.compile(r"^" + _ART_NUM + _ART_TITLE)
+# 제목이 다음 줄에 있는 형식: "제1조\n보험금의 지급"
+ART_NEXTLINE = re.compile(
+    r"^" + _ART_NUM + r"\n([^①②③④⑤\(（【\n]{2,40})\s*(?:\n|$)"
+)
+CITE      = re.compile(r"^" + _ART_NUM + _ART_TITLE + r"\s*" + _PARTICLES)
+TITLE_ONLY = re.compile(r"^제\d+조(?:의\d+)?\s*" + _ART_TITLE + r"\s*$")
 TOC = re.compile(r"[·.]{6,}|…{3,}")
 
 # ── chunk_type 분류 (rag/ 방식) ───────────────────────────────────────────────
@@ -86,6 +93,13 @@ def _header(lab: Optional[str], kind: str, art: Optional[int], atitle: Optional[
     if art is not None:
         parts.append(f"제{art}조({atitle})" if atitle else f"제{art}조")
     return "[" + " > ".join(parts) + "]" if parts else "[기타]"
+
+
+def _art_from_match(m: re.Match) -> tuple[int, str | None]:
+    """ART / ART_NEXTLINE 매치 → (조번호, 제목). 제목 없으면 None."""
+    num = int(m.group(1))
+    title = next((g for g in m.groups()[1:] if g), None)
+    return num, title.strip() if title else None
 
 
 def _pageseq(cid: str) -> tuple:
@@ -159,9 +173,10 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
 
         if kind in ("base", "yak"):
             m = ART.match(body)
+            if not m:
+                m = ART_NEXTLINE.match(body)
             if m and not CITE.match(body):
-                cur_art = int(m.group(1))
-                cur_title = m.group(2).strip()
+                cur_art, cur_title = _art_from_match(m)
 
         c.update(
             _label=lab, _kind=kind,
