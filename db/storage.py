@@ -10,7 +10,7 @@ import numpy as np
 import psycopg2
 from pgvector.psycopg2 import register_vector
 
-from ..insurance_chunker.models import InsuranceChunk
+from insurance_chunker.models import InsuranceChunk
 
 logger = logging.getLogger(__name__)
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
