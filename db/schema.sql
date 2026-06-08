@@ -2,7 +2,6 @@
 -- 출력 컬럼 = DB 컬럼 원칙: InsuranceChunk의 DB 저장 대상 필드와 1:1 대응
 
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_search;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ── policy_chunks: 약관(policy_terms) 청크 테이블 ────────────────────────────
@@ -10,7 +9,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE TABLE IF NOT EXISTS policy_chunks (
     chunk_id        TEXT PRIMARY KEY,
     content         TEXT        NOT NULL,   -- 임베딩 원문
-    content_tokens  TEXT,                   -- Kiwi 형태소 결과 (공백 구분) → pg_search BM25 검색
+    content_tokens  TEXT,                   -- Kiwi 형태소 결과 (공백 구분) → tsvector 전문검색
     embedding       vector(1024),           -- qwen3:embedding 1024d / BGE-M3 1024d
     token_count     INT,
     chunk_type      TEXT        NOT NULL,   -- coverage|exclusion|definition|special_clause|duty|claim|termination|schedule|general
@@ -54,13 +53,12 @@ CREATE INDEX IF NOT EXISTS idx_policy_hnsw
     ON policy_chunks USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
--- 키워드 검색 — pg_search BM25 (tsvector + trigram 대체)
--- 검색: WHERE content_tokens @@@ '보험금 지급'
--- 랭킹: ORDER BY paradedb.score(chunk_id) DESC
-CREATE INDEX IF NOT EXISTS idx_policy_bm25
+-- 키워드 검색 — tsvector 전문검색 (GIN 인덱스)
+-- 검색: WHERE to_tsvector('simple', content_tokens) @@ plainto_tsquery('simple', '보험금 지급')
+-- 랭킹: ORDER BY ts_rank(to_tsvector('simple', content_tokens), plainto_tsquery('simple', '검색어')) DESC
+CREATE INDEX IF NOT EXISTS idx_policy_fts
     ON policy_chunks
-    USING bm25 (chunk_id, content_tokens)
-    WITH (key_field = 'chunk_id');
+    USING gin (to_tsvector('simple', coalesce(content_tokens, '')));
 
 -- 메타 필터 (보험사·청크타입·시행일)
 CREATE INDEX IF NOT EXISTS idx_policy_meta
@@ -76,7 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_policy_table_id
 
 -- ── search_terms: 쿼리 단어 보정용 용어 사전 ────────────────────────────────
 -- 적재: rebuild_search_terms.py 로 policy_chunks.content_tokens에서 자동 추출
--- 사용: 검색 쿼리 입력 → trigram 유사 term 조회 → 보정된 term으로 BM25 검색
+-- 사용: 검색 쿼리 입력 → trigram 유사 term 조회 → 보정된 term으로 tsvector 검색
 
 CREATE TABLE IF NOT EXISTS search_terms (
     term        TEXT PRIMARY KEY
