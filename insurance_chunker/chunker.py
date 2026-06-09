@@ -88,6 +88,7 @@ def _make(
         article_title=article_title,
         generation=meta.generation,
         chunk_index=chunk_index,
+        product_id=meta.product_id,
     )
 
 

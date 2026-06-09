@@ -42,6 +42,7 @@ class DocMeta:
     product_code: Optional[str] = None
     effective_date: Optional[str] = None  # YYYY-MM-DD
     generation: Optional[str] = None      # 세대 (예: "4세대")
+    product_id: Optional[str] = None      # insurance_products.id (UUID)
 
 
 @dataclass
@@ -66,6 +67,7 @@ class InsuranceChunk:
     article_title: Optional[str] = None    # "보험금을 지급하지 않는 사유"
     generation: Optional[str] = None       # 세대
     chunk_index: int = 0                   # 문서 전체 기준 순서 (조항 복원 시 ORDER BY)
+    product_id: Optional[str] = None       # insurance_products.id (UUID)
 
     # 표 row 청크 전용 (텍스트 청크는 None)
     table_id: Optional[str] = None         # S3 key: policy-tables/{table_id}.md

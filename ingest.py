@@ -35,6 +35,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--product-code", default=None)
     p.add_argument("--effective-date", default=None, help="시행일 YYYY-MM-DD")
     p.add_argument("--generation", default=None, help="세대 (예: '4세대')")
+    p.add_argument("--product-id", default=None, help="insurance_products.id (UUID)")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-ocr", action="store_true")
     p.add_argument("--no-vision", action="store_true")
@@ -106,6 +107,7 @@ def main() -> None:
         product_code=args.product_code,
         effective_date=args.effective_date,
         generation=args.generation,
+        product_id=args.product_id,
     )
 
     conn = None

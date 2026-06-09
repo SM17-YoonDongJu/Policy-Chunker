@@ -80,6 +80,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
         product_code=doc.get("product_code"),
         effective_date=doc.get("effective_date"),
         generation=doc.get("generation"),
+        product_id=doc.get("product_id"),
     )
 
     conn = None

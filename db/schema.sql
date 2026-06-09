@@ -34,7 +34,11 @@ CREATE TABLE IF NOT EXISTS policy_chunks (
     -- table_id: S3 key → policy-tables/{table_id}.md (FK 없음, S3 참조)
     table_id        UUID,
     row_start       SMALLINT,
-    row_end         SMALLINT
+    row_end         SMALLINT,
+
+    -- 상품 FK (nullable — ingest 시 --product-id 미지정 시 NULL)
+    -- REFERENCES insurance_products(id) 는 메인 앱 마이그레이션에서 관리
+    product_id      UUID
 );
 
 -- ── 마이그레이션: 기존 DB에 신규 컬럼 추가 ──────────────────────────────────
@@ -44,6 +48,7 @@ ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS chunk_index INT;
 ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS table_id    UUID;
 ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_start   SMALLINT;
 ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_end     SMALLINT;
+ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS product_id  UUID;
 
 
 -- ── 검색 인덱스 ──────────────────────────────────────────────────────────────
