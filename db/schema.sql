@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS policy_chunks (
     chunk_id        TEXT PRIMARY KEY,
     content         TEXT        NOT NULL,   -- 임베딩 원문
     content_tokens  TEXT,                   -- Kiwi 형태소 결과 (공백 구분) → tsvector 전문검색
-    embedding       vector(1024),           -- qwen3:embedding 1024d / BGE-M3 1024d
+    embedding       halfvec(1024),          -- qwen3:embedding 1024d / BGE-M3 1024d (float16: 용량·RAM 절반)
     token_count     INT,
     chunk_type      TEXT        NOT NULL,   -- coverage|exclusion|definition|special_clause|duty|claim|termination|schedule|general
     doc_hash        TEXT        NOT NULL,   -- PDF sha256, 중복 ingest 방지
@@ -50,12 +50,19 @@ ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_start   SMALLINT;
 ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_end     SMALLINT;
 ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS product_id  UUID;
 
+-- embedding 타입을 vector → halfvec(float16)로 전환 (용량·RAM 절반).
+-- 기존 운영 DB에만 수동 실행. 인덱스 연산자 클래스가 바뀌므로 인덱스 재생성 필요.
+--   ALTER TABLE policy_chunks ALTER COLUMN embedding TYPE halfvec(1024);
+--   DROP INDEX IF EXISTS idx_policy_hnsw;
+--   (아래 CREATE INDEX idx_policy_hnsw 재실행)
+
 
 -- ── 검색 인덱스 ──────────────────────────────────────────────────────────────
 
 -- 벡터 검색 (ANN, cosine similarity) — HNSW
+-- halfvec(float16) 전용 연산자 클래스 사용
 CREATE INDEX IF NOT EXISTS idx_policy_hnsw
-    ON policy_chunks USING hnsw (embedding vector_cosine_ops)
+    ON policy_chunks USING hnsw (embedding halfvec_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
 -- 키워드 검색 — tsvector 전문검색 (GIN 인덱스)
