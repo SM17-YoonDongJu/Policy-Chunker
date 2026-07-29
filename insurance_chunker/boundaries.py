@@ -3,35 +3,28 @@
 """
 boundaries.py — PDF의 '시각적 신호'로 약관/별표 경계를 잡는다.
 
-핵심 교훈(v3 실패 → v4 전환):
+핵심 교훈:
     구조 경계는 본문 텍스트에서 추정하지 말고, PDF 조판 신호(제목 폰트 크기)에서
     직접 가져온다. 텍스트 추정은 제목이 줄바꿈/병합된 구간에서 무너진다.
 
-v4.2는 제목 폰트(12.9)·보통약관 시작 페이지(16)를 하드코딩했다.
-여기서는 그 두 값을 문서마다 '자동 측정'한다 → 다른 약관에도 그대로 동작.
+출처: Policy-Chunker(main) — assess() / None 반환 전략 포함.
 """
 from __future__ import annotations
 
 import re
 import collections
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import fitz  # PyMuPDF
 
 
-# 약관 제목으로 흔히 끝나는 접미사 (제목 폰트 후보 판별용)
 TITLE_SUFFIX = re.compile(r"(특별약관|보통약관|특약|담보)\s*$")
-# 자동탐지 신뢰 임계: 제목 폰트로 인정하려면 '특약/약관' 제목이 이만큼은 있어야 한다.
-# (레퍼런스 문서는 144줄, AX(조문 없는 표중심 약관)는 2줄 → 4가 둘을 가른다)
+# 제목 폰트 인정 임계: '특약/약관'으로 끝나는 줄이 이만큼은 있어야 한다
 MIN_TITLE_EVIDENCE = 4
-MIN_TITLE_GAP = 0.8           # 제목 폰트는 본문보다 최소 이만큼 커야 한다
-# 상품명: '...보험' / '...보험Ⅱ' / '...보험2603' 형태
+MIN_TITLE_GAP = 0.8
 PRODUCT = re.compile(r".*보험[\sⅠⅡⅢⅣⅤIVX0-9]*$")
-# "1. 상해위험담보" 같은 담보 분류 divider / 우산 제목(상품명 + 특별약관)
 DIVIDER = re.compile(r"^\d+\.\s")
-# 별표/부표 헤더
 BYEOLPYO = re.compile(r"^【\s*(?:별표|부표)\s*([0-9\-]+)\s*】\s*(.*)")
-# 보통약관 본문 시작 신호: 목차가 아닌 '제1조(목적)' 또는 '제1조(보험계약...)'
 BASE_START = re.compile(r"^제\s*1\s*조\s*\(")
 TOC = re.compile(r"[·.]{6,}|…{3,}")
 
@@ -45,20 +38,20 @@ class Boundary:
 
 @dataclass
 class Detection:
-    """문서마다 자동 측정된 값(추정이 아니라 측정).
+    """문서마다 자동 측정된 값.
 
     title_size / base_start_page가 None이면 '신호를 못 찾았다'는 뜻이다.
     예전엔 폴백값(폰트 한 단계 위, p16)을 조용히 채웠는데, 그게 틀린 라벨을
     양산했다. 이제는 못 찾으면 None으로 두고 assess()가 경고한다.
     """
-    body_size: float          # 본문 최빈 글자 크기
-    title_size: float | None  # 특약 제목 글자 크기 (못 찾으면 None)
-    title_lo: float | None     # 제목으로 인정할 크기 하한
-    title_hi: float | None     # 제목으로 인정할 크기 상한
-    base_start_page: int | None  # 보통약관 본문 시작 페이지 (못 찾으면 None)
-    front_end_page: int | None   # 표지/목차 끝 페이지
-    product: str | None       # 표지에서 추출한 상품명(있으면)
-    title_evidence: int = 0   # 제목 폰트 판정 근거가 된 '특약/약관' 줄 수
+    body_size: float
+    title_size: float | None       # 못 찾으면 None
+    title_lo: float | None
+    title_hi: float | None
+    base_start_page: int | None    # 못 찾으면 None
+    front_end_page: int | None
+    product: str | None
+    title_evidence: int = 0        # 제목 폰트 판정 근거 줄 수
 
 
 def _lines(doc):
@@ -80,27 +73,22 @@ def detect(doc) -> Detection:
     찾지 못하면 폴백을 만들지 않고 None을 둔다(틀린 라벨 양산 방지).
     신뢰 여부는 assess()로 판정한다.
     """
-    size_chars = collections.Counter()         # 크기 → 글자수(본문 최빈 추정)
-    suffix_sizes = collections.Counter()       # '특약/약관'으로 끝나는 줄의 크기
+    size_chars: collections.Counter = collections.Counter()
+    suffix_sizes: collections.Counter = collections.Counter()
     base_start_page = None
-    product_cands: list[tuple[float, int, str]] = []   # (폰트, 길이, 텍스트)
+    product_cands: list[tuple[float, int, str]] = []
 
     for pno, sz, txt in _lines(doc):
         size_chars[sz] += len(txt)
         if TITLE_SUFFIX.search(txt) and len(txt) < 45 and not DIVIDER.match(txt):
             suffix_sizes[sz] += 1
-        # 보통약관 본문 시작: 목차가 아닌 제1조(...)가 처음 나오는 페이지
         if base_start_page is None and BASE_START.match(txt) and not TOC.search(txt):
             base_start_page = pno
-        # 상품명 후보: 표지(1~3p)에서 '...보험[Ⅱ/숫자]'으로 끝나는 줄
         if pno <= 3 and 4 <= len(txt) <= 40 and PRODUCT.match(txt):
             product_cands.append((sz, len(txt), txt))
 
-    # 본문 최빈 크기
     body_size = size_chars.most_common(1)[0][0] if size_chars else 10.0
 
-    # 제목 폰트 = 본문보다 충분히 크면서 '특약/약관'으로 끝나는 줄에 가장 많은 크기.
-    # 단, 근거(줄 수)가 임계 미만이면 신호 없음으로 보고 None(폴백 금지).
     cand = {s: n for s, n in suffix_sizes.items() if s > body_size + MIN_TITLE_GAP}
     title_size = title_lo = title_hi = None
     title_evidence = 0
@@ -112,7 +100,6 @@ def detect(doc) -> Detection:
             title_lo = round(best - 0.4, 1)
             title_hi = round(best + 0.3, 1)
 
-    # 상품명: 후보 중 폰트 큰 → 긴 순. (표지의 가장 큰 제목이 상품명)
     product = None
     if product_cands:
         product_cands.sort(key=lambda x: (x[0], x[1]), reverse=True)
@@ -129,30 +116,28 @@ def detect(doc) -> Detection:
 
 
 def _is_divider(txt: str, product: str | None) -> bool:
-    """담보 분류 divider / 상품명+특별약관 우산 제목 → 약관 제목이 아님."""
     if DIVIDER.match(txt) or txt.endswith("담보"):
         return True
     if product and txt == f"{product} 특별약관":
         return True
-    # 상품명을 못 잡았을 때의 일반 패턴
     if re.match(r"^.{2,30}\s특별약관$", txt) and "제" not in txt and len(txt) < 25:
-        # '○○보험 특별약관' 형태의 우산 제목 (개별 특약명은 보통 더 구체적/길다)
         return txt.endswith("보험 특별약관")
     return False
 
 
 def find(doc, det: Detection | None = None) -> tuple[list[Boundary], Detection]:
-    """제목 폰트·별표 헤더로 경계 목록을 만든다. (v4.2 로직의 적응형 버전)"""
+    """제목 폰트·별표 헤더로 경계 목록을 만든다."""
     if det is None:
         det = detect(doc)
 
     bounds: list[Boundary] = []
     has_font = det.title_size is not None
     front_end = det.front_end_page or 0
+
     for pno, sz, txt in _lines(doc):
         if has_font and det.title_lo <= sz <= det.title_hi:
             if pno <= front_end or _is_divider(txt, det.product):
-                continue  # 표지/목차/divider 제외
+                continue
             bounds.append(Boundary(pno, txt, "yak"))
         else:
             m = BYEOLPYO.match(txt)
@@ -160,7 +145,6 @@ def find(doc, det: Detection | None = None) -> tuple[list[Boundary], Detection]:
                 lab = re.sub(r"\s+", " ", f"별표{m.group(1)} {m.group(2)}").strip()
                 bounds.append(Boundary(pno, lab, "byeolpyo"))
 
-    # 보통약관 경계 주입 (본문 시작 페이지를 찾았을 때만)
     if det.base_start_page is not None:
         base_label = f"{det.product} 보통약관" if det.product else "보통약관"
         bounds.append(Boundary(det.base_start_page, base_label, "base"))
@@ -172,8 +156,8 @@ def assess(doc, det: Detection | None = None,
            bounds: list[Boundary] | None = None) -> tuple[str, list[str]]:
     """자동탐지 신뢰도 판정. ('ok' | 'weak', 사유 목록) 반환.
 
-    'weak'면 이 문서는 조문·특약 구조가 약해 자동 경계를 믿기 어렵다는 뜻
-    (스캔본·표중심 약관 등). 조용히 틀린 결과를 내는 대신 호출부가 경고/거부한다.
+    'weak'이면 조문·특약 구조가 약해 자동 경계를 신뢰하기 어렵다는 뜻.
+    조용히 틀린 결과를 내는 대신 호출부가 경고/거부 여부를 결정한다.
     """
     if det is None:
         bounds, det = find(doc)
@@ -204,7 +188,7 @@ def assess(doc, det: Detection | None = None,
 
 
 def label_for(bounds: list[Boundary], page: int) -> tuple[str | None, str]:
-    """페이지가 속한 (label, kind). 첫 경계 이전은 ('front')."""
+    """페이지가 속한 (label, kind). 첫 경계 이전은 (None, 'front')."""
     cur = (None, "front")
     for b in bounds:
         if b.page <= page:

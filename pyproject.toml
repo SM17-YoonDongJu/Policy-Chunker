@@ -1,26 +1,39 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "policy-chunker"
+name = "insurance-chunker"
 version = "0.1.0"
-description = "한국 보험약관(약관) PDF를 RAG 임베딩용 청크로 자르는 파이프라인"
-readme = "README.md"
-requires-python = ">=3.10"
-license = { text = "MIT" }
+description = "보험 약관 RAG 청킹 파이프라인 (Policy-Chunker 구조 + rag/ 메타데이터 보완)"
+requires-python = ">=3.12"
 dependencies = [
-    "PyMuPDF>=1.23",
-    "pdfplumber>=0.10",
-    "camelot-py[cv]>=0.11",   # ghostscript 시스템 설치 별도 필요
+    # PDF 파싱
+    "pdfplumber>=0.11",
+    "pymupdf>=1.24",          # fitz: 폰트 기반 경계 감지 + 표 추출
+    # 토크나이저
+    "kiwipiepy>=0.18",
+    # 임베딩 (택1)
+    "requests>=2.31",          # Ollama 백엔드
+    # "sentence-transformers>=3.0",  # BGE-M3 백엔드 (선택)
+    "more-itertools>=10",
+    # 저장
+    "psycopg2-binary>=2.9",
+    "pgvector>=0.3",
+    "numpy>=1.26",
+    # 기타
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-eval = ["numpy>=1.24"]
-dense = ["numpy>=1.24", "sentence-transformers>=2.2"]
+st  = ["sentence-transformers>=3.0"]
+dev = ["pytest>=8", "ruff>=0.4"]
 
-[project.scripts]
-policy-chunker = "policy_chunker.cli:main"
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["insurance_chunker*", "db*", "eval*"]
 
-[tool.setuptools]
-packages = ["policy_chunker"]
+[tool.ruff]
+line-length = 100
+target-version = "py312"

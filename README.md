@@ -1,169 +1,275 @@
-# Policy-Chunker
+# insurance-chunker
 
-한국 **보험약관(약관) PDF**를 RAG 임베딩용 청크로 자르는 파이프라인.
+보험 약관 PDF → PostgreSQL(pgvector) RAG 파이프라인.
 
-> 범용 "아무 PDF나" 청커가 아니다. 문서 종류마다 구조 경계 신호가 다르기 때문에,
-> 이 도구는 **한국 보험약관**(텍스트 PDF, 조·항·호·별표 구조)에 특화돼 있다.
-> 그 안에서는 코드 수정 거의 없이 다른 약관에도 돌아간다.
+PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임베딩 벡터와 함께 DB에 저장한다.
+저장된 청크는 BM25 키워드 검색 + 벡터 유사도 하이브리드 RAG의 검색 대상이 된다.
 
-## 핵심 아이디어
+---
 
-> **구조 경계는 본문 텍스트에서 추정하지 말고, PDF의 시각적 신호(제목 폰트 크기)에서 직접 가져온다.**
-
-약관은 보통약관 + 수십~수백 개 특별약관 + 별표(분류표)로 이루어진다. 어디서 한 약관이
-끝나고 다음이 시작하는지를 본문 텍스트로 추정하면, 제목이 줄바꿈·병합된 구간에서 무너진다
-(이 프로젝트의 v3가 그렇게 실패했다 — 가짜 약관이 26%의 청크를 잘못 흡수). 해결책은
-PDF 조판에서 **특약 제목이 본문보다 큰 폰트**로 찍힌다는 시각적 사실을 권위 경계로 쓰는 것.
-
-## 파이프라인
+## 전체 흐름
 
 ```
-약관.pdf ──▶ [extract]  본문(pymupdf) + 표 다중도구 추출 (extract.py)
-                 │        pymupdf / pdfplumber / camelot / VLM(Claude CLI)
-                 ▼
-             [combine]  표 베스트오브 교체 (combine.py)
-                 │        도구별 표 중 더블스페이스 적은 쪽 채택
-                 ▼
-             [boundaries] 제목 폰트 자동탐지 → 약관/별표 경계 (boundaries.py)
-                 │
-                 ▼
-             [rechunk]  약관 라벨 + 조번호 재추출(인용 가드) +
-                        푸터/목차 제거 + 호→항→조 병합 +
-                        헤더 prepend + 중복 제거 (rechunk.py)
-                 │
-                 ▼
-             chunks.json  ─▶ 임베딩 / 벡터DB
+약관.pdf
+  │
+  ├─ pdf_parser.py    텍스트 추출 (PyMuPDF, 표 영역 제외)
+  │
+  ├─ extractor.py     표 추출 — 아래 4가지 방법 중 자동 선택
+  │     ├ PyMuPDF     괘선 표 (빠름)
+  │     ├ pdfplumber  설치 시 자동 사용
+  │     ├ camelot     설치 시 자동 사용 (ghostscript 필요)
+  │     └ Claude CLI  VLM — PyMuPDF가 표를 감지한 페이지만
+  │
+  ├─ combine.py       페이지별 best-of 표 선택 (더블스페이스 기준)
+  │
+  ├─ boundaries.py    폰트 크기로 약관·별표 경계 감지
+  │     └ assess()    신뢰도 판정 (ok / weak) — 조용히 틀린 청크 방지
+  │
+  ├─ rechunk.py       경계 라벨 부여 → 조항 병합 → 중복 제거 → 대형 표 분할
+  │
+  ├─ chunker.py       오케스트레이터 → InsuranceChunk + TableMeta 출력
+  │
+  ├─ embedder.py      임베딩 (Ollama qwen3:embedding / BGE-M3)
+  │
+  ├─ db/storage.py    pgvector upsert (policy_chunks 테이블)
+  │
+  └─ S3               대형 표 원본 markdown 저장
+                      (키: policy-tables/{table_id}.md)
 ```
 
-추출부터 청킹까지 한 명령으로 돈다(`--extract`). 표는 페이지마다 여러 도구로 뽑아
-가장 깨끗한 것을 고른다. **VLM은 API 키 없이 로컬 `claude` CLI(비전)로** 동작한다.
+---
 
-## 설치
+## 빠른 시작
+
+### 설치
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # 또는: pip install -e .
-
-# camelot은 ghostscript(시스템 패키지)가 있어야 동작한다
-brew install ghostscript                 # macOS
-# sudo apt install ghostscript           # Ubuntu/Debian
+pip install -e ".[dev]"
 ```
 
-VLM 표 추출(`--vlm`)을 쓰려면 [Claude Code CLI](https://claude.com/claude-code)가
-설치·로그인돼 있어야 한다(API 키 불필요). 안 쓰면 생략 가능.
+VLM 기능(표 추출)을 사용하려면 [Claude Code CLI](https://claude.ai/code) 설치·로그인 필요 (API 키 불필요).
 
-## 사용
+### 단일 PDF — DB 저장
 
 ```bash
-# 경계 자동 탐지값만 확인
-python -m policy_chunker 약관.pdf --detect-only
-
-# PDF에서 추출 → 청킹까지 한 번에 (권장)
-python -m policy_chunker 약관.pdf --extract --vlm
-
-# 이미 추출된 결합 청크(JSON)를 입력으로
-python -m policy_chunker 약관.pdf chunks.json --target 700 --hard-max 1400
+DATABASE_URL=postgresql://user:pass@host/db \
+python ingest.py \
+  --pdf 약관.pdf \
+  --insurer 메리츠화재 \
+  --product "단체안심생활보험" \
+  --effective-date 2025-06-01
 ```
 
-결과물은 기본적으로 **`outputs/<PDF이름>_chunks.json`** 에 저장된다(`-o`로 경로 지정 가능).
-표 추출은 `pymupdf` + `pdfplumber` + `camelot` + (`--vlm` 시) `claude` CLI 비전을 **모두**
-돌려, 페이지마다 도구별 표 중 **더블스페이스(셀 정렬 깨짐)가 가장 적은 것**을 채택한다.
+같은 파일을 다시 ingestion하면 자동으로 건너뛴다. 덮어쓰려면 `--overwrite`.
 
-`--target` / `--hard-max`는 하드코딩이 아니라 **임베딩 모델 토큰 한도에 맞춰 조절하는 노브**다.
-한국어 700자 ≈ 300토큰이라 512토큰 모델에 안전하다. 8192 모델(OpenAI·Voyage 등)이면 키워도 된다.
-
-## 자동 탐지 (하드코딩 → 측정)
-
-초기 버전(v4.2)은 이 문서에 맞춰 제목 폰트·보통약관 시작 페이지를 하드코딩했다.
-현재는 **문서마다 자동 측정**한다 — 조문·특약 구조를 따르는 약관이면 코드 수정 없이 동작하고,
-그렇지 않은 문서는 아래 신뢰도 게이트가 걸러낸다.
-
-| 항목 | 측정 방법 |
-|---|---|
-| 제목 폰트 | 본문 최빈 크기보다 크면서 "특약/약관"으로 끝나는 줄에 가장 많이 쓰인 크기. 단 그런 줄이 **임계(기본 4줄) 미만이면 신호 없음**으로 보고 추정하지 않는다 |
-| 보통약관 시작 | 목차가 아닌 `제1조(...)`가 처음 나오는 페이지 |
-| 표지/목차 끝 | 보통약관 시작 직전 |
-| 상품명 | 표지(1~3p)에서 `...보험[Ⅱ/숫자]` 줄 중 가장 큰 폰트 |
-
-검증: 레퍼런스 문서에서 자동 탐지가 옛 하드코딩값을 그대로 재현했다 — 제목폰트 **12.9**,
-보통약관 시작 **p16**, 경계 **약관 138 / 별표 17**, 제47조 누수 **0**, 푸터 잔존 **0**.
-
-### 신뢰도 게이트 — 못 믿을 땐 조용히 틀리지 않고 멈춘다
-
-예전엔 신호를 못 찾으면 폴백값(폰트 한 단계 위, p16)을 **조용히** 채워서 틀린 라벨을
-양산했다. 지금은 못 찾으면 `None`으로 두고, 실행 시 신뢰도를 판정해 알린다.
+### 여러 PDF 일괄 처리 (YAML manifest)
 
 ```bash
-$ python -m policy_chunker 표중심약관.pdf --extract -o out.json
-[신뢰도] 🔴 weak
-  - 제목 폰트 신호 없음 (특약/약관 제목 2줄 < 임계 4) → 특별약관 경계를 못 잡음
-  - 보통약관 시작(제1조) 못 찾음 → 조문 구조가 없는 문서일 수 있음
-⚠️  이 문서는 조문·특약 구조가 약해 자동 경계를 신뢰하기 어렵습니다.
-    그래도 돌리려면 --force, 또는 경계만 보려면 --detect-only.
+python ingest_many.py --manifest docs.yaml
 ```
 
-- 🟢 **ok** → 그대로 진행. 🔴 **weak** → 멈춤(`--force`로 강행 가능).
-- weak 판정 = 제목 폰트 신호 없음 / `제1조` 못 찾음 / 특약 경계 0 중 하나. 스캔본이나
-  조문 대신 표 중심으로 구성된 약관(예: 일부 손보 상품)이 여기 걸린다 — **도구 범위 밖**임을
-  억지 결과 대신 정직하게 알려준다.
+`docs.yaml` 예시:
 
-## 청크 스키마
+```yaml
+documents:
+  - pdf: 약관A.pdf
+    insurer: 메리츠화재
+    product_name: 단체안심생활보험
+    effective_date: "2025-06-01"
+    generation: "4세대"
+
+  - pdf: 약관B.pdf
+    insurer: KB손해보험
+    product_name: 실손보험
+    doc_type: policy_terms   # 없으면 파일명으로 자동 판별
+```
+
+---
+
+## dry-run — DB 없이 청킹 결과만 확인
+
+`--dry-run` 플래그를 붙이면 DB·S3·Ollama 없이 청킹 결과만 JSON으로 출력한다.  
+청킹이 제대로 됐는지 확인하거나, 로컬 환경에서 빠르게 테스트할 때 사용한다.
+
+```bash
+# 결과를 파일로 저장
+python ingest.py \
+  --pdf 약관.pdf \
+  --insurer 메리츠화재 \
+  --product "단체안심생활보험" \
+  --no-embed --dry-run --dry-run-out out.json
+
+# VLM(Claude CLI)도 없는 환경
+python ingest.py \
+  --pdf 약관.pdf \
+  --insurer 메리츠화재 \
+  --product "단체안심생활보험" \
+  --no-embed --no-vision --dry-run
+```
+
+`ingest_many.py`도 동일하게 `--dry-run` 플래그를 지원한다.
+
+```bash
+python ingest_many.py --manifest docs.yaml --dry-run --dry-run-dir out/
+```
+
+dry-run 결과 JSON 구조:
 
 ```jsonc
 {
-  "chunk_id": "...#rc0123",
-  "header": "[익사사고 사망 특별약관 > 제2조(준용규정)]",  // 본문 앞에 prepend됨
-  "body":   "...",
-  "text":   "header + \n + body",                          // 임베딩 대상
-  "yakwan": "익사사고 사망 특별약관",   // 보통약관/별표는 null
-  "section_kind": "yak",               // front | base | yak | byeolpyo
-  "article_no": 2, "article_title": "준용규정",
-  "chunk_type": "payment",             // general|payment|exclusion|definition|coverage
-  "is_table": false, "table_source": null,
-  "page_start": 17, "page_end": 18, "char_len": 612,
-  "member_ids": ["...#p17#0007", ...]
+  "summary": {
+    "chunk_count": 312,
+    "chunk_type_counts": { "coverage": 88, "exclusion": 42, … },
+    "token_stats": { "min": 24, "max": 980, "avg": 410 },
+    "over_600": 15,      // 600 토큰 초과 청크 수
+    "warnings": []
+  },
+  "chunks": [ … ]        // InsuranceChunk 목록
 }
 ```
 
-헤더를 본문에 prepend하는 이유: 임베딩 벡터에 "어느 약관 어느 조인지"를 같이 담아야
-동일한 준용규정도 특약별로 구분되고 검색 정확도가 오른다.
+---
 
-## 평가 (측정으로 판단)
+## doc_type 자동 판별 규칙
 
-청크를 눈으로 보는 대신 **Recall@k로 측정**한다. `eval/`에 베이스라인과 덴스 러너가 있다.
+`--doc-type`을 지정하지 않으면 파일명 키워드로 자동 분류한다.
 
-```bash
-# 키워드(BM25) 베이스라인 — 의존성 없이 바로 동작
-python eval/eval_bm25.py --chunks out.json --eval eval/eval_set.example.jsonl --k 1 3 5 10
+| 파일명 패턴 | doc_type |
+|---|---|
+| 요약서, 상품안내, 상품설명서 | `product_summary` |
+| 약관, 보통약관, 특별약관 | `policy_terms` |
+| 산출기준표, 지급률표, 장해분류표 | `schedule` |
 
-# 덴스 임베딩 (모델 정해지면)
-pip install numpy sentence-transformers
-python eval/eval_rag.py --chunks out.json --eval eval/eval_set.example.jsonl \
-    --backend st --model BAAI/bge-m3 --k 1 3 5 10
+`product_summary`는 ingest 대상이 아니며, 파이프라인 진입 전 차단된다.
+
+---
+
+## InsuranceChunk 스키마
+
+DB에 저장되는 청크 단위. `insurance_chunker/models.py`에 dataclass로 정의된다.
+
+```jsonc
+{
+  // ── 식별 ─────────────────────────────────────────────────────────────
+  "chunk_id":       "6e533f8dc4204f3f…",   // SHA256[:24] — doc_hash + source_pdf + page + idx 조합
+  "doc_hash":       "58c3c307…",           // PDF SHA256 — 중복 ingest 방지·삭제 기준
+  "source_pdf":     "약관.pdf",            // 원본 파일명 (DB 저장 안 됨, 내부 키 생성에만 사용)
+
+  // ── 상품 메타 ─────────────────────────────────────────────────────────
+  "insurer":        "메리츠화재",
+  "product_name":   "단체안심생활보험",
+  "product_code":   "ABC-123",             // 선택
+  "effective_date": "2025-06-01",          // 선택
+  "generation":     "4세대",               // 선택
+
+  // ── 문서 구조 ─────────────────────────────────────────────────────────
+  "doc_type":       "policy_terms",        // policy_terms | schedule (내부용, DB 저장 안 됨)
+  "section":        "암 진단특별약관",     // 폰트 기반 경계 라벨
+  "page_number":    42,
+  "chunk_index":    17,                    // 문서 내 전체 순서 — 조항 복원 시 ORDER BY에 사용
+
+  // ── 조항 메타 ─────────────────────────────────────────────────────────
+  // article_number가 null인 청크가 발생할 수 있다 (아래 한계 참고)
+  "article_number": "제2조",
+  "article_title":  "보험금의 지급",
+
+  // ── 분류 ─────────────────────────────────────────────────────────────
+  "chunk_type":     "coverage",            // 8종, 아래 표 참고
+  "token_count":    412,                   // 글자 수 × 0.6 (Kiwi 형태소 토큰 근사값)
+
+  // ── 검색 ─────────────────────────────────────────────────────────────
+  "content":        "메리츠화재 | 단체안심생활보험 | 암 진단특별약관\n[제2조 보험금의 지급]\n① …",
+  "content_tokens": "보험금 지급 암 진단 …",   // Kiwi 형태소 분리 결과 — BM25 색인용
+  "embedding":      [0.021, …],               // 1024d 벡터
+
+  // ── 표 row 청크 전용 (텍스트 청크는 null) ────────────────────────────
+  "table_id":  "550e8400-e29b-…",   // UUID — S3 키: policy-tables/{table_id}.md
+  "row_start": 1,                   // 이 청크가 표의 몇 번째 행부터 시작하는지
+  "row_end":   20                   // 이 청크가 표의 몇 번째 행에서 끝나는지
+}
 ```
 
-**중요**: 평가 질문은 실제 사용자 구어체·동의어로 써야 한다. 약관과 같은 단어를 쓰면 BM25가
-거저 맞혀 점수가 부풀고(무의미), 말을 바꾸면 진짜 약점이 드러난다. 이 프로젝트의 측정에서:
+### chunk_type 8종
 
-- 단어를 그대로 쓴 질문 → BM25 Recall@5 ≈ **1.00** (의미 없음)
-- 실제 구어체 질문 → BM25 Recall@5 ≈ **0.58**, 특히 **표 조회 0.00**
+regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에서는 필터 조건으로 사용하지 않는 것을 권장한다.
 
-즉 표·법률용어를 일상어로 물으면 키워드 검색은 못 잡는다 → **덴스/하이브리드가 필요한 지점**.
-이게 청크 결함이 아니라 검색 방법의 문제라는 점이 핵심이다(청크 본문엔 정답이 들어 있다).
+| 값 | 분류 기준 |
+|---|---|
+| `coverage` | 보장 범위, 지급사유, "보험금" |
+| `exclusion` | 면책, 부지급, "지급하지 않" |
+| `duty` | 알릴 의무, 고지의무, 통지 의무 |
+| `claim` | 보험금 청구, 청구 절차 |
+| `termination` | 해지, 효력상실, 소멸 |
+| `special_clause` | 특약, 특별 |
+| `definition` | 정의, 용어 |
+| `schedule` | 별표, 장해분류표, 지급률표 (doc_type=schedule에서 주로 출현) |
+| `general` | 위 분류 외 일반 조항 |
 
-## 한계 (정직하게)
+### article_number 구조적 한계
 
-- **텍스트 PDF 전제.** 스캔본은 OCR 단계가 따로 필요하고 폰트 신호가 없어 다른 접근이 필요하다.
-- **조·항·별표 구조의 한국 약관**에 맞춤. 2단 편집·구조가 전혀 다른 타사 약관은 첫 문서 한 번은 사람이 경계를 확인하는 게 안전하다.
-- **표 페이지 판정은 pymupdf 기준.** pymupdf가 표로 못 잡은 페이지는 본문으로 빠지고, pdfplumber/camelot/VLM도 그 페이지엔 적용되지 않는다.
-- **VLM은 로컬 `claude` CLI에 의존.** Claude Code가 설치·로그인돼 있어야 하고, 표 페이지 수만큼 비전 호출이 들어가 느리다(페이지당 수십 초). 그래서 표 페이지에만 돌린다.
+`article_number`는 `제N조(제목)` 패턴을 폰트·텍스트 기반으로 탐지해 채운다.  
+아래 경우에는 탐지가 안 되어 `null`이 된다.
 
-## ⚠️ 저작권
+| 상황 | 이유 |
+|---|---|
+| 각 섹션(특약)의 첫 번째 `제1조` 이전 도입 문장 | 섹션 경계 마다 `cur_art`가 리셋됨 |
+| 약관별로 고유한 비표준 조항 표기 | 패턴이 커버 못 하는 형식 존재 가능 |
 
-이 저장소는 **코드만** 담는다. 보험약관 원문(PDF)과 그로부터 만든 **청크·뷰어·표 추출물은
-절대 커밋하지 않는다** (각 보험사 저작물). `.gitignore`가 `*.pdf`, `*chunks*.json`,
-`data/` 등을 전부 제외하도록 설정돼 있다. 예제는 공개 가능한 표준약관이나 합성 샘플로 대체하라.
+`article_number=null` 청크는 RAG 검색에서 완전히 배제되지 않는다.  
+조항 단위 복원이 필요한 경우 `section + chunk_index`로 ORDER BY 하면 된다.
 
-## 라이선스
+---
 
-코드: [MIT](LICENSE). 데이터: 라이선스 대상 아님(위 저작권 고지 참고).
+## 대형 표 처리 (TableMeta + S3)
+
+장해분류표처럼 수백 행짜리 표는 20행 단위로 분할해 각각 `InsuranceChunk`로 저장한다.
+
+- 표 원본 전체 markdown은 S3(`policy-tables/{table_id}.md`)에 업로드
+- 각 row 청크는 `table_id`(UUID)로 같은 표임을 식별
+- DB에 FK 없음 — `table_id`는 S3 참조용 단순 UUID 컬럼
+
+`S3_BUCKET` 환경변수가 없으면 `.table_cache/` 폴더에 로컬 저장한다.
+
+---
+
+## 환경변수
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `DATABASE_URL` | — | PostgreSQL 연결 문자열 (필수, dry-run 제외) |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama 서버 주소 |
+| `EMBED_MODEL` | `qwen3:embedding` | Ollama 임베딩 모델 |
+| `EMBED_BACKEND` | `ollama` | `ollama` \| `sentence_transformers` (BGE-M3 전환) |
+| `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
+| `CLAUDE_BIN` | `claude` | VLM 표 추출에 사용하는 Claude CLI 실행 경로 |
+| `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
+| `VLM_TIMEOUT` | `600` | Claude CLI 호출 타임아웃(초) |
+| `VISION_MAX_PAGES` | `9999` | VLM 호출 상한 페이지 수 |
+
+---
+
+## 주요 파일 구조
+
+```
+Policy-Chunker/
+├── ingest.py               단일 PDF CLI 진입점
+├── ingest_many.py          YAML manifest 기반 일괄 처리
+├── rebuild_search_terms.py BM25 쿼리 보정용 search_terms 테이블 재구축
+│
+├── insurance_chunker/
+│   ├── models.py           InsuranceChunk, TableMeta, DocMeta dataclass 정의
+│   ├── chunker.py          doc_type별 오케스트레이터
+│   ├── rechunk.py          병합·중복제거·표분할 (clean → merge → finalize)
+│   ├── boundaries.py       폰트 기반 약관 경계 감지
+│   ├── pdf_parser.py       PDF 텍스트 추출
+│   ├── extractor.py        표 추출 (PyMuPDF/pdfplumber/camelot/VLM)
+│   ├── combine.py          페이지별 best-of 표 선택
+│   ├── embedder.py         Ollama / BGE-M3 임베딩
+│   ├── tokenizer.py        Kiwi 형태소 분리
+│   └── validator.py        청크 품질 검증
+│
+└── db/
+    ├── schema.sql          policy_chunks + search_terms DDL + 마이그레이션 블록
+    ├── storage.py          upsert_chunks, verify_upsert 등 DB 함수
+    └── search_term.py      search_terms 재구축 로직
+```

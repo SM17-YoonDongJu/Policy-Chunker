@@ -1,54 +1,12 @@
-# ============================================================
-#  저작권 보호 — 약관 원문/파생물은 절대 커밋하지 않는다
-#  (Copyright: never commit insurance policy source or derivatives)
-# ============================================================
-# 원문 PDF
-*.pdf
-# 청크/중간 산출물 JSON
-*chunks*.json
-*combined*.json
-*_v[0-9]*.json
-danche_*.json
-# 표 추출물
-*.md.tables
-tables/
-vlm.md
-camelot.md
-pymupdf.md
-pdfplumber.md
-# 뷰어 (청크 데이터 내장)
-*뷰어*.html
-*viewer*.html
-*chunks*.html
-# 작업 디렉터리 / 결과물 폴더 (청크 = 약관 파생물 → 커밋 금지, 폴더만 유지)
-data/
-!data/.gitkeep
-outputs/*
-!outputs/.gitkeep
-# 평가셋(실데이터일 수 있음) — 예제만 커밋
-eval/*.jsonl
-!eval/*.example.jsonl
-
-# ============================================================
-#  Python
-# ============================================================
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
 .venv/
-venv/
-env/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.pdf
+*.json
+!eval/eval_set.example.jsonl
+dry_run_out/
+*.egg-info/
+dist/
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# ============================================================
-#  OS / IDE
-# ============================================================
-.DS_Store
-.idea/
-.vscode/
-*.swp
