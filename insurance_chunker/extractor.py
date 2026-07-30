@@ -23,6 +23,14 @@ VISION_MAX_PAGES = int(os.environ.get("VISION_MAX_PAGES", "9999"))
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 VLM_DPI = int(os.environ.get("VLM_DPI", "150"))
 VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "600"))
+# 'surya' = Surya OCR(무료, 한국어 최고 품질) | 'local' = llama-server(PaddleOCR-VL, 무료·고속)
+# | 'claude' = claude CLI(유료 API — 사용 자제)
+VLM_BACKEND = os.environ.get("VLM_BACKEND", "surya")
+VLM_URL = os.environ.get("VLM_URL", "http://localhost:8090")
+LLAMA_CPP_BINARY = os.environ.get(
+    "LLAMA_CPP_BINARY",
+    os.path.expanduser("~/.local/llama.cpp/llama-b10182/llama-server"),
+)
 
 _vision_call_count = 0
 
@@ -130,12 +138,207 @@ def _strip_fences(s: str) -> str:
     return s.strip()
 
 
+def _html_table_to_markdown(html: str) -> Optional[str]:
+    """PaddleOCR-VL의 HTML 표 출력 → 파이프 markdown. 병합셀은 값 복제로 평탄화."""
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I)
+    if not rows:
+        return None
+    grid: list[list[str]] = []
+    spans: dict[int, tuple[str, int]] = {}  # col → (rowspan 값, 남은 행 수)
+
+    for tr in rows:
+        cells = re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", tr, re.S | re.I)
+        attrs = re.findall(r"<t[hd]([^>]*)>", tr, re.I)
+        out_row: list[str] = []
+        col = 0
+
+        def fill_pending() -> None:
+            nonlocal col
+            while col in spans:
+                val, left = spans.pop(col)
+                out_row.append(val)
+                if left > 1:
+                    spans[col] = (val, left - 1)
+                col += 1
+
+        for attr, cell in zip(attrs, cells):
+            fill_pending()
+            text = re.sub(r"<br\s*/?>", " ", cell)
+            text = re.sub(r"<[^>]+>", "", text).strip().replace("|", "／")
+            rs = re.search(r'rowspan="?(\d+)"?', attr, re.I)
+            cs = re.search(r'colspan="?(\d+)"?', attr, re.I)
+            n_row = int(rs.group(1)) if rs else 1
+            n_col = int(cs.group(1)) if cs else 1
+            for _ in range(n_col):
+                out_row.append(text)
+                if n_row > 1:
+                    spans[col] = (text, n_row - 1)
+                col += 1
+        fill_pending()
+        if out_row:
+            grid.append(out_row)
+    if not grid:
+        return None
+    width = max(len(r) for r in grid)
+    lines = ["| " + " | ".join(r + [""] * (width - len(r))) + " |" for r in grid]
+    lines.insert(1, "|" + "---|" * width)
+    return "\n".join(lines)
+
+
+def _otsl_to_markdown(otsl: str) -> Optional[str]:
+    """PaddleOCR-VL의 OTSL 표 출력 → 파이프 markdown.
+
+    <fcel>텍스트 = 셀, <ecel> = 빈 셀, <lcel> = 왼쪽 병합, <ucel>/<xcel> = 위 병합,
+    <nl> = 행 끝. 병합셀은 값 복제로 평탄화.
+    """
+    tokens = re.findall(r"<(fcel|ecel|lcel|ucel|xcel|nl)>([^<]*)", otsl)
+    if not tokens:
+        return None
+    grid: list[list[str]] = []
+    row: list[str] = []
+    for tag, text in tokens:
+        text = text.replace("\\n", " ").replace("\n", " ").replace("|", "／").strip()
+        if tag == "nl":
+            if row:
+                grid.append(row)
+            row = []
+        elif tag == "fcel":
+            row.append(text)
+        elif tag == "ecel":
+            row.append("")
+        elif tag == "lcel":
+            row.append(row[-1] if row else "")
+        else:  # ucel / xcel — 위 행 같은 열 값 복제
+            col = len(row)
+            row.append(grid[-1][col] if grid and col < len(grid[-1]) else "")
+    if row:
+        grid.append(row)
+    if not grid:
+        return None
+    width = max(len(r) for r in grid)
+    lines = ["| " + " | ".join(r + [""] * (width - len(r))) + " |" for r in grid]
+    lines.insert(1, "|" + "---|" * width)
+    return "\n".join(lines)
+
+
+def extract_vision_local(fitz_page, pno: int) -> Optional[str]:
+    """fitz page → llama-server(PaddleOCR-VL) → markdown 표 문자열. 표 없으면 None."""
+    import base64
+
+    import requests
+
+    try:
+        pix = fitz_page.get_pixmap(dpi=VLM_DPI)
+        img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+    except Exception as e:
+        logger.warning(f"p{pno}: 이미지 렌더링 실패: {e}")
+        return None
+
+    try:
+        resp = requests.post(
+            f"{VLM_URL}/v1/chat/completions",
+            json={
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                        {"type": "text", "text": "Table Recognition:"},
+                    ],
+                }],
+                "temperature": 0,
+                "max_tokens": 4096,
+            },
+            timeout=VLM_TIMEOUT,
+        )
+        resp.raise_for_status()
+        out = resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.warning(f"p{pno}: 로컬 VLM 실패: {e}")
+        return None
+
+    if not out:
+        return None
+    if "<fcel>" in out or "<ecel>" in out:
+        return _otsl_to_markdown(out)
+    if "<table" in out.lower() or "<tr" in out.lower():
+        return _html_table_to_markdown(out)
+    md = _strip_fences(out)
+    return md if "|" in md else None
+
+
+def extract_surya_tables(pdf_path: str, pages: list[int]) -> dict[int, str]:
+    """Surya OCR로 표 페이지 일괄 처리 → {1-based page: markdown}.
+
+    surya_ocr CLI를 PDF+page_range로 한 번 호출 (서버 1회 기동, 페이지 순차 처리).
+    """
+    import json as _json
+    import pathlib
+    import sys
+
+    if not pages:
+        return {}
+    surya_bin = str(pathlib.Path(sys.executable).parent / "surya_ocr")
+    if not os.path.exists(surya_bin):
+        logger.warning("surya_ocr 미설치 — surya 백엔드 건너뜀")
+        return {}
+    env = {**os.environ, "LLAMA_CPP_BINARY": LLAMA_CPP_BINARY}
+    page_range = ",".join(str(p - 1) for p in pages)  # surya는 0-based
+
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            r = subprocess.run(
+                [surya_bin, pdf_path, "--page_range", page_range, "--output_dir", td],
+                env=env, capture_output=True, text=True,
+                timeout=max(VLM_TIMEOUT, 120 * len(pages)),
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(f"surya 타임아웃 ({len(pages)}페이지)")
+            return {}
+        if r.returncode != 0:
+            logger.warning(f"surya 실패: {(r.stderr or '')[-300:]}")
+            return {}
+
+        results_files = list(pathlib.Path(td).rglob("results.json"))
+        if not results_files:
+            logger.warning("surya 결과 파일 없음")
+            return {}
+        data = _json.loads(results_files[0].read_text())
+        entries = next(iter(data.values()))
+
+    # 결과 page 값의 기준(0/1-based)을 요청 페이지와 대조해서 판별
+    p_vals = [e.get("page") for e in entries]
+    if set(p_vals) == set(pages):
+        page_of = lambda e, i: e["page"]
+    elif set(p_vals) == {p - 1 for p in pages}:
+        page_of = lambda e, i: e["page"] + 1
+    else:  # 순서 매칭 폴백
+        page_of = lambda e, i: pages[i]
+
+    out: dict[int, str] = {}
+    for i, entry in enumerate(entries):
+        mds = []
+        for b in entry.get("blocks", []):
+            html = b.get("html", "")
+            if b.get("label") == "Table" or "<table" in html.lower():
+                md = _html_table_to_markdown(html)
+                if md:
+                    mds.append(md)
+        if mds:
+            out[page_of(entry, i)] = "\n\n".join(mds)
+    return out
+
+
 def extract_vision(fitz_page, pno: int) -> Optional[str]:
-    """fitz page → claude CLI(비전) → markdown 표 문자열. 표 없으면 None."""
+    """fitz page → VLM → markdown 표 문자열. VLM_BACKEND로 로컬/claude 선택."""
     global _vision_call_count
     if _vision_call_count >= VISION_MAX_PAGES:
         logger.warning(f"Vision 상한({VISION_MAX_PAGES}회) 도달 — p{pno} 건너뜀")
         return None
+
+    if VLM_BACKEND == "local":
+        _vision_call_count += 1
+        return extract_vision_local(fitz_page, pno)
 
     try:
         pix = fitz_page.get_pixmap(dpi=VLM_DPI)
@@ -219,15 +422,18 @@ def extract_tables_for_doc(
         # VLM — PyMuPDF 표 탐지 페이지에만 실행
         if use_vision:
             total = len(table_pages)
-            logger.info(f"VLM 대상: {total}페이지 (전체 {len(page_numbers)}페이지 중 PyMuPDF 표 탐지 페이지만)")
-            vlm_tables: dict[int, str] = {}
-            for i, pno in enumerate(table_pages, 1):
-                logger.info(f"VLM [{i}/{total}] p{pno} 처리 중...")
-                fitz_page = doc[pno - 1]
-                md_vision = extract_vision(fitz_page, pno)
-                if md_vision:
-                    vlm_tables[pno] = md_vision
-                    logger.info(f"VLM [{i}/{total}] p{pno} 완료 (표 추출됨)")
+            logger.info(f"VLM 대상: {total}페이지 (전체 {len(page_numbers)}페이지 중 PyMuPDF 표 탐지 페이지만, backend={VLM_BACKEND})")
+            if VLM_BACKEND == "surya":
+                vlm_tables = extract_surya_tables(pdf_path, table_pages)
+            else:
+                vlm_tables = {}
+                for i, pno in enumerate(table_pages, 1):
+                    logger.info(f"VLM [{i}/{total}] p{pno} 처리 중...")
+                    fitz_page = doc[pno - 1]
+                    md_vision = extract_vision(fitz_page, pno)
+                    if md_vision:
+                        vlm_tables[pno] = md_vision
+                        logger.info(f"VLM [{i}/{total}] p{pno} 완료 (표 추출됨)")
             if vlm_tables:
                 table_sources["vlm"] = vlm_tables
 
