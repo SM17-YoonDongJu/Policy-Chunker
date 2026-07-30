@@ -8,12 +8,15 @@ Policy-Chunker의 rechunk.py 뼈대를 유지하되 아래를 보완:
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import uuid as _uuid
 from typing import Optional
 
 from .boundaries import Boundary, label_for
 from .models import DocMeta, InsuranceChunk, TableMeta
+
+logger = logging.getLogger(__name__)
 
 ROWS_PER_TABLE_CHUNK = 20  # 이 행 수를 초과하면 표를 child 청크로 분할
 
@@ -24,7 +27,8 @@ def _tok(text: str) -> int:
 FOOTER = re.compile(r"^\s*[-‐–—]\s*\d{1,3}\s*[-‐–—]\s*$")
 # 괄호 변형: ()  （）  【】 모두 허용
 _ART_NUM   = r"제\s*(\d+)\s*조(?:의\s*\d+)?\s*"
-_ART_TITLE = r"(?:[\(（]([^)）]{1,40})[\)）]|【([^】]{1,40})】)"
+# 제목 내 중첩 괄호 1단계 허용 — 예: "특별부활(효력회복)", "납입최고(독촉)"
+_ART_TITLE = r"(?:[\(（]((?:[^()（）]|[\(（][^()（）]{0,20}[\)）]){1,50})[\)）]|【([^】]{1,40})】)"
 _PARTICLES = (
     r"(?:의|에|는|은|을|를|와|과|도|만|부터|이라|라고|에서|에도|제\s*\d|"
     r"를\s*준용|의\s*죄|에\s*따|에\s*의|에\s*기재)"
@@ -35,7 +39,8 @@ ART       = re.compile(r"^" + _ART_NUM + _ART_TITLE)
 ART_NEXTLINE = re.compile(
     r"^" + _ART_NUM + r"\n([^①②③④⑤\(（【\n]{2,40})\s*(?:\n|$)"
 )
-CITE      = re.compile(r"^" + _ART_NUM + _ART_TITLE + r"\s*" + _PARTICLES)
+# 조사 검사는 제목과 같은 줄로 제한 — 줄바꿈 뒤는 본문 시작(인용 아님)
+CITE      = re.compile(r"^" + _ART_NUM + _ART_TITLE + r"[^\S\n]*" + _PARTICLES)
 TITLE_ONLY = re.compile(r"^제\d+조(?:의\d+)?\s*" + _ART_TITLE + r"\s*$")
 TOC = re.compile(r"[·.]{6,}|…{3,}")
 
@@ -59,15 +64,38 @@ _TYPE_MAP: dict[str, str] = {
 }
 
 
+_EXCLUSION_KW = ("면책", "부지급", "지급하지 않", "보상하지 않")
+_COVERAGE_KW = ("보장", "지급", "보험금")
+
+
+def _is_ambiguous(combined: str, keyword_result: str) -> bool:
+    """면책·지급 키워드가 동시에 걸리는 복합문 — 키워드 우선순위가 오판할 수 있는 구간."""
+    if keyword_result not in ("exclusion", "coverage"):
+        return False
+    return any(k in combined for k in _EXCLUSION_KW) and any(k in combined for k in _COVERAGE_KW)
+
+
 def _classify(text: str, label: Optional[str] = None) -> str:
     combined = (label or "") + " " + text
+    result = "general"
     for kw, ct in _TYPE_OVERRIDE.items():
         if kw in combined:
-            return ct
-    for kw, ct in _TYPE_MAP.items():
-        if kw in combined:
-            return ct
-    return "general"
+            result = ct
+            break
+    else:
+        for kw, ct in _TYPE_MAP.items():
+            if kw in combined:
+                result = ct
+                break
+
+    # 골든셋 검증(2026-07-30): 키워드 48% vs gemma4 90% — llm 백엔드에선
+    # 전 청크를 LLM이 판정하고 키워드는 LLM 실패 시 폴백으로만 사용
+    from .llm_classifier import CLASSIFY_BACKEND, classify_llm
+    if CLASSIFY_BACKEND == "llm":
+        llm_result = classify_llm(text, title=label)
+        if llm_result:
+            return llm_result
+    return result
 
 
 def _prefix(meta: DocMeta, section_label: Optional[str], art: Optional[int], atitle: Optional[str]) -> str:
@@ -176,7 +204,13 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
             if not m:
                 m = ART_NEXTLINE.match(body)
             if m and not CITE.match(body):
-                cur_art, cur_title = _art_from_match(m)
+                new_art, new_title = _art_from_match(m)
+                # 단조증가 가드: 형법 등 타 법령 인용("제297조(강간)")이
+                # 조 번호를 오염시키지 못하게 큰 점프·역행은 무시.
+                # 단 제1조 리셋은 허용 — 경계 감지가 실패한 문서(DB류)에서
+                # 새 특약 시작을 놓치지 않기 위함
+                if cur_art is None or cur_art < new_art <= cur_art + 10 or new_art == 1:
+                    cur_art, cur_title = new_art, new_title
 
         c.update(
             _label=lab, _kind=kind,
@@ -430,6 +464,43 @@ def finalize(
         chunk_idx += 1
 
     return chunks, table_metas
+
+
+# ── 중복 정형문구 마킹 ────────────────────────────────────────────────────────
+
+_NORM_RE = re.compile(r"[\s|․·⋅‧,.\-()\[\]【】〔〕:;'\"0-9]+")
+_LEGAL_APPENDIX = re.compile(r"법률조문\s*\|\s*용어 해설|법률조문.{0,30}용어\s*해설")
+
+
+def mark_boilerplate(chunks: list[InsuranceChunk]) -> list[InsuranceChunk]:
+    """동일 본문 반복 청크와 법령 해설 부록에 검색 제외 플래그.
+
+    - 본문(prefix/헤더 제외)이 같은 청크가 2개 이상이면 첫 번째를 대표로 두고
+      나머지에 is_boilerplate=True + canonical_id 연결. 특약별 조항 복원을 위해
+      삭제하지 않고 전부 보관한다.
+    - 법령 해설 부록(신용정보법 등 표)은 대표 여부와 무관하게 검색 제외.
+    """
+    groups: dict[str, list[InsuranceChunk]] = {}
+    for c in chunks:
+        body = c.content.split("\n", 2)[-1]
+        key = _NORM_RE.sub("", body)[:300]
+        groups.setdefault(key, []).append(c)
+
+    n_dup = n_legal = 0
+    for grp in groups.values():
+        for c in grp[1:]:
+            c.is_boilerplate = True
+            c.canonical_id = grp[0].chunk_id
+            n_dup += 1
+    for c in chunks:
+        if _LEGAL_APPENDIX.search(c.content[:300]):
+            c.is_boilerplate = True
+            n_legal += 1
+    if n_dup or n_legal:
+        tok = sum(c.token_count for c in chunks if c.is_boilerplate)
+        logger.info(f"[boilerplate] 반복 {n_dup} + 법령부록 {n_legal}청크 검색 제외 "
+                    f"({tok}tok — 보관은 유지)")
+    return chunks
 
 
 def report(chunks: list[InsuranceChunk], bounds: list[Boundary]) -> dict:
