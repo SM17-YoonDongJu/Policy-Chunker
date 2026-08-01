@@ -32,6 +32,7 @@ EVAL_DIR = Path(__file__).resolve().parent
 VERSIONS = {
     "v1": EVAL_DIR / "chunks_30327_full.jsonl",
     "v2": EVAL_DIR / "chunks_30327_final.jsonl",
+    "v3": EVAL_DIR / "chunks_30327_v3.jsonl",  # v2 + boilerplate 검색 제외
 }
 QUESTIONS = EVAL_DIR / "questions_30327.jsonl"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
@@ -166,6 +167,22 @@ def do_embed():
                           [(str(c["chunk_index"]), c["content"]) for c in chunks])
 
 
+RERANK = os.environ.get("RERANK", "0") == "1"
+METHODS = ("bm25", "embed", "rrf") + (("rerank",) if RERANK else ())
+RERANK_TOP = int(os.environ.get("RERANK_TOP", "20"))
+RERANK_MODEL = os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+_RERANKER = None
+
+
+def _reranker():
+    """CrossEncoder 지연 로딩 (첫 호출 시 1회)."""
+    global _RERANKER
+    if _RERANKER is None:
+        from sentence_transformers import CrossEncoder
+        _RERANKER = CrossEncoder(RERANK_MODEL, max_length=512)
+    return _RERANKER
+
+
 def rrf(rank_a: list[int], rank_b: list[int], n: int, k: int = 60) -> list[int]:
     """rank_a/rank_b: 문서 인덱스의 정렬 리스트(상위부터). RRF 융합 정렬 반환."""
     score = np.zeros(n)
@@ -204,11 +221,19 @@ def run():
             qv = qv / np.linalg.norm(qv)
             emb_rank = list(np.argsort(-(emb_matrix @ qv)))
 
+            rrf_rank = rrf(bm_rank[:50], emb_rank[:50], n)
             rankings = {
                 "bm25": bm_rank,
                 "embed": emb_rank,
-                "rrf": rrf(bm_rank[:50], emb_rank[:50], n),
+                "rrf": rrf_rank,
             }
+            if RERANK:
+                # RRF 상위 후보를 cross-encoder로 재정렬 (bge-reranker-v2-m3)
+                cand = rrf_rank[:RERANK_TOP]
+                pairs = [(q["question"], chunks[i]["content"][:1500]) for i in cand]
+                scores = _reranker().predict(pairs, batch_size=16, show_progress_bar=False)
+                order = np.argsort(-np.asarray(scores))
+                rankings["rerank"] = [cand[j] for j in order] + rrf_rank[RERANK_TOP:]
             for method, rank in rankings.items():
                 top = [chunks[i] for i in rank[:TOP_K]]
                 for mode in ("strict", "lenient"):
@@ -245,7 +270,7 @@ def report(results: dict, per_q_rows: list[dict], n_q: int):
         lines.append("")
         lines.append("| 방법 | 버전 | R@1 | R@5 | MRR@10 |")
         lines.append("|---|---|---|---|---|")
-        for method in ("bm25", "embed", "rrf"):
+        for method in METHODS:
             for ver in VERSIONS:
                 m = results[(ver, method, mode)]
                 lines.append(f"| {method} | {ver} | {m['R@1']:.3f} | {m['R@5']:.3f} | {m['MRR']:.3f} |")
@@ -257,7 +282,7 @@ def report(results: dict, per_q_rows: list[dict], n_q: int):
     qtypes = sorted({r["qtype"] for r in per_q_rows})
     lines.append("| 방법 | 버전 | " + " | ".join(qtypes) + " |")
     lines.append("|---|---|" + "---|" * len(qtypes))
-    for method in ("bm25", "embed", "rrf"):
+    for method in METHODS:
         for ver in VERSIONS:
             cells = []
             for qt in qtypes:
