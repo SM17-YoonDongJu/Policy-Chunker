@@ -33,6 +33,7 @@ VERSIONS = {
     "v1": EVAL_DIR / "chunks_30327_full.jsonl",
     "v2": EVAL_DIR / "chunks_30327_final.jsonl",
     "v3": EVAL_DIR / "chunks_30327_v3.jsonl",  # v2 + boilerplate 검색 제외
+    "claude": EVAL_DIR / "chunks_30327_claude.jsonl",  # 노션 클로드 청킹(VLM 병합) 3221청크
 }
 QUESTIONS = EVAL_DIR / "questions_30327.jsonl"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
@@ -113,6 +114,8 @@ class BM25:
 # ---------- 임베딩 (이어받기 캐시) ----------
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
+    # qwen3-embedding 러너가 장문 입력에서 크래시(EOF) — 안전 상한으로 절단
+    texts = [(t[:1800] or " ") for t in texts]
     resp = requests.post(f"{OLLAMA_URL}/api/embed",
                          json={"model": EMBED_MODEL, "input": texts}, timeout=300)
     resp.raise_for_status()
@@ -133,7 +136,17 @@ def build_embed_cache(cache_path: Path, items: list[tuple[str, str]]) -> dict[st
         with cache_path.open("a") as f:
             for i in range(0, len(todo), BATCH):
                 batch = todo[i:i + BATCH]
-                vecs = embed_batch([t for _, t in batch])
+                try:
+                    vecs = embed_batch([t for _, t in batch])
+                except Exception:
+                    # 배치 실패 시 건별 폴백 — 문제 항목은 앞 4000자로 잘라 재시도
+                    vecs = []
+                    for k, t in batch:
+                        try:
+                            vecs.append(embed_batch([t])[0])
+                        except Exception:
+                            print(f"  [경고] {k}: 원문 실패 → 4000자 절단 재시도")
+                            vecs.append(embed_batch([t[:4000] or " "])[0])
                 for (k, _), v in zip(batch, vecs):
                     f.write(json.dumps({"key": k, "vec": v}) + "\n")
                     done[k] = v
