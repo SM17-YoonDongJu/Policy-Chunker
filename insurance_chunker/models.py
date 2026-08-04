@@ -74,6 +74,10 @@ class InsuranceChunk:
     row_start: Optional[int] = None
     row_end: Optional[int] = None
 
+    # 중복 정형문구 처리 — 보관은 전부, 검색 인덱스(임베딩/BM25)는 대표만
+    is_boilerplate: bool = False           # True면 임베딩·검색 인덱스 제외
+    canonical_id: Optional[str] = None     # 대표 청크의 chunk_id (대표 자신은 None)
+
     embedding: Optional[list[float]] = None
 
 

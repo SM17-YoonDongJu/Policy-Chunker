@@ -50,6 +50,12 @@ ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_start   SMALLINT;
 ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS row_end     SMALLINT;
 ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS product_id  UUID;
 
+-- SM17-YoonDongJu/AI 레포(rag.search())가 content_tsv(tsvector 컬럼)를 직접
+-- @@ 검색한다 — 우리는 지금까지 to_tsvector(content_tokens)를 매번 계산했으므로
+-- 호출 계약을 맞추려면 이 생성 컬럼이 필요하다. content_tokens 갱신 시 자동 재계산.
+ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS content_tsv tsvector
+    GENERATED ALWAYS AS (to_tsvector('simple', coalesce(content_tokens, ''))) STORED;
+
 -- embedding 타입을 vector → halfvec(float16)로 전환 (용량·RAM 절반).
 -- 기존 운영 DB에만 수동 실행. 인덱스 연산자 클래스가 바뀌므로 인덱스 재생성 필요.
 --   ALTER TABLE policy_chunks ALTER COLUMN embedding TYPE halfvec(1024);
@@ -70,7 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_policy_hnsw
 -- 랭킹: ORDER BY ts_rank(to_tsvector('simple', content_tokens), plainto_tsquery('simple', '검색어')) DESC
 CREATE INDEX IF NOT EXISTS idx_policy_fts
     ON policy_chunks
-    USING gin (to_tsvector('simple', coalesce(content_tokens, '')));
+    USING gin (content_tsv);
 
 -- 메타 필터 (보험사·청크타입·시행일)
 CREATE INDEX IF NOT EXISTS idx_policy_meta

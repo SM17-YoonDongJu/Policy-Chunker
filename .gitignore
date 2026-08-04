@@ -10,3 +10,9 @@ dry_run_out/
 *.egg-info/
 dist/
 .pytest_cache/
+# eval 산출물 (파생 데이터 — 골든셋만 커밋)
+eval/*.jsonl
+!eval/goldenset.jsonl
+!eval/questions_30327.jsonl
+eval/*.log
+eval/*.csv

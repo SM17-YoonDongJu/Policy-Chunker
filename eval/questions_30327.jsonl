@@ -1,0 +1,47 @@
+{"qid": "Q01", "qtype": "coverage", "question": "계단에서 넘어져서 팔이 부러졌는데 골절진단비 받을 수 있어?", "gold": [{"section": "골절진단비 특별약관", "article": "제1조"}, {"section": "골절진단비(치아파절 제외) 특별약관", "article": "제1조"}], "keywords": ["골절진단비"]}
+{"qid": "Q02", "qtype": "coverage", "question": "버스 타고 가다가 사고 나서 다쳤어. 대중교통 사고도 보험금 나와?", "gold": [{"section": "대중교통상해 특별약관", "article": "제1조"}], "keywords": ["대중교통 이용 중 사고"]}
+{"qid": "Q03", "qtype": "coverage", "question": "자전거 타다 넘어져서 다쳤는데 진단비 같은 거 나와?", "gold": [{"section": "자전거사고 상해진단 특별약관", "article": "제1조"}, {"section": "자전거상해 진단위로금(II) 특별약관", "article": "제1조"}], "keywords": ["자전거"]}
+{"qid": "Q04", "qtype": "coverage", "question": "애가 어린이보호구역에서 차에 치여서 다쳤어요. 보상 어떻게 되나요?", "gold": [{"section": "스쿨존 교통사고 부상진단비 특별약관", "article": "제1조"}, {"section": "스쿨존 교통사고 상해비용 특별약관", "article": "제1조"}, {"section": "스쿨존 교통사고 후유장해 특별약관", "article": "제1조"}], "keywords": ["어린이보호구역"]}
+{"qid": "Q05", "qtype": "coverage", "question": "폭염에 일하다가 열사병 진단받았는데 보험금 나오나요?", "gold": [{"section": "온열질환 진단비(연간 1회) 특별약관", "article": "제1조"}], "keywords": ["온열질환"]}
+{"qid": "Q06", "qtype": "coverage", "question": "상한 거 먹고 식중독 걸려서 3일 입원했는데 보상돼?", "gold": [{"section": "식중독치료비 특별약관", "article": "제1조"}], "keywords": ["식중독"]}
+{"qid": "Q07", "qtype": "coverage", "question": "개한테 물려서 치료받았는데 이것도 보험으로 보장돼?", "gold": [{"section": "개 물림⋅부딪힘 사고 진단비 특별약관", "article": "제1조"}, {"section": "개 물림⋅부딪힘 사고 진단비 (연간 ( )회한) 특별약관", "article": "제1조"}], "keywords": ["물림"]}
+{"qid": "Q08", "qtype": "coverage", "question": "상해로 입원하면 입원일당은 최대 며칠까지 받을 수 있어?", "gold": [{"section": "24시간상해 입원일당 특별약관Ⅰ", "article": "제1조"}, {"section": "24시간상해 입원일당 특별약관Ⅱ", "article": "제1조"}], "keywords": ["180일"]}
+{"qid": "Q09", "qtype": "coverage", "question": "아이가 실종돼서 미아 신고한 지 한 달 넘었어요. 지원금 받을 수 있나요?", "gold": [{"section": "미아찾기 지원금 특별약관", "article": "제1조"}, {"section": "미아찾기 지원금 특별약관", "article": "제3조"}], "keywords": ["미아"]}
+{"qid": "Q10", "qtype": "exclusion", "question": "스카이다이빙 하다가 다친 것도 보상돼?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제5조"}], "keywords": ["스카이다이빙"]}
+{"qid": "Q11", "qtype": "exclusion", "question": "임신이나 출산 때문에 문제 생긴 것도 보험금 지급돼?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제5조"}], "keywords": ["출산"]}
+{"qid": "Q12", "qtype": "exclusion", "question": "전쟁이나 폭동 나서 다친 건 보상 안 해주지?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제5조"}], "keywords": ["폭동"]}
+{"qid": "Q13", "qtype": "exclusion", "question": "고의로 자해한 경우에도 보험금 받을 수 있어?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제5조"}], "keywords": ["고의로 자신을 해친"]}
+{"qid": "Q14", "qtype": "exclusion", "question": "자전거 사고 내고 도망갔다가 벌금 나왔는데 벌금 특약으로 보장돼?", "gold": [{"section": "자전거사고 벌금 특별약관", "article": "제2조"}], "keywords": ["도주"]}
+{"qid": "Q15", "qtype": "exclusion", "question": "대중교통 특약은 하역작업하다가 다친 것도 보상해줘?", "gold": [{"section": "대중교통상해 특별약관", "article": "제2조"}], "keywords": ["하역작업"]}
+{"qid": "Q16", "qtype": "exclusion", "question": "오토바이 경기 연습하다가 다쳤는데 이건 보상 안 되나?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제5조"}], "keywords": ["오토바이"]}
+{"qid": "Q17", "qtype": "procedure", "question": "보험금 청구할 때 서류 뭐뭐 내야 해?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제7조"}], "keywords": ["사고증명서"]}
+{"qid": "Q18", "qtype": "procedure", "question": "보험금 청구하면 며칠 안에 지급해줘?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제8조"}], "keywords": ["서류를 접수한 날부터 3영업일"]}
+{"qid": "Q19", "qtype": "procedure", "question": "사고 나면 보험사에 언제까지 알려야 해?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제6조"}], "keywords": ["발생을 알게 된 때"]}
+{"qid": "Q20", "qtype": "procedure", "question": "보험 가입하고 나서 마음 바뀌면 청약 철회 언제까지 돼?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제18조"}], "keywords": ["청약을 철회"]}
+{"qid": "Q21", "qtype": "procedure", "question": "이사하면 보험사에 주소 변경 알려야 해?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제10조"}], "keywords": ["주소변경통지"]}
+{"qid": "Q22", "qtype": "procedure", "question": "직업 바뀌면 보험사에 알려야 한다던데, 안 알리면 어떻게 돼?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제14조"}, {"section": "단체안심생활보험 보통약관", "article": "제15조"}], "keywords": ["직업 또는 직무", "알릴 의무 위반"]}
+{"qid": "Q23", "qtype": "procedure", "question": "내가 아파서 직접 청구 못 할 때 대신 청구해줄 사람 미리 지정할 수 있어?", "gold": [{"section": "지정대리청구서비스 특별약관", "article": "제3조"}], "keywords": ["지정대리청구인"]}
+{"qid": "Q24", "qtype": "definition", "question": "약관에서 말하는 '상해'가 정확히 뭐야?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제2조"}], "keywords": ["급격하고도 우연한 외래의 사고"]}
+{"qid": "Q25", "qtype": "definition", "question": "약관에서 '영업일'에 토요일 포함돼?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제2조"}], "keywords": ["토요일"]}
+{"qid": "Q26", "qtype": "definition", "question": "연단위 복리가 무슨 뜻이야?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제2조"}], "keywords": ["다음 1년의 원금"]}
+{"qid": "Q27", "qtype": "definition", "question": "약관상 '대중교통수단'에 택시도 포함되는 거야?", "gold": [{"section": "대중교통상해 특별약관", "article": "제1조"}, {"section": "대중교통상해 부상진단비(택시포함) 특별약관", "article": "제1조"}, {"section": "대중교통상해 부상진단비(택시제외) 특별약관", "article": "제1조"}], "keywords": ["대중교통수단"]}
+{"qid": "Q28", "qtype": "definition", "question": "화상진단비에서 말하는 심재성 2도 화상이 뭐야?", "gold": [{"section": "화상진단비 특별약관", "article": "제1조"}], "keywords": ["심재성 2도"]}
+{"qid": "Q29", "qtype": "cancel_refund", "question": "보험 중간에 해지하면 낸 보험료 돌려받을 수 있어?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제29조"}, {"section": "단체안심생활보험 보통약관", "article": "제32조"}], "keywords": ["보험료의 환급", "임의해지"]}
+{"qid": "Q30", "qtype": "cancel_refund", "question": "보험료 깜빡하고 못 내면 계약 바로 해지돼?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제26조"}], "keywords": ["납입최고"]}
+{"qid": "Q31", "qtype": "cancel_refund", "question": "보험료 연체로 해지된 계약 다시 살릴 수 있어?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제27조"}], "keywords": ["부활"]}
+{"qid": "Q32", "qtype": "cancel_refund", "question": "보험사가 파산하면 내 보험은 어떻게 되는 거야?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제31조"}, {"section": "단체안심생활보험 보통약관", "article": "제41조"}], "keywords": ["파산"]}
+{"qid": "Q33", "qtype": "cancel_refund", "question": "피보험자가 사망하면 계약은 자동으로 끝나는 거야?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제23조"}], "keywords": ["보험금 지급사유가 더 이상 발생할 수 없는"]}
+{"qid": "Q34", "qtype": "cancel_refund", "question": "보험금 안 찾아가고 3년 지나면 못 받아?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제35조"}], "keywords": ["소멸시효"]}
+{"qid": "Q35", "qtype": "procedure", "question": "약관 설명도 제대로 못 들었고 약관도 못 받았는데 계약 취소 가능해?", "gold": [{"section": "단체안심생활보험 보통약관", "article": "제19조"}], "keywords": ["약관의 중요한 내용을 설명"]}
+{"qid": "Q36", "qtype": "table", "question": "골이식술은 수술분류표에서 몇 종 수술이야?", "gold": [{"section": "별표9 수술분류표", "article": null}, {"section": "별표9-1 수술분류표Ⅱ", "article": null}], "keywords": ["골이식술"]}
+{"qid": "Q37", "qtype": "table", "question": "손목 골절은 골절분류표에서 분류기호가 뭐야?", "gold": [{"section": "별표3 골절 분류표", "article": null}, {"section": "별표4 골절(치아파절 제외) 분류표", "article": null}], "keywords": ["S62"]}
+{"qid": "Q38", "qtype": "table", "question": "열사병은 질병분류코드가 뭐야?", "gold": [{"section": "별표8 온열질환 분류표", "article": null}], "keywords": ["T67"]}
+{"qid": "Q39", "qtype": "table", "question": "자동차사고 부상등급표에서 추간판 탈출증은 몇 급이야?", "gold": [{"section": "별표6 자동차사고 부상등급표", "article": null}], "keywords": ["추간판 탈출증"]}
+{"qid": "Q40", "qtype": "table", "question": "얼굴에 3센티 넘는 찢김 상처면 부상등급 몇 급이야?", "gold": [{"section": "별표6 자동차사고 부상등급표", "article": null}], "keywords": ["3cm 이상 얼굴"]}
+{"qid": "Q41", "qtype": "table", "question": "기도에 화상 입은 것도 화상분류표에 들어가?", "gold": [{"section": "별표5 화상 분류표", "article": null}], "keywords": ["기도"]}
+{"qid": "K01", "qtype": "kcd_entity", "question": "S82.1 진단 받았는데 골절진단비 나오나요?", "gold": [{"section": "골절진단비 특별약관", "article": "제1조"}, {"section": "골절진단비(치아파절 제외) 특별약관", "article": "제1조"}], "keywords": ["골절로 진단 확정"]}
+{"qid": "K02", "qtype": "kcd_entity", "question": "T22 화상 진단서 나왔는데 화상진단비 보험금 받을 수 있나요?", "gold": [{"section": "화상진단비 특별약관", "article": "제1조"}], "keywords": ["화상으로 진단확정"]}
+{"qid": "K03", "qtype": "kcd_entity", "question": "A92 진단명으로 감염병진단비 청구 가능한가요?", "gold": [{"section": "특정감염병진단비 특별약관Ⅳ", "article": "제1조"}], "keywords": ["특정감염병"]}
+{"qid": "K04", "qtype": "kcd_entity", "question": "S72 골절로 수술받았는데 골절수술비도 같이 나오나요?", "gold": [{"section": "골절수술비 특별약관", "article": "제1조"}], "keywords": ["골절"]}
+{"qid": "K05", "qtype": "kcd_entity", "question": "진단서에 S82 코드로 적혀있고 후유장해 등급도 나왔는데 장해분류표 기준이 어떻게 되나요?", "gold": [{"section": "별표1 장해 분류표", "article": null}], "keywords": ["장해지급률", "지급률"]}
+{"qid": "K06", "qtype": "kcd_entity", "question": "T25 화상 진단받고 수술도 했는데 화상 관련 특약 뭐가 적용되나요?", "gold": [{"section": "화상진단비 특별약관", "article": "제1조"}], "keywords": ["화상"]}

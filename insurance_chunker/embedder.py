@@ -123,7 +123,12 @@ def embed_texts(texts: list[str], ollama_url: Optional[str] = None,
 
 def embed_chunks(chunks: list[InsuranceChunk], ollama_url: Optional[str] = None,
                  model: Optional[str] = None) -> list[InsuranceChunk]:
-    vectors = embed_texts([c.content for c in chunks], ollama_url=ollama_url, model=model)
-    for chunk, vec in zip(chunks, vectors):
+    """boilerplate 청크는 임베딩 생략 (저장은 되지만 벡터 검색 대상 아님)."""
+    targets = [c for c in chunks if not c.is_boilerplate]
+    skipped = len(chunks) - len(targets)
+    if skipped:
+        logger.info(f"boilerplate {skipped}청크 임베딩 생략")
+    vectors = embed_texts([c.content for c in targets], ollama_url=ollama_url, model=model)
+    for chunk, vec in zip(targets, vectors):
         chunk.embedding = vec
     return chunks

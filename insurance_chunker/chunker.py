@@ -129,7 +129,7 @@ def _chunk_policy_terms(
     hard_max: int,
 ) -> tuple[list[InsuranceChunk], list[TableMeta]]:
     from .boundaries import find as find_bounds
-    from .rechunk import clean, merge, finalize, report
+    from .rechunk import clean, merge, finalize, mark_boilerplate, report
 
     # 폰트 기반 경계 감지
     bounds = None
@@ -169,6 +169,7 @@ def _chunk_policy_terms(
     cleaned = clean(base_chunks, bounds)
     merged = merge(cleaned, meta, target=target, hard_max=hard_max)
     chunks, table_metas = finalize(merged, meta)
+    chunks = mark_boilerplate(chunks)
     stats = report(chunks, bounds)
     logger.info(
         f"[policy_terms] {stats['n_chunks']}청크 | "
@@ -176,6 +177,26 @@ def _chunk_policy_terms(
         f"특약경계={stats['n_special_bounds']}종 | 표분할={len(table_metas)}건"
     )
     return chunks, table_metas
+
+
+# 조 제목 단독 줄 — "제17조(보험계약의 성립)" 형태. 긴 제목이 줄바꿈으로 감싸이면
+# 닫는 괄호가 다음 줄로 넘어가므로 닫는 괄호는 선택. 인용("…제5조(…)에 따라")은
+# 제목 뒤에 조사가 붙어 한 줄을 다 못 채우므로 $ 앵커로 배제된다.
+# 두 형태 허용: ① 제목 단독 줄(닫는 괄호가 다음 줄로 감쌀 수 있음),
+# ② DB식 같은-줄 조판 "제4조의2(제목) ① 본문…" — 제목 뒤 항 마커(①/1.)로 본문 시작.
+# 인용("제5조(…)에 따라")은 제목 뒤에 조사가 붙어 어느 형태에도 안 걸림.
+_ART_HEAD_LINE = re.compile(
+    r"^제\d+조(?:의\d+)?\s*\((?:[^()\n]|\([^()\n]{0,20}\)){1,50}"
+    r"(?:\)?\s*$|\)\s*(?=①|1\.\s))", re.M)
+
+
+def _split_at_article_heads(para: str) -> list[str]:
+    """빈 줄 없이 이어진 단락을 조 제목 줄 앞에서 분할."""
+    starts = [m.start() for m in _ART_HEAD_LINE.finditer(para) if m.start() != 0]
+    if not starts:
+        return [para]
+    bounds = [0] + starts + [len(para)]
+    return [para[a:b].strip() for a, b in zip(bounds, bounds[1:]) if para[a:b].strip()]
 
 
 def _pages_to_base_chunks(pages: list[PageResult], meta: DocMeta) -> list[dict]:
@@ -194,6 +215,7 @@ def _pages_to_base_chunks(pages: list[PageResult], meta: DocMeta) -> list[dict]:
         paras = [p.strip() for p in re.split(r"\n{2,}", page.text) if p.strip()]
         if not paras and page.text.strip():
             paras = [page.text.strip()]
+        paras = [sub for p in paras for sub in _split_at_article_heads(p)]
 
         for seq, para in enumerate(paras):
             chunks.append({
