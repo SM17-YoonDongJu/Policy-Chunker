@@ -26,7 +26,14 @@ PRODUCT = re.compile(r".*보험")
 # 보험료정산 추가특약 등, 상품명이 아닌 "보험" 포함 짧은 줄이 후보로 끼어드는 걸 막는
 # 최소 근거는 두지 않고 대신 크기·길이로 우선순위를 매긴다(아래 product_cands 정렬).
 GWAN = re.compile(r"^제\s*\d+\s*관\b")
-DIVIDER = re.compile(r"^\d+\.\s")
+# 절/관 장 구분 헤더 — 제목 폰트로 조판돼 후보 점수를 받지만 특약 제목의 일부가
+# 될 수 없다. pending에 섞이면(예: "제2절 보장조항" + "2-1. 갱신형…") 뒤따르는
+# 진짜 제목의 앞줄로 오인돼 라벨이 잘리므로 후보 단계에서 원천 차단한다.
+_CHAPTER_DIV = re.compile(r"^제\s*\d+\s*[절관장편]\b")
+# 번호 접두 — 순번("13. ") / 하위그룹 번호("2-1. ", "2-6. ") 모두 인식.
+# 하이픈형을 놓치면(예전 버그) "2-1. 갱신형 중증화상환자 산정특례대상" 같은
+# 앞줄이 이어붙일 근거 없는 본문 조각으로 오판돼 통째로 버려진다.
+DIVIDER = re.compile(r"^\d+(?:-\d+)*\.\s")
 BYEOLPYO = re.compile(r"^【\s*(?:별표|부표)\s*([0-9\-]+)\s*】\s*(.*)")
 
 # ── 다중 신호 경계 점수제 ────────────────────────────────────────────────────
@@ -81,7 +88,7 @@ def _invalid_candidate(txt: str) -> bool:
     return (not (2 <= len(txt) <= 90) or bool(_PURE_SYMBOLIC.match(txt))
             or bool(_ART_LIKE.match(txt)) or bool(_CALLOUT.match(txt))
             or bool(_MID_SENTENCE.search(txt)) or bool(_BARE_SUFFIX.match(txt))
-            or bool(_SENT_END.search(txt)))
+            or bool(_SENT_END.search(txt)) or bool(_CHAPTER_DIV.match(txt)))
 
 
 def _signal_score(txt: str, has_suffix: bool, sz: float, is_bold: bool,
@@ -338,10 +345,13 @@ def find(doc, det: Detection | None = None) -> tuple[list[Boundary], Detection]:
             # 시작, 접미사 단독, 앞부분 괄호 미닫힘, 번호 시작 앞줄)가 없으면
             # 앞의 대기분은 우연히 낀 본문 조각이다 — 버리고 단독 제목만 쓴다.
             last_txt = pending[-1][0]
-            head = " ".join(p[0] for p in pending[:-1])
+            head_items = pending[:-1]
+            head = " ".join(p[0] for p in head_items)
+            # 장/절 구분("제2절 보장조항") 같은 무관한 줄이 앞에 끼어 pending[0]이
+            # 실제 제목 시작이 아닐 수 있다 — 번호 신호는 head 전체에서 찾는다.
             continuation = (last_txt.startswith(("(", "（"))
                             or _BARE_SUFFIX.match(last_txt)
-                            or DIVIDER.match(pending[0][0])
+                            or any(DIVIDER.match(p[0]) for p in head_items)
                             or (head.count("(") + head.count("（")
                                 > head.count(")") + head.count("）")))
             if not continuation:
