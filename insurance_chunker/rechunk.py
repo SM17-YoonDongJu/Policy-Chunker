@@ -255,6 +255,12 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
             frag = _dense(c["text"])
             switched = None
             for b in todo:
+                # base 라벨("{상품명} 보통약관")은 재구성 문자열이라 원문에 없다 —
+                # 경계 감지가 쓴 신호(제1조 시작)로 전환한다.
+                if b.kind == "base":
+                    if re.search(r"(?m)^제\s*1\s*조\s*[\(（]", c["text"]):
+                        switched = b
+                    continue
                 # 별표 라벨은 "별표3 골절 분류표"로 재구성돼 원문(【 별표3 】…)과
                 # 다르다 — 번호 뺀 제목부로도 찾아본다.
                 probes = (_dense(b.label)[:10],
