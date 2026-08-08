@@ -62,6 +62,12 @@ _ROMAN_CH = re.compile(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\.\s")
 _GENERIC_GROUP = re.compile(r"기타|관련|담보\s*등|및\s")
 # 【별표N】표기 없이 제목 폰트로 조판된 부록 표 제목(산정특례대상질병 분류표 등)
 _TABLE_TITLE = re.compile(r"^.{2,40}(분류표|등급표|급표)\s*$")
+# 약관 뒤에 붙는 부록 헤더 — 이 아래는 타 법령 전문이 수십 페이지 이어져서
+# 법령 조번호(의료법 제36조 등)가 직전 특약의 조로 오인된다(실손류 문서).
+_APPENDIX_HEAD = re.compile(
+    r"^(?:약관에서\s*)?인용(?:된)?\s*법[\W\s]*규정\s*$"
+    r"|^(?:가나다\s*순?\s*)?특별약관\s*색인\s*$"
+    r"|^약관\s*요약서\s*$")
 
 _W_SUFFIX, _W_FONT, _W_BOLD, _W_ISOLATED, _W_SHORT = 1.6, 1.4, 1.0, 0.8, 0.6
 _W_DOT_LEADER, _W_OTHER_LAW = 2.0, 1.5
@@ -298,6 +304,11 @@ def find(doc, det: Detection | None = None) -> tuple[list[Boundary], Detection]:
             continue
         if (det.title_lo is not None and sz >= det.title_lo
                 and _TABLE_TITLE.match(txt) and not _MID_SENTENCE.search(txt)):
+            bounds.append(Boundary(pno, txt, "byeolpyo"))
+            _flush()
+            continue
+        if _APPENDIX_HEAD.match(txt) and (is_isolated or
+                (det.title_lo is not None and sz >= det.title_lo)):
             bounds.append(Boundary(pno, txt, "byeolpyo"))
             _flush()
             continue
