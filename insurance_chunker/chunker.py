@@ -190,9 +190,36 @@ _ART_HEAD_LINE = re.compile(
     r"(?:\)?\s*$|\)\s*(?=①|1\.\s))", re.M)
 
 
+_MIN_HEAD_BODY_CHARS = 4  # 헤더 매치 사이 실질 텍스트 최소치(공백 제외)
+
+
 def _split_at_article_heads(para: str) -> list[str]:
-    """빈 줄 없이 이어진 단락을 조 제목 줄 앞에서 분할."""
-    starts = [m.start() for m in _ART_HEAD_LINE.finditer(para) if m.start() != 0]
+    """빈 줄 없이 이어진 단락을 조 제목 줄 앞에서 분할.
+
+    헤더로 보이는 줄이 바로 앞/뒤에 실질 본문 없이 다른 헤더와 곧장 붙어 있으면
+    (예: 정의 조항 안에 "형법 제297조(강간)/제298조(강제추행)/…"처럼 타법령
+    조문을 목록으로 나열) 진짜 조 제목이 아니라 인용 목록이다 — 진짜 조는 항상
+    본문 문장을 동반하므로, 그런 매치는 분할 지점에서 제외해 나열 전체를
+    이웃 조각에 붙여 둔다.
+    """
+    matches = list(_ART_HEAD_LINE.finditer(para))
+    if not matches:
+        return [para]
+
+    def gap_len(a_end: int, b_start: int) -> int:
+        return len(re.sub(r"\s+", "", para[a_end:b_start]))
+
+    starts = []
+    for i, m in enumerate(matches):
+        if m.start() == 0:
+            continue
+        prev_trivial = i > 0 and gap_len(matches[i - 1].end(), m.start()) < _MIN_HEAD_BODY_CHARS
+        next_trivial = (i + 1 < len(matches)
+                        and gap_len(m.end(), matches[i + 1].start()) < _MIN_HEAD_BODY_CHARS)
+        if prev_trivial or next_trivial:
+            continue
+        starts.append(m.start())
+
     if not starts:
         return [para]
     bounds = [0] + starts + [len(para)]
