@@ -159,6 +159,11 @@ def _is_toc(t: str) -> bool:
 _PREV_OPEN_END = re.compile(
     r"(?:[는은이가을를의와과도만면서고며여든지]|또는|및|아래|다음|위한|따라|대한|[,·:]|-)\s*$"
 )
+# 앞 줄이 타 법령명으로 끝나면("…및 의료급여법 " + "제10조(급여비용의 부담) 동법
+# 시행령 제13조(…") 다음 줄이 "제N조("로 시작해도 그 법의 조문 인용이다 — 조사
+# 목록(_PARTICLES)엔 "법/령"이 없어 CITE가 놓친다. 실손·간편건강 특약의 산정특례
+# 정의 조항에 이런 타법령 나열이 흔하다.
+_PREV_LAW_NAME = re.compile(r"(?:법|법률|시행령|시행규칙|규정|고시|예규)\s*$")
 
 
 _ART_OPEN_NUM = re.compile(r"^제\s*(\d+)\s*조(?:의\s*\d+)?\s*[\(（](.{10,})$")
@@ -191,6 +196,8 @@ def _split_articles(body: str) -> list[str]:
         # 제목이다 — 미완 문장으로 취급하면 바로 아래 조 헤딩 분할이 막힌다.
         if (prev and _PREV_OPEN_END.search(prev)
                 and not re.match(r"^제\s*\d+\s*관\b", prev)):
+            continue
+        if prev and _PREV_LAW_NAME.search(prev):
             continue
         cuts.append(i)
     if len(cuts) == 1:
