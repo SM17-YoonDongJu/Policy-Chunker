@@ -35,6 +35,7 @@ def main(pdf: str, out: str, insurer: str, product: str) -> None:
                 "chunk_type": c.chunk_type,
                 "token_count": c.token_count,
                 "table_id": c.table_id,
+                "is_boilerplate": getattr(c, "is_boilerplate", False),
                 "content": c.content,
             }, ensure_ascii=False) + "\n")
     print(f"{out}: {len(chunks)} chunks")
