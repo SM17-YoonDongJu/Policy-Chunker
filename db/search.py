@@ -27,7 +27,7 @@ import asyncpg
 import numpy as np
 from pydantic import BaseModel
 
-from insurance_chunker.embedder import embed_texts
+from insurance_chunker.embedder import embed_query
 from insurance_chunker.tokenizer import tokenize_korean
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,7 @@ async def search(
         return RagResult(ranked_chunks=[], citations=[])
 
     query_tokens = tokenize_korean(query)
-    embedding = embed_texts([query])[0]
+    embedding = embed_query(query)
 
     keyword_rows = await _keyword_search(pool, query_tokens, _CANDIDATE_K)
     vector_rows = await _vector_search(pool, embedding, _CANDIDATE_K)
