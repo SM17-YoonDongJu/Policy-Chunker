@@ -178,11 +178,52 @@ def _art_open(ln: str) -> re.Match | None:
     return None
 
 
+def _heading_only_line(ln: str) -> bool:
+    """줄 전체가 헤딩 매치 하나로 완전히 소진되는가(뒤에 남는 텍스트 없음).
+
+    "제297조(강간)" 처럼 한 줄에 인용 조문 하나씩 나열하는 목록(형법/특례법
+    조문 열거)의 각 항목이 이 형태다 — 진짜 조 헤딩은 거의 항상 같은 줄이나
+    다음 줄에 본문이 이어진다."""
+    m = ART.match(ln)
+    return bool(m and not ln[m.end():].strip())
+
+
+_MIN_CITATION_RUN = 3
+
+
+def _citation_run_indices(lines: list[str]) -> set[int]:
+    """헤딩 하나로 줄 전체가 끝나는(본문 없음) 줄이 연쇄로 이어지는 구간을
+    찾는다("형법 제32장…의 죄 중\n제297조(강간)\n제298조(강제추행)\n…").
+
+    연쇄 길이 임계를 두는 이유: "제3조(정의)\n제4조(청구서류)\n보험수익자는…"
+    처럼 정의 조항의 본문이 표로 밀려 실제로 비어 있는 정상 조문도 이
+    형태(헤딩만 있는 줄)를 딱 1~2개 만든다 — 진짜 타법령 나열은 보통
+    5개 이상 이어지지만, 안전하게 3개 이상 연쇄일 때만 인용으로 판정한다.
+    """
+    nonblank = [i for i, l in enumerate(lines) if l.strip()]
+    run: list[int] = []
+    result: set[int] = set()
+
+    def flush():
+        if len(run) >= _MIN_CITATION_RUN:
+            result.update(run)
+        run.clear()
+
+    for i in nonblank:
+        if _heading_only_line(lines[i]):
+            run.append(i)
+        else:
+            flush()
+    flush()
+    return result
+
+
 def _split_articles(body: str) -> list[str]:
     """조각 내부의 조 헤딩 줄에서 분할 — 첫 줄만 보는 ART 매치가 조각 중간에서
     시작하는 조(제5조 헤딩이 제4조 본문과 같은 조각에 붙는 밀집 조판)를 통째로
     앞 조에 흡수하는 문제를 막는다."""
     lines = body.split("\n")
+    citation_run = _citation_run_indices(lines)
     cuts = [0]
     for i in range(1, len(lines)):
         # 조 제목이 컬럼 폭에 잘려 닫는 괄호 없이 감기는 경우
@@ -190,6 +231,8 @@ def _split_articles(body: str) -> list[str]:
         probe = "\n".join(lines[i:i + 3])
         ok = ART.match(probe) and not CITE.match(probe)
         if not ok and not _art_open(lines[i]):
+            continue
+        if i in citation_run:
             continue
         prev = lines[i - 1].rstrip()
         # "제1관 일반사항 및 용어의 정의"처럼 '의'로 끝나는 관(款) 헤더는 완결된
