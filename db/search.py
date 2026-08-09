@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Optional
 
 import asyncpg
@@ -40,6 +41,9 @@ VECTOR_WEIGHT = 0.5
 
 _RERANK_TOP = 20
 _RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
+# rerank 미지정 호출의 기본값. v5(호 분할) 청크셋은 rerank 전제로 검증됐으므로
+# (embed 단독은 v3보다 낮음 — eval/GAP_ANALYSIS.md) 배포 환경에서 SEARCH_RERANK=1 권장.
+_RERANK_DEFAULT = os.environ.get("SEARCH_RERANK", "0") == "1"
 
 # 비신체보험(범위 밖) 힌트 — rag/router.py와 동일 목록
 NON_BODILY_HINTS: tuple[str, ...] = (
@@ -144,14 +148,16 @@ async def search(
     insurance_type: Optional[str] = None,
     namespaces: Optional[list[str]] = None,
     top_k: int = DEFAULT_TOP_K,
-    rerank: bool = False,
+    rerank: Optional[bool] = None,
 ) -> RagResult:
     """Hybrid RAG 검색. contracts.md §5 시그니처와 호환 (namespaces는 무시 — terms 고정).
 
     Args:
-        rerank: True면 RRF 상위 후보를 bge-reranker-v2-m3로 재정렬(원본 계약 밖 확장,
-            기본 False — 계약과 100% 동일 동작).
+        rerank: True면 RRF 상위 후보를 bge-reranker-v2-m3로 재정렬(원본 계약 밖 확장).
+            미지정(None) 시 SEARCH_RERANK 환경변수를 따름(기본 off — 계약과 동일 동작).
     """
+    if rerank is None:
+        rerank = _RERANK_DEFAULT
     if _is_out_of_scope(query, insurance_type):
         logger.info("rag.search.out_of_scope query=%r", query[:50])
         return RagResult(ranked_chunks=[], citations=[])
