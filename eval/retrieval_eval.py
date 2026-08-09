@@ -27,6 +27,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from insurance_chunker.tokenizer import tokenize_korean  # noqa: E402
+from insurance_chunker.embedder import QUERY_INSTRUCT  # noqa: E402
 
 EVAL_DIR = Path(__file__).resolve().parent
 VERSIONS = {
@@ -40,8 +41,6 @@ VERSIONS = {
 QUESTIONS = EVAL_DIR / "questions_30327.jsonl"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "qwen3-embedding:0.6b")
-QUERY_INSTRUCT = ("Instruct: Given a Korean insurance policy question, "
-                  "retrieve relevant policy clauses that answer the question.\nQuery: ")
 TOP_K = 10
 BATCH = 32
 
