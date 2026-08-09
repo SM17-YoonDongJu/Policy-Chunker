@@ -1,7 +1,7 @@
 """임베딩 생성.
 
 EMBED_BACKEND 환경변수:
-  ollama              → qwen3:embedding 1024d
+  ollama              → qwen3-embedding:0.6b 1024d
   sentence_transformers → BGE-M3 1024d
 출처: rag/pipeline/embedder.py
 """
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 EMBED_BACKEND = os.environ.get("EMBED_BACKEND", "ollama")
 OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("EMBED_MODEL",  "qwen3:embedding")
+OLLAMA_MODEL = os.environ.get("EMBED_MODEL",  "qwen3-embedding:0.6b")
 OLLAMA_DIM   = int(os.environ.get("EMBED_DIM", "1024"))
 ST_MODEL     = os.environ.get("ST_MODEL", "BAAI/bge-m3")
 ST_DIM       = int(os.environ.get("ST_DIM",   "1024"))
