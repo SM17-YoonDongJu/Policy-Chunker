@@ -37,6 +37,7 @@ VERSIONS = {
     "claude": EVAL_DIR / "chunks_30327_claude.jsonl",  # 노션 클로드 청킹(VLM 병합) 3221청크
     "v4": EVAL_DIR / "chunks_30327_v4.jsonl",  # 경계 재설계+조각 분할 반영 재청킹 678청크
     "v4b": EVAL_DIR / "chunks_30327_v4b.jsonl",  # v4 + boilerplate 검색 제외 (v3 방식)
+    "v5": EVAL_DIR / "chunks_30327_v5.jsonl",  # v3 + 다항목 나열조 호 단위 분할 (boilerplate 제외)
 }
 QUESTIONS = EVAL_DIR / "questions_30327.jsonl"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
