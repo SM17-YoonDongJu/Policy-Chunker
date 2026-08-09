@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import uuid as _uuid
 from typing import Optional
@@ -19,6 +20,19 @@ from .models import DocMeta, InsuranceChunk, TableMeta
 logger = logging.getLogger(__name__)
 
 ROWS_PER_TABLE_CHUNK = 20  # 이 행 수를 초과하면 표를 child 청크로 분할
+
+# 다항목 나열형 조(면책 총칙 제5조 등)를 호/목 단위로 쪼개는 기능. 긴 면책조를
+# 통짜로 두면 희소어(스카이다이빙·오토바이 등) 신호가 희석돼 검색에서 밀린다.
+# 환경변수로 끄면(=0) 이전(v3/v4) 동작을 재현한다.
+ENUM_SPLIT       = os.environ.get("RECHUNK_ENUM_SPLIT", "1") != "0"
+ENUM_MIN_TOKENS  = int(os.environ.get("RECHUNK_ENUM_MIN_TOKENS", "400"))
+ENUM_MIN_ITEMS   = int(os.environ.get("RECHUNK_ENUM_MIN_ITEMS", "4"))
+# 호/목 열거 항목의 시작 줄: "1." "2)" "①" "가." "나)" 등
+_ENUM_HEAD = re.compile(
+    r"^\s*(?:\d{1,2}\s*[.)]"                         # 1.  2)
+    r"|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]"                     # 원문자 호
+    r"|[가나다라마바사아자차카타파하]\s*[.)]"          # 가.  나)  목
+    r")\s+\S")
 
 def _tok(text: str) -> int:
     return int(len(text) * 0.6)  # 글자 수 × 0.6 ≈ Kiwi 형태소 토큰 수 근사
@@ -396,6 +410,36 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
 
 # ── merge ─────────────────────────────────────────────────────────────────────
 
+def _split_enumerated(m: dict) -> list[dict]:
+    """다항목 나열형 조를 호/목 단위 청크로 쪼갠다. 조건 미충족 시 [m] 그대로.
+
+    첫 호 앞의 도입부("회사는 다음의 사유로 …지급하지 않습니다")는 각 조각에
+    붙여 문맥을 유지한다 — 조각이 작아도 도입부+호 항목만으로 자기완결적이 된다.
+    조 메타(article_no/title)·chunk_type은 부모에서 그대로 승계한다.
+    """
+    if not ENUM_SPLIT or m["is_table"]:
+        return [m]
+    body = m["body"]
+    lines = body.split("\n")
+    heads = [i for i, ln in enumerate(lines) if _ENUM_HEAD.match(ln)]
+    if _tok(body) < ENUM_MIN_TOKENS or len(heads) < ENUM_MIN_ITEMS:
+        return [m]
+    intro = "\n".join(lines[:heads[0]]).strip()
+    parts: list[dict] = []
+    bounds = heads + [len(lines)]
+    for a, b in zip(bounds, bounds[1:]):
+        seg = "\n".join(lines[a:b]).strip()
+        if not seg:
+            continue
+        seg_body = (intro + "\n" + seg).strip() if intro else seg
+        mm = dict(m)
+        mm["body"] = seg_body
+        mm["text"] = m["prefix"] + "\n" + m["header"] + "\n" + seg_body
+        mm["member_ids"] = list(m["member_ids"])
+        parts.append(mm)
+    return parts or [m]
+
+
 def merge(
     cleaned: list[dict],
     meta: DocMeta,
@@ -446,9 +490,13 @@ def merge(
             flush()
     flush()
 
-    # hard_max 분할
+    # 다항목 나열조 호 단위 분할 → hard_max 분할
     final = []
     for m in merged:
+        enum_parts = _split_enumerated(m)
+        if len(enum_parts) > 1:
+            final.extend(enum_parts)
+            continue
         if _tok(m["body"]) <= hard_max:
             final.append(m)
             continue
