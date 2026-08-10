@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#80868B"/>
+    </marker>
+    <style>
+      .t  { font-family: "Apple SD Gothic Neo","AppleSDGothicNeo",sans-serif; }
+      .h1 { font-size: 34px; font-weight: 700; fill: #202124; }
+      .h2 { font-size: 18px; fill: #5F6368; }
+      .bt { font-size: 23px; font-weight: 700; fill: #202124; }
+      .bd { font-size: 15.5px; fill: #5F6368; }
+      .fn { font-size: 16px; fill: #80868B; }
+      .num{ font-size: 15px; font-weight: 700; fill: #FFFFFF; }
+      .ln { stroke: #9AA0A6; stroke-width: 2.2; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="1200" fill="#FFFFFF"/>
+
+  <text class="t h1" x="60" y="74">Policy-Chunker 파이프라인</text>
+  <text class="t h2" x="60" y="108">약관 PDF → 조항 단위 청크 → pgvector → 하이브리드 검색</text>
+  <line x1="60" y1="134" x2="1140" y2="134" stroke="#E8EAED" stroke-width="2"/>
+
+  <!-- 입력 -->
+  <rect x="470" y="180" width="260" height="70" rx="14" fill="#F1F3F4" stroke="#9AA0A6" stroke-width="2"/>
+  <text class="t bt" x="600" y="223" text-anchor="middle">약관 PDF</text>
+
+  <!-- 분기 버스 -->
+  <path class="ln" d="M 600 250 L 600 282 M 345 282 L 855 282 M 345 282 L 345 310"/>
+  <path class="ln" d="M 855 282 L 855 302" marker-end="url(#ah)"/>
+  <path class="ln" d="M 345 282 L 345 302" marker-end="url(#ah)"/>
+
+  <!-- 1 파싱 -->
+  <rect x="130" y="310" width="430" height="130" rx="16" fill="#E8F0FE" stroke="#1A73E8" stroke-width="2"/>
+  <circle cx="164" cy="344" r="15" fill="#1A73E8"/>
+  <text class="t num" x="164" y="349" text-anchor="middle">1</text>
+  <text class="t bt" x="190" y="351">파싱</text>
+  <text class="t bd" x="164" y="391">본문 텍스트 — 표 영역은 줄 중심점 기준 제외</text>
+  <text class="t bd" x="164" y="416">표 — 4개 소스 추출 후 페이지별 best-of 선택</text>
+
+  <!-- 2 구조 검출 -->
+  <rect x="640" y="310" width="430" height="130" rx="16" fill="#E8F0FE" stroke="#1A73E8" stroke-width="2"/>
+  <circle cx="674" cy="344" r="15" fill="#1A73E8"/>
+  <text class="t num" x="674" y="349" text-anchor="middle">2</text>
+  <text class="t bt" x="700" y="351">구조 검출</text>
+  <text class="t bd" x="674" y="391">특약 경계 — 다중 신호 점수제 (임계 2.4)</text>
+  <text class="t bd" x="674" y="416">목차 제목 — 자가검증 점수 · 경계 이름 공급</text>
+
+  <!-- 합류 버스 -->
+  <path class="ln" d="M 345 440 L 345 482 M 855 440 L 855 482 M 345 482 L 855 482 M 600 482 L 600 502" marker-end="url(#ah)"/>
+
+  <!-- 3 청킹 -->
+  <rect x="290" y="510" width="620" height="150" rx="16" fill="#F3E8FD" stroke="#8430CE" stroke-width="2.4"/>
+  <circle cx="324" cy="546" r="15" fill="#8430CE"/>
+  <text class="t num" x="324" y="551" text-anchor="middle">3</text>
+  <text class="t bt" x="350" y="553">청킹</text>
+  <text class="t bd" x="324" y="594">조번호 복원 (타 법령 인용 방어) · 리셋 기반 특약 분할</text>
+  <text class="t bd" x="324" y="619">조 단위 병합 → 호 · 표 단위 선택 분할 → 중복 정형문구 제외</text>
+
+  <!-- 분기 버스 -->
+  <path class="ln" d="M 600 660 L 600 700 M 385 700 L 885 700 M 385 700 L 385 722"/>
+  <path class="ln" d="M 385 700 L 385 722" marker-end="url(#ah)"/>
+  <path class="ln" d="M 885 700 L 885 722" marker-end="url(#ah)"/>
+
+  <!-- 4 임베딩 -->
+  <rect x="170" y="730" width="430" height="115" rx="16" fill="#E6F4EA" stroke="#1E8E3E" stroke-width="2"/>
+  <circle cx="204" cy="764" r="15" fill="#1E8E3E"/>
+  <text class="t num" x="204" y="769" text-anchor="middle">4</text>
+  <text class="t bt" x="230" y="771">임베딩</text>
+  <text class="t bd" x="204" y="812">qwen3-embedding:0.6b · 1024d · 질의만 프리픽스</text>
+
+  <!-- S3 -->
+  <rect x="700" y="730" width="370" height="115" rx="16" fill="#FEF7E0" stroke="#E8A400" stroke-width="2"/>
+  <text class="t bt" x="734" y="771">S3</text>
+  <text class="t bd" x="734" y="812">대형 표 원본 markdown 보관</text>
+
+  <path class="ln" d="M 385 845 L 385 892" marker-end="url(#ah)"/>
+
+  <!-- 5 pgvector -->
+  <rect x="170" y="900" width="430" height="115" rx="16" fill="#E6F4EA" stroke="#1E8E3E" stroke-width="2"/>
+  <circle cx="204" cy="934" r="15" fill="#1E8E3E"/>
+  <text class="t num" x="204" y="939" text-anchor="middle">5</text>
+  <text class="t bt" x="230" y="941">pgvector 적재</text>
+  <text class="t bd" x="204" y="982">policy_chunks · halfvec(1024) + tsvector 생성 컬럼</text>
+
+  <path class="ln" d="M 600 957 L 692 957" marker-end="url(#ah)"/>
+
+  <!-- 6 검색 -->
+  <rect x="700" y="900" width="370" height="115" rx="16" fill="#E6F4EA" stroke="#1E8E3E" stroke-width="2"/>
+  <circle cx="734" cy="934" r="15" fill="#1E8E3E"/>
+  <text class="t num" x="734" y="939" text-anchor="middle">6</text>
+  <text class="t bt" x="760" y="941">하이브리드 검색</text>
+  <text class="t bd" x="734" y="982">BM25 + 벡터 → RRF → bge-reranker</text>
+
+  <line x1="60" y1="1075" x2="1140" y2="1075" stroke="#E8EAED" stroke-width="2"/>
+  <text class="t fn" x="60" y="1113">내용(①)과 구조(②)를 따로 뽑아 ③에서 합친다 — 구조는 본문 텍스트가 아니라 PDF 조판 신호에서 가져온다.</text>
+  <text class="t fn" x="60" y="1143">출력은 둘로 갈린다: 검색 대상 청크는 pgvector로, 대형 표 원본은 S3로.</text>
+</svg>
