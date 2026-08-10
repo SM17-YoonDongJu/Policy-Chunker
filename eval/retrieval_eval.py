@@ -38,6 +38,7 @@ VERSIONS = {
     "v4": EVAL_DIR / "chunks_30327_v4.jsonl",  # 경계 재설계+조각 분할 반영 재청킹 678청크
     "v4b": EVAL_DIR / "chunks_30327_v4b.jsonl",  # v4 + boilerplate 검색 제외 (v3 방식)
     "v5": EVAL_DIR / "chunks_30327_v5.jsonl",  # v3 + 다항목 나열조 호 단위 분할 (boilerplate 제외)
+    "v6": EVAL_DIR / "chunks_30327_v6.jsonl",  # v5 + 특약 경계 누락 복구 (제1조 리셋 → 제목 승격)
 }
 QUESTIONS = EVAL_DIR / "questions_30327.jsonl"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
