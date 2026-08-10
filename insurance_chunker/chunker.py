@@ -134,13 +134,22 @@ def _chunk_policy_terms(
     # 폰트 기반 경계 감지
     bounds = None
     det = None
+    toc_titles: list[str] = []
     if pdf_path:
         try:
             import fitz
             from .boundaries import assess
+            from .toc import extract_toc_titles_ordered
             with fitz.open(pdf_path) as doc:
                 bounds, det = find_bounds(doc)
                 level, reasons = assess(doc, det, bounds)
+                # 목차는 문서가 스스로 선언한 특약 목록 — 조판 관습과 무관하다.
+                # 경계 검출이 놓친 특약의 이름을 여기서 찾는다(rechunk.clean).
+                try:
+                    toc_titles = extract_toc_titles_ordered(doc, det.front_end_page)
+                    logger.info(f"목차 제목 수확: {len(toc_titles)}개")
+                except Exception as e:
+                    logger.warning(f"목차 추출 실패(경계 검출만으로 진행): {e}")
             logger.info(f"폰트 경계 감지: {len(bounds)}개 (본문폰트={det.body_size}, 제목폰트={det.title_size})")
             if level == "weak":
                 for r in reasons:
@@ -166,7 +175,7 @@ def _chunk_policy_terms(
         logger.warning("경계 없음 → 단순 페이지 청킹으로 폴백")
         return _chunk_plain_text(pages, meta), []
 
-    cleaned = clean(base_chunks, bounds)
+    cleaned = clean(base_chunks, bounds, toc_titles=toc_titles)
     merged = merge(cleaned, meta, target=target, hard_max=hard_max)
     chunks, table_metas = finalize(merged, meta)
     chunks = mark_boilerplate(chunks)

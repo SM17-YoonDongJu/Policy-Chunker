@@ -25,6 +25,10 @@ ROWS_PER_TABLE_CHUNK = 20  # 이 행 수를 초과하면 표를 child 청크로 
 # 통짜로 두면 희소어(스카이다이빙·오토바이 등) 신호가 희석돼 검색에서 밀린다.
 # 환경변수로 끄면(=0) 이전(v3/v4) 동작을 재현한다.
 ENUM_SPLIT       = os.environ.get("RECHUNK_ENUM_SPLIT", "1") != "0"
+# 조번호 리셋(N→1)을 특약 경계로 인정할지. 리셋은 폰트·접미사와 무관한 구조 신호라
+# 보험사 조판이 달라도 통한다(KB처럼 제목 인식이 무너진 문서의 최후 방어선).
+# RECHUNK_RESET_SPLIT=0으로 끄면 이전(v6) 동작.
+RESET_SPLIT      = os.environ.get("RECHUNK_RESET_SPLIT", "1") != "0"
 ENUM_MIN_TOKENS  = int(os.environ.get("RECHUNK_ENUM_MIN_TOKENS", "400"))
 ENUM_MIN_ITEMS   = int(os.environ.get("RECHUNK_ENUM_MIN_ITEMS", "4"))
 # 호/목 열거 항목의 시작 줄: "1." "2)" "①" "가." "나)" 등
@@ -307,7 +311,24 @@ def _rescue_title(prev: dict) -> Optional[str]:
     return None
 
 
-def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
+def _toc_name(pool: list[str], used: set[int], context: str) -> Optional[str]:
+    """리셋 지점 주변 텍스트에서 아직 안 쓴 목차 제목을 찾는다.
+
+    목차는 특약을 문서 순서대로 나열하므로, 앞에서부터 훑되 이미 쓴 것은 건너뛴다.
+    조판 줄바꿈이 단어 중간에 공백을 넣으므로 공백을 지운 문자열로 비교한다.
+    """
+    ctx = re.sub(r"\s+", "", context)
+    for i, t in enumerate(pool):
+        if i in used or len(t) < 6:
+            continue
+        if t in ctx:
+            used.add(i)
+            return t
+    return None
+
+
+def clean(data: list[dict], bounds: list[Boundary],
+          toc_titles: Optional[list[str]] = None) -> list[dict]:
     """약관 라벨 부여 + 조 재추출(인용 가드) + 푸터/목차/제목누수 제거."""
     for c in data:
         c["_key"] = _pageseq(c["chunk_id"])
@@ -330,6 +351,9 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
     # bounds 기준 라벨이 바뀌면(진짜 경계 도달) 복구를 해제한다.
     rescue: Optional[tuple[str, str]] = None
     bounds_lab: Optional[str] = None    # rescue 무시하고 bounds가 주는 라벨
+    toc_pool: list[str] = list(toc_titles or [])
+    toc_used: set[int] = set()
+    seg_no = 0                          # 목차에서도 못 찾았을 때 붙일 합성 번호
 
     for c in data:
         pg = c["_key"][0]
@@ -439,6 +463,17 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
                                 if cut >= 0:
                                     prev["text"] = (prev["text"][:cut]
                                                     + prev["text"][cut + len(t):]).rstrip()
+                            elif RESET_SPLIT:
+                                # 인라인 제목을 못 찾아도 리셋 자체가 "새 특약 시작"이라는
+                                # 구조 신호다(조판·접미사와 무관). 이름은 목차에서 찾고,
+                                # 그것도 없으면 합성 라벨로라도 **분할은 한다** —
+                                # 이름이 틀린 것보다 내용이 섞이는 게 검색에 더 해롭다.
+                                ctx = (cleaned[-1]["text"][-400:] + "\n" + seg[:400])
+                                t = _toc_name(toc_pool, toc_used, ctx)
+                                if not t:
+                                    seg_no += 1
+                                    t = f"{bounds_lab} · 구분{seg_no}"
+                            if t:
                                 rescue = (t, bounds_lab)
                                 lab = t
                                 cur_label = lab
