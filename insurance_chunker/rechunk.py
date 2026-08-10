@@ -14,7 +14,7 @@ import re
 import uuid as _uuid
 from typing import Optional
 
-from .boundaries import Boundary, TITLE_SUFFIX, label_for
+from .boundaries import Boundary, TITLE_SUFFIX, is_title_like, label_for
 from .models import DocMeta, InsuranceChunk, TableMeta
 
 logger = logging.getLogger(__name__)
@@ -299,7 +299,9 @@ def _rescue_title(prev: dict) -> Optional[str]:
         return None
     lines = [l.strip() for l in prev["text"].rstrip().split("\n") if l.strip()]
     for ln in reversed(lines[-3:]):
-        if (TITLE_SUFFIX.search(ln) and len(ln) <= 50
+        # is_title_like: 본문 문장이 "…특별약관"으로 끝나 보이는 조각을 라벨로
+        # 승격시키던 문제를 차단(KB 1250p에서 한 조각이 청크 25%를 흡수했다).
+        if (TITLE_SUFFIX.search(ln) and len(ln) <= 50 and is_title_like(ln)
                 and not ART.match(ln) and not CITE.match(ln)):
             return ln
     return None

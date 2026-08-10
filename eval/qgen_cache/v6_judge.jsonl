@@ -1,0 +1,203 @@
+{"key": "1539::치아 7개 정도 빠졌는데 이거 장해지급률 얼마나 되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 262, "section": "익사사고 사망 특별약관", "article": "제2조", "article_title": "준용규정"}}
+{"key": "1539::음식물 씹는 게 좀 불편해졌어요. 이거 장해 인정되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 705, "section": "식중독치료비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "494::배가 사라지거나 유기되는 사고가 났을 때 보험수익자에게 약정한 금액이 지", "pos": true, "neg": true, "hardneg": {"chunk_index": 859, "section": "개 물림⋅부딪힘 사고 진단비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1283::고객님이 미용 목적으로 성형수술을 받으셨는데, 사고 전 상태로 되돌리려는", "pos": true, "neg": true, "hardneg": {"chunk_index": 949, "section": "상해응급실내원비(비응급) 특별약관", "article": "제4조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1283::다리 정맥류 때문에 수술을 하신다고 하는데, 외모 개선이 목적이라면 보상", "pos": true, "neg": false, "hardneg": {"chunk_index": 1793, "section": "별표9-1 수술분류표Ⅱ", "article": null, "article_title": null}}
+{"key": "951::라식이나 라섹 같은 시력교정술을 받은 경우에도 응급실 내원비 청구가 가능", "pos": true, "neg": false, "hardneg": {"chunk_index": 1309, "section": "유상운송 중 교통상해수술비 특별약관", "article": "제3조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "951::보험 적용 안 되는 시력교정술 목적으로 응급실에 가면 보상 제외되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1309, "section": "유상운송 중 교통상해수술비 특별약관", "article": "제3조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1068::아이가 버스 타려고 정류장에서 기다리다 다쳤는데 이것도 보상되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1185, "section": "어린이 통학버스사고부상치료비보장 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1068::아버지가 택시 타려고 길가에서 기다리다 사고 나셨는데 받을 수 있을까요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1069, "section": "대중교통상해 부상진단비(택시포함) 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "84::고객님이 고지의무 위반으로 계약 해지된 상태에서 사고가 나면, 보험금 청", "pos": true, "neg": false, "hardneg": {"chunk_index": 58, "section": "단체안심생활보험 보통약관", "article": "제13조", "article_title": "계약 전 알릴 의무"}}
+{"key": "1228::아 사고 나서 보험금 타야 되는데 내가 따로 더 내야 하는 서류 같은 거", "pos": true, "neg": true, "hardneg": {"chunk_index": 1152, "section": "기상특보 교통비 특별약관", "article": "제3조", "article_title": "보험금의 청구 및 구비서류"}}
+{"key": "24::아니 사고 나서 보험금 받는 거 문제 생겨서 회사랑 싸우면 어떻게 해야 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 284, "section": "농기계사고 상해 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "24::보험금 얼마 줄지 가지고 회사랑 계속 다투게 되면 이거 어떻게 결판을 내", "pos": true, "neg": false, "hardneg": {"chunk_index": 29, "section": "단체안심생활보험 보통약관", "article": "제5조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "146::보험료 밀렸다고 연락 올 때 카톡이나 문자로도 받을 수 있나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 173, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "146::아버지가 보험료를 못 내셔서 연락 왔는데, 문자가 안 읽히면 어떻게 알려", "pos": true, "neg": false, "hardneg": {"chunk_index": 1429, "section": "보험료 자동납입 특별약관", "article": "제3조", "article_title": "계약 후 알릴 의무"}}
+{"key": "118::전자서명 위조한 거 걸리면 계약 취소되나요? 그리고 냈던 돈은 돌려받을 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 131, "section": "단체안심생활보험 보통약관", "article": "제21조", "article_title": "계약내용의 변경 등"}}
+{"key": "118::서류나 전자문서 위조된 거 확인되면 계약이 아예 없던 게 되나요? 돈은요", "pos": true, "neg": false, "hardneg": {"chunk_index": 146, "section": "단체안심생활보험 보통약관", "article": "제26조", "article_title": "보험료의 납입이 연체되는 경우 납입최고(독촉)와 계약의 해지"}}
+{"key": "1463::병원 치료받는 동안 잠깐 불편한 것도 장해로 인정돼서 보험금 나와요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1150, "section": "기상특보 교통비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1463::다치거나 아픈 거 다 낫고 나서 몸에 계속 남아있는 기능 상실도 장해인가", "pos": true, "neg": false, "hardneg": null}
+{"key": "142::고객님이 우체국 통해서 보험료를 냈을 때는 영수증 따로 안 끊어줘도 되나", "pos": true, "neg": false, "hardneg": {"chunk_index": 1397, "section": "환율 특별약관", "article": "제1조", "article_title": "보험료 적용기준"}}
+{"key": "142::2회차 보험료 납입기일이 지났는데, 회사에서 영수증 발행해주는 건가요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 153, "section": "단체안심생활보험 보통약관", "article": "제26조", "article_title": "보험료의 납입이 연체되는 경우 납입최고(독촉)와 계약의 해지"}}
+{"key": "1407::단체보험에서 인원이 새로 늘어났는데, 보험료 정산하기 전이라도 사고 나면", "pos": true, "neg": false, "hardneg": {"chunk_index": 1410, "section": "단체계약 보험료정산 추가특별약관", "article": "제4조", "article_title": "보험료의 정산방법"}}
+{"key": "1407::특별약관에 따라 보험료 정산을 진행할 때, 상해보험 알릴 의무 규정보다 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 71, "section": "단체안심생활보험 보통약관", "article": "제14조", "article_title": "상해보험계약 후 알릴 의무"}}
+{"key": "13::토요일이나 공휴일도 영업일에 포함되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 41, "section": "단체안심생활보험 보통약관", "article": "제8조", "article_title": "보험금의 지급절차"}}
+{"key": "13::이자 계산할 때 1년마다 이자가 원금에 붙는 방식인가요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 16, "section": "단체안심생활보험 보통약관", "article": "제4조", "article_title": "보험금 지급에 관한 세부규정"}}
+{"key": "28::저번에 아버지가 다치셔서 장해 보험금 받았는데, 같은 부위 또 다치시면 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 1472, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "28::애가 사고로 크게 다쳤는데, 한 번의 사고로 여러 군데 다치면 보험금은 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 638, "section": "자전거사고 벌금 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "177::약관 내용이 좀 애매하고 이해 안 가는 거 있으면 나한테 유리하게 봐주는", "pos": true, "neg": true, "hardneg": {"chunk_index": 178, "section": "단체안심생활보험 보통약관", "article": "제37조", "article_title": "설명서 교부 및 보험안내자료 등의 효력"}}
+{"key": "177::나한테 안 좋은 내용인데 회사 마음대로 대충 확대해서 적용하면 어떡해?", "pos": true, "neg": false, "hardneg": {"chunk_index": 352, "section": "사회재난(감염병 제외)상해 ( )일이상 진단 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1683::우리 애가 손가락 관절이 잘 안 움직여서 고생 중인데, 운동 범위가 절반", "pos": true, "neg": false, "hardneg": null}
+{"key": "1683::아버지가 손가락 네 개가 다 불편하신데, 각 마디 관절 움직임이 원래보다", "pos": true, "neg": false, "hardneg": {"chunk_index": 1777, "section": "별표6 자동차사고 부상등급표", "article": null, "article_title": null}}
+{"key": "1459::애가 장애 기간이 다 끝나서 자격이 안 되면, 나중에 다시 전환 신청하는", "pos": true, "neg": false, "hardneg": {"chunk_index": 1455, "section": "장애인전용보험전환 특별약관", "article": "제1조", "article_title": "특별약관의 적용범위"}}
+{"key": "591::우리 애가 다쳐서 집에서 간호하면 안 되나요? 꼭 병원에 있어야만 돈이 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 1474, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "594::아버지가 동네 의원 말고 다른 병원에서 또 검사받으셨는데, 그것도 다 포", "pos": true, "neg": true, "hardneg": {"chunk_index": 1150, "section": "기상특보 교통비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "366::열사병이나 일사병으로 진단받으면 이 특약에서 보험금 받을 수 있나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 266, "section": "자연재해사망 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "366::질병 분류번호가 T67.0 말고 다른 걸로 나와도 열사병 보장되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1763, "section": "별표2 식중독 분류표", "article": null, "article_title": null}}
+{"key": "102::가입할 때 내가 꼭 알아야 하는 내용들 다 설명해 주는 거 맞지?", "pos": true, "neg": false, "hardneg": {"chunk_index": 132, "section": "단체안심생활보험 보통약관", "article": "제21조", "article_title": "계약내용의 변경 등"}}
+{"key": "658::나 전동킥보드 타다 사고 났는데 이것도 보험 적용 되는 거야?", "pos": false, "neg": false, "hardneg": {"chunk_index": 66, "section": "단체안심생활보험 보통약관", "article": "제14조", "article_title": "상해보험계약 후 알릴 의무"}}
+{"key": "658::이거 전동휠이나 킥보드 같은 거 다 포함되는 건가요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1177, "section": "전동보조기기(전동휠체어, 의료용스쿠터) 사고 부상진단비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "27::상해 사고가 여러 번 있어서 후유장해가 각각 다르게 남으면, 보험금도 매", "pos": true, "neg": false, "hardneg": {"chunk_index": 478, "section": "지반침하‧산사태 및 붕괴사고 상해 사망‧후유장해 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "27::이미 장해 보험금을 받은 부위에 다른 사고로 장해가 더 심해지면, 기존 ", "pos": false, "neg": true, "hardneg": {"chunk_index": 1472, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "145::보험료 계속 안 내면 계약 언제 없어지나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1409, "section": "단체계약 보험료정산 추가특별약관", "article": "제3조", "article_title": "예치보험료"}}
+{"key": "145::미납 상태일 때 언제 계약 효력이 사라져요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1467, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "116::나랑 계약한 사람 확인 안 하고 그냥 전자서명만 해도 나중에 계약 취소되", "pos": true, "neg": false, "hardneg": {"chunk_index": 146, "section": "단체안심생활보험 보통약관", "article": "제26조", "article_title": "보험료의 납입이 연체되는 경우 납입최고(독촉)와 계약의 해지"}}
+{"key": "116::계약 무효 되면 내가 낸 보험료는 그냥 다 돌려받는 거야? 아니면 이자 ", "pos": false, "neg": false, "hardneg": {"chunk_index": 172, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "87::아버지가 사실 예전에 암 진단받은 적이 있는데, 그걸 말 안 하고 가입했", "pos": true, "neg": false, "hardneg": {"chunk_index": 1460, "section": "장애인전용보험전환 특별약관", "article": "제4조", "article_title": "전환 취소"}}
+{"key": "87::애가 검사받을 때 약을 좀 먹어서 결과가 잘 나온 거예요.. 혹시 나중에", "pos": true, "neg": false, "hardneg": {"chunk_index": 1460, "section": "장애인전용보험전환 특별약관", "article": "제4조", "article_title": "전환 취소"}}
+{"key": "571::유괴 사고 나서 보험금 받으려면 경찰서에서 떼와야 하는 서류가 있나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 717, "section": "강력범죄 특별약관Ⅰ", "article": "제3조", "article_title": "보험금의 청구"}}
+{"key": "571::사고 났을 때 보험사에 바로 말해야 하나요? 아니면 나중에 해도 돼요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 173, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "1596::CT 찍었을 때 두개대후두공 기저점이랑 축추 치돌기 사이 거리에 이상 있", "pos": true, "neg": false, "hardneg": {"chunk_index": 950, "section": "상해응급실내원비(비응급) 특별약관", "article": "제4조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1596::머리뼈랑 위쪽 목뼈 사이에 BDI 수치상으로 이상 소견이 나타나는 상태면", "pos": true, "neg": false, "hardneg": {"chunk_index": 2, "section": "단체안심생활보험 보통약관", "article": "제1조", "article_title": "목적"}}
+{"key": "276::뉴스에서 재난이라고 하는 거, 보험에서는 정확히 뭐라고 불러?", "pos": false, "neg": false, "hardneg": {"chunk_index": 1677, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "521::성형수술 했는데도 흉터가 계속 남아있으면 장해로 인정되나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 1556, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "521::흉터가 좀 심해서 재건수술로 없앨 수 있는 정도면 보상 안 되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1209, "section": "상해흉터복원 수술비보장 특별약관", "article": "제3조", "article_title": "수술의 정의"}}
+{"key": "264::물놀이하다 사고가 났는데, 혹시 낚시하러 배를 타고 있다가 사고가 나도 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 263, "section": "물놀이사고 사망 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "264::고객님이 아파트 단지 내에서 놀다가 사고가 난 경우에도 보험금 지급 대상", "pos": true, "neg": false, "hardneg": {"chunk_index": 1398, "section": "환율 특별약관", "article": "제2조", "article_title": "보험금 지급기준"}}
+{"key": "1117::나 이번에 검사받았는데 특정감염병이라고 딱 나왔거든? 그럼 보험금 바로 ", "pos": false, "neg": false, "hardneg": {"chunk_index": 1118, "section": "특정감염병진단비 특별약관Ⅲ", "article": "제2조", "article_title": "특정감염병의 정의 및 진단확정"}}
+{"key": "1117::병원에서 병명 확인하고 나서 나중에 사망하게 되면, 죽은 날을 진단받은 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 485, "section": "온열질환 사망후유장해 특별약관", "article": "제2조", "article_title": "온열질환의 정의 및 진단확정"}}
+{"key": "162::설계사가 법을 어겨서 계약했는데, 이거 위법사항 안 날로부터 언제까지 해", "pos": true, "neg": false, "hardneg": {"chunk_index": 81, "section": "단체안심생활보험 보통약관", "article": "제15조", "article_title": "알릴 의무 위반의 효과"}}
+{"key": "162::금융소비자보호법 위반 사례가 발견되면 계약 체결 후 최대 몇 년까지 해지", "pos": true, "neg": false, "hardneg": {"chunk_index": 95, "section": "단체안심생활보험 보통약관", "article": "제18조", "article_title": "청약의 철회"}}
+{"key": "750::아이가 길 가다가 갑자기 괴한한테 맞아서 다쳤는데, 병원 가서 치료받으면", "pos": true, "neg": false, "hardneg": {"chunk_index": 1150, "section": "기상특보 교통비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "750::애가 밖에서 폭력 사건 때문에 크게 다쳤는데, 병원만 가면 무조건 나오는", "pos": false, "neg": false, "hardneg": {"chunk_index": 770, "section": "폭력위로금 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "26::다치고 나서 몸에 두 군데 이상 장해가 남으면 각각 따로 주나요 아니면 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 612, "section": "자전거사고 변호사선임비용 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "26::사고 하나로 여러 부위가 장해 판정을 받았을 때 보험금 계산 방식이 어떻", "pos": true, "neg": true, "hardneg": {"chunk_index": 1472, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "36::고객님이 스카이다이빙 하다가 사고 나면 보험금 지급 안 되는 거 맞죠?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1398, "section": "환율 특별약관", "article": "제2조", "article_title": "보험금 지급기준"}}
+{"key": "36::전문적인 등반 활동 중에 다치면 보상 범위에서 제외되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1109, "section": "어린이 도로보행중 교통사고 부상진단비 특별약관", "article": "제2조", "article_title": "피보험자의 범위"}}
+{"key": "114::친구 사망 보험 가입했는데 그 친구 사인 없으면 계약 무효되나요? 돈은 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 266, "section": "자연재해사망 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "114::남의 목숨 걸고 보험 드는 건데 본인이 직접 서명 안 하면 나중에 문제 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 1140, "section": "기후재해 정신피해 상담비 특별약관", "article": "제5조", "article_title": "보험금의 청구"}}
+{"key": "1653::다리 절단 범위가 어디까지여야 장해로 인정되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 304, "section": "스쿨존 교통사고 후유장해 특별약관", "article": "제2조", "article_title": "피보험자의 범위"}}
+{"key": "1653::발목보다 위쪽인 무릎 부위가 잘린 것도 해당되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1773, "section": "별표6 자동차사고 부상등급표", "article": null, "article_title": null}}
+{"key": "175::나중에 법적 문제 생겨서 소송하게 되면 어디서 재판받아야 하나요? 저희 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 1475, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "175::애가 사고 나서 문제 생겨서 소송할 때, 꼭 저희 집 근처 법원에서만 해", "pos": true, "neg": false, "hardneg": {"chunk_index": 1475, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "1180::나 전동휠체어 타고 있다가 사고 났는데 이거 보상 대상에 들어가나요?", "pos": false, "neg": true, "hardneg": {"chunk_index": 1177, "section": "전동보조기기(전동휠체어, 의료용스쿠터) 사고 부상진단비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1180::내가 쓰는 의료용 스쿠터도 이거 보험 적용되는 기기 맞음?", "pos": true, "neg": true, "hardneg": {"chunk_index": 1177, "section": "전동보조기기(전동휠체어, 의료용스쿠터) 사고 부상진단비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1600::아버지가 사고로 허리가 옆으로 심하게 휘었는데, 몇 도 이상이어야 장해 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 283, "section": "농기계사고 상해 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1600::애가 사고 나서 등뼈가 앞으로 휘었다고 하는데, 각도가 얼마나 나와야 보", "pos": true, "neg": false, "hardneg": {"chunk_index": 839, "section": "의료사고 법률비용 특별약관", "article": "제2조", "article_title": "보상하지 않는 손해"}}
+{"key": "349::사고 터졌을 때 바로 연락 안 하면 나중에 돈 못 받나요? 우리 애가 다", "pos": false, "neg": false, "hardneg": {"chunk_index": 365, "section": "상해사고 ( )일이상 진단(교통상해 및 자연재해상해 제외) 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1114::한랭질환 진단받으면 보험금은 1년에 몇 번까지 받을 수 있나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 488, "section": "한랭질환 사망후유장해 특별약관", "article": "제2조", "article_title": "한랭질환의 정의 및 진단확정"}}
+{"key": "1114::보장개시일 이후에 사망했는데 나중에 한랭질환으로 죽은 게 확인되면 보상되", "pos": true, "neg": false, "hardneg": {"chunk_index": 552, "section": "한랭질환 입원일당(1일이상 5일한도) 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "235::자전거 대회 나가려고 연습하다가 사고 난 건 보상 안 돼?", "pos": true, "neg": false, "hardneg": {"chunk_index": 626, "section": "자전거사고 벌금 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "235::자전거 경주 도중에 다치거나 사고 나면 보험금 못 받는 거야?", "pos": true, "neg": false, "hardneg": {"chunk_index": 436, "section": "자전거사고 상해진단 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "387::사회재난 분류에 교통사고도 포함되는 건가요? 아니면 사고 유형이 따로 있", "pos": true, "neg": false, "hardneg": {"chunk_index": 405, "section": "상해사고 ( )일이상 진단(교통상해, 자연재해상해 및 사회재난상해 제외) 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "387::미세먼지 때문에 발생한 피해도 사회재난으로 인정되어 보상 대상에 들어가나", "pos": true, "neg": false, "hardneg": {"chunk_index": 445, "section": "사회재난(감염병 제외) 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "612::자전거 타다가 사고 나서 소송을 여러 번 하게 되면, 변호사비는 매번 따", "pos": true, "neg": false, "hardneg": {"chunk_index": 623, "section": "자전거사고 변호사선임비용 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "612::자전거 사고로 인해 1심뿐만 아니라 항소심까지 갈 경우에도, 그동안 들어", "pos": true, "neg": false, "hardneg": {"chunk_index": 621, "section": "자전거사고 변호사선임비용 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "20::아버지가 호스피스 병동에서 연명치료 중단하고 돌아가셨는데, 이것도 사망보", "pos": true, "neg": true, "hardneg": {"chunk_index": 272, "section": "자연재해사망 특별약관", "article": "제2조", "article_title": "보험금 지급에 관한 세부규정"}}
+{"key": "168::회사가 망해서 파산한다는 뉴스 나왔는데, 저희 애 보험은 어떻게 되나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 182, "section": "단체안심생활보험 보통약관", "article": "제41조", "article_title": "예금보험에 의한 지급보장"}}
+{"key": "168::보험사가 파산했는데 제가 바로 해지를 안 하면 어떻게 돼요? 그냥 가만히", "pos": true, "neg": false, "hardneg": {"chunk_index": 173, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "115::전자문서로 가입했는데 보험금액이나 보험기간이 잘못 적혀 있으면 계약 무효", "pos": false, "neg": false, "hardneg": {"chunk_index": 146, "section": "단체안심생활보험 보통약관", "article": "제26조", "article_title": "보험료의 납입이 연체되는 경우 납입최고(독촉)와 계약의 해지"}}
+{"key": "115::만약 회사 측 과실로 계약이 무효가 되면, 제가 냈던 보험료에 이자까지 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 91, "section": "단체안심생활보험 보통약관", "article": "제17조", "article_title": "보험계약의 성립"}}
+{"key": "1666::대퇴골 쪽 골절됐는데, 수술하고 나서도 뼈가 안 붙고 가관절이 생기면 장", "pos": true, "neg": false, "hardneg": {"chunk_index": 1776, "section": "별표6 자동차사고 부상등급표", "article": null, "article_title": null}}
+{"key": "1666::다리 골절 치료했는데 뼈 붙는 게 좀 느린 지연유합 상태인 경우에는 가관", "pos": true, "neg": false, "hardneg": {"chunk_index": 1778, "section": "별표6 자동차사고 부상등급표", "article": null, "article_title": null}}
+{"key": "174::고객이 분쟁 조정 중에 회사 쪽 자료를 좀 보여달라고 요구해도 되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 44, "section": "단체안심생활보험 보통약관", "article": "제8조", "article_title": "보험금의 지급절차"}}
+{"key": "717::사건 사고가 발생했을 때 경찰서에서 받아야 하는 서류는 구체적으로 뭐가 ", "pos": true, "neg": true, "hardneg": {"chunk_index": 518, "section": "직무상 선원 상해사망후유장해 특별약관", "article": "제4조", "article_title": "보험금의 청구"}}
+{"key": "717::보험금 청구할 때 피보험자나 가족한테 사고 상황을 물어보거나 조사를 나올", "pos": true, "neg": false, "hardneg": {"chunk_index": 1436, "section": "지정대리청구서비스 특별약관", "article": "제6조", "article_title": "보험금의 청구"}}
+{"key": "1568::아이가 사고로 얼굴에 큰 흉터가 남았는데, 성형수술을 해도 흉터 모양이 ", "pos": true, "neg": true, "hardneg": {"chunk_index": 1206, "section": "상해흉터복원 수술비보장 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1568::아버지가 사고 때문에 머리카락이 안 나게 되는 부위가 생기셨는데, 이것도", "pos": true, "neg": false, "hardneg": {"chunk_index": 26, "section": "단체안심생활보험 보통약관", "article": "제4조", "article_title": "보험금 지급에 관한 세부규정"}}
+{"key": "1060::응급실 내원 시 보상받기 위한 '응급증상에 준하는 증상'이란 정확히 어떤", "pos": false, "neg": false, "hardneg": {"chunk_index": 867, "section": "상해응급실내원비(응급) 특별약관", "article": "제3조", "article_title": "응급실 및 응급환자의 정의 및 진단확정"}}
+{"key": "1309::라식이나 라섹 같은 시력교정술도 이 특약에서 보험금 지급 대상에 포함되나", "pos": true, "neg": true, "hardneg": {"chunk_index": 951, "section": "상해응급실내원비(비응급) 특별약관", "article": "제4조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1309::안경 대신 쓰는 시력교정 수술을 받았는데, 이거 보상 받을 수 있는 항목", "pos": true, "neg": false, "hardneg": {"chunk_index": 1481, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "1128::심리상담비 받으려면 아무 상담소나 가면 되나요? 아니면 지정된 기관이 따", "pos": true, "neg": false, "hardneg": {"chunk_index": 1148, "section": "기후재해 정신피해 상담비 특별약관", "article": "제5조", "article_title": "보험금의 청구"}}
+{"key": "1128::고객님이 개인적으로 다니는 상담센터에서 받은 상담도 보험금 지급 대상에 ", "pos": false, "neg": false, "hardneg": {"chunk_index": 1148, "section": "기후재해 정신피해 상담비 특별약관", "article": "제5조", "article_title": "보험금의 청구"}}
+{"key": "108::보험 가입했는데 설명도 제대로 못 들었고 사인도 안 했거든요? 이거 취소", "pos": true, "neg": false, "hardneg": {"chunk_index": 1460, "section": "장애인전용보험전환 특별약관", "article": "제4조", "article_title": "전환 취소"}}
+{"key": "108::나중에 문제 생겼을 때 약관 설명 못 들었다고 따지려면 어떻게 해야 됨?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1475, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "100::고객님이 사고가 난 줄 모르고 있다가 나중에 청약철회한다고 하면, 이미 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 161, "section": "단체안심생활보험 보통약관", "article": "제29조", "article_title": "계약자의 임의해지 및 피보험자의 서면동의 철회"}}
+{"key": "100::설계사로서 확인하고 싶은데, 보험 사고가 난 상태에서 계약자가 청약철회를", "pos": false, "neg": false, "hardneg": {"chunk_index": 164, "section": "단체안심생활보험 보통약관", "article": "제29조", "article_title": "계약자의 임의해지 및 피보험자의 서면동의 철회"}}
+{"key": "33::나 임신하고 애 낳아서 제왕절개 했는데 이거 보험금 받을 수 있어?", "pos": false, "neg": false, "hardneg": {"chunk_index": 1796, "section": "별표9-1 수술분류표Ⅱ", "article": null, "article_title": null}}
+{"key": "33::병원에서 불임 때문에 인공수정하다가 합병증 생겼는데 이거 보장돼?", "pos": true, "neg": false, "hardneg": {"chunk_index": 983, "section": "질병응급실내원비(비응급) 특별약관", "article": "제4조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "179::보험사 직원이 실수해서 사고가 나면 회사에서 책임져주나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 173, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "179::보험금 안 줘도 되는 상황인데 회사에서 소송 걸어서 손해 보면 어떡하죠?", "pos": true, "neg": false, "hardneg": {"chunk_index": 571, "section": "미성년자 유괴․인신매매 특별약관", "article": "제3조", "article_title": "손해발생의 통지 및 보험금 청구시 구비서류"}}
+{"key": "1679::손가락뼈 일부를 잃은 경우에, 혹시 뼈 단면이 울퉁불퉁하게 잘렸다면 보상", "pos": false, "neg": false, "hardneg": {"chunk_index": 1327, "section": "유상운송 중 교통상해입원일당 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1679::첫째 손가락 지관절 부위에서 뼈 일부가 절단되면 장해 분류표상 '손가락뼈", "pos": true, "neg": false, "hardneg": {"chunk_index": 1777, "section": "별표6 자동차사고 부상등급표", "article": null, "article_title": null}}
+{"key": "1483::눈앞에서 손만 흔드는 정도면 시력 0.02 이하로 보나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 951, "section": "상해응급실내원비(비응급) 특별약관", "article": "제4조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1483::글씨는 안 보이고 손가락 개수만 겨우 맞추면 시력 장애인가요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 911, "section": "상해응급실내원비(응급, 교통상해 제외) 특별약관", "article": "제5조", "article_title": "준용규정"}}
+{"key": "296::길 가다가 차랑 부딪혔는데 이거 보장되는 거야?", "pos": true, "neg": false, "hardneg": {"chunk_index": 859, "section": "개 물림⋅부딪힘 사고 진단비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "575::애가 미아 신고하고 한 달 넘게 안 돌아오면 보험금 바로 나와요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 573, "section": "미아찾기 지원금 특별약관", "article": "제1조", "article_title": "보상하는 손해"}}
+{"key": "575::우리 애가 미아 된 지 석 달째인데, 돈 더 받을 수 있는 방법이 있나요", "pos": true, "neg": false, "hardneg": {"chunk_index": 573, "section": "미아찾기 지원금 특별약관", "article": "제1조", "article_title": "보상하는 손해"}}
+{"key": "570::아이 실종됐는데 원인이 불분명한 상황이면 보험금 청구 안 되는 거죠?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1147, "section": "기후재해 정신피해 상담비 특별약관", "article": "제5조", "article_title": "보험금의 청구"}}
+{"key": "570::피보험자가 실종되었을 때, 원인을 모르는 상태라면 보장 대상에서 제외되나", "pos": true, "neg": true, "hardneg": {"chunk_index": 573, "section": "미아찾기 지원금 특별약관", "article": "제1조", "article_title": "보상하는 손해"}}
+{"key": "1076::이 특약에서 말하는 전세버스의 범위가 정확히 어떻게 되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 220, "section": "대중교통상해 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "129::보험 가입하고 벌써 일 년 넘었는데, 중간에 보장 내용 좀 바꾸고 싶으면", "pos": true, "neg": false, "hardneg": {"chunk_index": 138, "section": "단체안심생활보험 보통약관", "article": "제24조", "article_title": "제1회 보험료 및 회사의 보장개시"}}
+{"key": "129::나 가입한 지 꽤 됐거든? 근데 이거 지금 다른 걸로 바꿀 수 있어?", "pos": true, "neg": false, "hardneg": {"chunk_index": 12, "section": "단체안심생활보험 보통약관", "article": "제2조", "article_title": "용어의 정의"}}
+{"key": "1337::배달하다가 뺑소니 당해서 사망했는데 이거 보상되나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 1369, "section": "유상운송 중 뺑소니 상해사망・후유장해 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "16::사람이 실종돼서 법원에서 사망한 걸로 처리되면 보험금 받을 수 있어?", "pos": true, "neg": true, "hardneg": {"chunk_index": 492, "section": "직무상 선원 상해사망후유장해 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "16::보험 가입하고 얼마 안 돼서 사고 나면 돈 적게 나와? 줄어드는 거 맞아", "pos": true, "neg": false, "hardneg": {"chunk_index": 263, "section": "물놀이사고 사망 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "149::보험료 밀리면 바로 해지되나요? 애가 아파서 정신없어서 못 냈는데...", "pos": false, "neg": false, "hardneg": {"chunk_index": 1397, "section": "환율 특별약관", "article": "제1조", "article_title": "보험료 적용기준"}}
+{"key": "149::아버지가 보험료를 못 내서 해지될 것 같은데, 문자나 알림은 제대로 받아", "pos": true, "neg": true, "hardneg": {"chunk_index": 173, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "56::보험금 받는 사람을 따로 안 정해놨으면 누가 받게 되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1450, "section": "장애인전용보험전환 특별약관", "article": "제1조", "article_title": "특별약관의 적용범위"}}
+{"key": "56::수익자 지정 안 했을 때, 사망 시 상속인이 받는 거 맞아요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 806, "section": "질병사망 장례지원금보장 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1678::손가락 하나 잘리면 무조건 장해로 인정되나요? 기준이 궁금해요.", "pos": false, "neg": false, "hardneg": {"chunk_index": 26, "section": "단체안심생활보험 보통약관", "article": "제4조", "article_title": "보험금 지급에 관한 세부규정"}}
+{"key": "1678::검지 손가락 마디 중간이 잘렸는데 이것도 장해 분류표상 손가락을 잃은 건", "pos": true, "neg": false, "hardneg": null}
+{"key": "1770::화상 입었을 때 눈 부위는 분류번호가 어떻게 되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 681, "section": "화상진단비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1770::사고로 입은 화상이 여러 군데 걸쳐있으면 코드는 뭐예요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 688, "section": "화상수술비(연간1회한) 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "543::사고는 예전에 났는데, 보험 기간 끝나고 나중에 장해가 남으면 보상 안 ", "pos": true, "neg": true, "hardneg": {"chunk_index": 838, "section": "의료사고 법률비용 특별약관", "article": "제1조", "article_title": "보상하는 손해"}}
+{"key": "543::아이가 예전 보험이 끝났는데, 새로 가입한 거랑 날짜가 조금 겹쳐도 돼요", "pos": true, "neg": false, "hardneg": {"chunk_index": 1487, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "807::아버지가 연명치료 중단하고 돌아가셨는데, 이것 때문에 사망보험금 못 받는", "pos": true, "neg": true, "hardneg": {"chunk_index": 272, "section": "자연재해사망 특별약관", "article": "제2조", "article_title": "보험금 지급에 관한 세부규정"}}
+{"key": "807::애가 호스피스 병동에서 연명치료 안 하고 세상을 떠나면, 사망보험금 지급", "pos": true, "neg": true, "hardneg": {"chunk_index": 1120, "section": "특정감염병진단비 특별약관Ⅳ", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "590::자전거 사고가 아니라 경기에 나가려고 연습하다가 다친 것도 보장 안 되나", "pos": true, "neg": true, "hardneg": {"chunk_index": 674, "section": "퍼스널모빌리티사고 변호사선임비용 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "590::피보험자가 고의로 본인을 해친 사고가 발생해도 보험금이 지급되나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 615, "section": "자전거사고 변호사선임비용 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "875::아버지가 약을 너무 많이 드셔서 중독되신 건데, 이것도 응급실 비용 청구", "pos": false, "neg": true, "hardneg": {"chunk_index": 1053, "section": "기후재해상해ㆍ온열질환ㆍ한랭질환 응급실내원비(응급) 특별약관", "article": "제5조", "article_title": "준용규정"}}
+{"key": "73::나 예전에 아팠던 거 제대로 말 안 했는데, 나중에 사고 나면 보험금 못", "pos": true, "neg": false, "hardneg": {"chunk_index": 1460, "section": "장애인전용보험전환 특별약관", "article": "제4조", "article_title": "전환 취소"}}
+{"key": "73::아니, 내가 예전에 다쳤던 걸 깜빡하고 안 알려줬거든. 이거 나중에 문제", "pos": true, "neg": false, "hardneg": {"chunk_index": 173, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "1285::아버지가 배달하다 다치셨는데, 이거 보험금 타려면 어떤 서류들 내야 하나", "pos": true, "neg": false, "hardneg": {"chunk_index": 1386, "section": "유상운송 중 교통사고부상진단비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1285::애가 배달 중에 사고가 났는데, 운행 내역 같은 것도 다 증명해야 돼요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 1373, "section": "유상운송 중 뺑소니 상해사망・후유장해 특별약관", "article": "제4조", "article_title": "보험금의 청구"}}
+{"key": "173::나 보험 해지했는데 돈 돌려받을 때 이자도 같이 얹어서 주는 거야?", "pos": true, "neg": false, "hardneg": {"chunk_index": 13, "section": "단체안심생활보험 보통약관", "article": "제2조", "article_title": "용어의 정의"}}
+{"key": "173::보험 무효돼서 환급금 받아야 하는데 언제부터 이자 계산되는 건데?", "pos": true, "neg": false, "hardneg": {"chunk_index": 13, "section": "단체안심생활보험 보통약관", "article": "제2조", "article_title": "용어의 정의"}}
+{"key": "144::보험료가 미납되면 바로 계약이 해지되나요? 아니면 따로 독촉 안내를 먼저", "pos": true, "neg": false, "hardneg": {"chunk_index": 93, "section": "단체안심생활보험 보통약관", "article": "제17조", "article_title": "보험계약의 성립"}}
+{"key": "144::보험료 미납 시 계약자가 보험수익자와 다를 때도 독촉 통보가 수익자에게까", "pos": true, "neg": false, "hardneg": {"chunk_index": 133, "section": "단체안심생활보험 보통약관", "article": "제22조", "article_title": "보험나이 등"}}
+{"key": "119::심신상실자가 피보험자로 되어있는 사망 보험계약은 무효가 되나요? 이미 낸", "pos": true, "neg": false, "hardneg": {"chunk_index": 172, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "119::심신박약자가 계약을 맺었을 때, 의사능력이 있는 상태라면 계약이 유효하게", "pos": true, "neg": false, "hardneg": {"chunk_index": 129, "section": "단체안심생활보험 보통약관", "article": "제21조", "article_title": "계약내용의 변경 등"}}
+{"key": "1758::보험 계약 중간에 해지하게 되면 단기요율이 어떻게 적용되는 건가요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 171, "section": "단체안심생활보험 보통약관", "article": "제32조", "article_title": "보험료의 환급"}}
+{"key": "1758::보험 기간을 연장할 때, 기존 기간이랑 합쳐서 계산하나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1418, "section": "단체계약 보험기간 설정 추가특별약관", "article": "제3조", "article_title": "보험료의 납입"}}
+{"key": "1695::손가락 마디가 잘 안 움직여서 예전만큼 안 굽혀지는데 이거 장해로 인정돼", "pos": true, "neg": false, "hardneg": null}
+{"key": "1695::발가락 움직이는 각도가 얼마나 돼야 장해 보상받을 수 있는 거야?", "pos": false, "neg": false, "hardneg": {"chunk_index": 527, "section": "교통상해확장보상 추가특별약관", "article": "제1조", "article_title": "특별약관의 적용"}}
+{"key": "1051::애가 머리를 다쳐서 구토를 계속하는데, 이런 것도 응급실 가면 보상되나요", "pos": true, "neg": false, "hardneg": {"chunk_index": 573, "section": "미아찾기 지원금 특별약관", "article": "제1조", "article_title": "보상하는 손해"}}
+{"key": "1051::아버지가 갑자기 의식을 잃으셨는데, 이런 급성 증상도 이 보험에서 다뤄지", "pos": true, "neg": true, "hardneg": {"chunk_index": 911, "section": "상해응급실내원비(응급, 교통상해 제외) 특별약관", "article": "제5조", "article_title": "준용규정"}}
+{"key": "552::병원에 입원해서 치료받으면 무조건 다 나오는 건가요?", "pos": false, "neg": false, "hardneg": {"chunk_index": 549, "section": "온열질환 입원일당(1일이상 5일한도) 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "552::입원하다가 보험 기간이 끝나버리면 남은 날짜는 못 받나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 562, "section": "자연재난상해 입원일당(1일이상 5일한도) 특별약관", "article": "제2조", "article_title": "입원의 정의와 장소"}}
+{"key": "1350::운전 연습하다가 사고 나면 보상 안 해줘요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 604, "section": "자전거상해 진단위로금(II) 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1350::차 사고 내고 연습하느라 운전 중이었는데 이거 돈 나와?", "pos": true, "neg": true, "hardneg": {"chunk_index": 627, "section": "자전거사고 벌금 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1195::질병이나 상해 치료 목적으로 약관에서 정한 수술을 받으면 보험금 지급되나", "pos": true, "neg": false, "hardneg": {"chunk_index": 1080, "section": "상해 수술비용 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "39::보험금 받을 일이 생기면 바로 고객님이 회사에 직접 알려야 하나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1398, "section": "환율 특별약관", "article": "제2조", "article_title": "보험금 지급기준"}}
+{"key": "39::사고 발생한 거 확인되면 즉시 통보해야 하는 의무가 있나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 72, "section": "단체안심생활보험 보통약관", "article": "제14조", "article_title": "상해보험계약 후 알릴 의무"}}
+{"key": "1373::전동 킥보드 같은 개인형 이동수단은 PM이라고 부르나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 66, "section": "단체안심생활보험 보통약관", "article": "제14조", "article_title": "상해보험계약 후 알릴 의무"}}
+{"key": "99::신용카드로 첫 보험료 결제했는데, 청약 철회하면 카드사로 돈 다시 안 나", "pos": true, "neg": false, "hardneg": {"chunk_index": 135, "section": "단체안심생활보험 보통약관", "article": "제24조", "article_title": "제1회 보험료 및 회사의 보장개시"}}
+{"key": "99::카드로 보험료 냈을 때 청약 철회 신청하면 카드 결제 취소 처리가 되는 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 135, "section": "단체안심생활보험 보통약관", "article": "제24조", "article_title": "제1회 보험료 및 회사의 보장개시"}}
+{"key": "148::나 보험료 밀리면 그냥 바로 해지되는 거야? 미리 알려주긴 함?", "pos": true, "neg": false, "hardneg": {"chunk_index": 154, "section": "단체안심생활보험 보통약관", "article": "제27조", "article_title": "보험료의 납입을 연체하여 해지된 계약의 부활(효력회복)"}}
+{"key": "148::보험료 안 내서 독촉할 때 문자로 미리 알려주는 건지 궁금함", "pos": true, "neg": false, "hardneg": {"chunk_index": 1429, "section": "보험료 자동납입 특별약관", "article": "제3조", "article_title": "계약 후 알릴 의무"}}
+{"key": "1677::애가 손가락 관절 부위 이름을 물어보는데, 네 손가락 마디 이름이 정확히", "pos": true, "neg": false, "hardneg": {"chunk_index": 1778, "section": "별표6 자동차사고 부상등급표", "article": null, "article_title": null}}
+{"key": "1677::아버지가 손가락 마디를 다치셨는데, 나머지 네 손가락에 있는 관절 명칭 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 1777, "section": "별표6 자동차사고 부상등급표", "article": null, "article_title": null}}
+{"key": "1570::우리 애가 사고로 손바닥만한 흉터가 남았는데, 이것도 장해에 해당하나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 1206, "section": "상해흉터복원 수술비보장 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1570::아버지가 사고 때문에 목 부분에 흉터가 크게 남으셨는데, 장해 분류에 포", "pos": true, "neg": true, "hardneg": {"chunk_index": 1206, "section": "상해흉터복원 수술비보장 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "347::사회재난 중에서 감염병이나 미세먼지 때문에 생긴 피해도 보험금 지급 대상", "pos": false, "neg": false, "hardneg": {"chunk_index": 445, "section": "사회재난(감염병 제외) 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "440::PM을 가지고 경기 연습이나 테스트용으로 타다가 사고가 나도 보장이 되나", "pos": true, "neg": true, "hardneg": {"chunk_index": 238, "section": "퍼스널모빌리티사고 사망․후유장해 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "440::혹시 PM을 경기에 나가기 위해 연습하다가 사고를 내는 경우에도 보험금이", "pos": true, "neg": true, "hardneg": {"chunk_index": 238, "section": "퍼스널모빌리티사고 사망․후유장해 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "407::사고로 다쳤는데 이게 사회재난에 해당하는 사고면 보상되는 거야?", "pos": false, "neg": true, "hardneg": {"chunk_index": 393, "section": "상해사고 ( )일이상 진단(교통상해, 자연재해상해 및 사회재난상해 제외) 특별약관", "article": null, "article_title": null}}
+{"key": "90::보험료 내고 청약했는데 회사에서 아무 연락 없으면 그냥 가입된 걸로 봐도", "pos": true, "neg": false, "hardneg": {"chunk_index": 136, "section": "단체안심생활보험 보통약관", "article": "제24조", "article_title": "제1회 보험료 및 회사의 보장개시"}}
+{"key": "1436::대리청구할 때 가족관계증명서 꼭 내야 하나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 1434, "section": "지정대리청구서비스 특별약관", "article": "제4조", "article_title": "지정대리청구인의 변경지정"}}
+{"key": "172::보험 계약 취소되면 남은 기간 보험료는 다 돌려받을 수 있나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 91, "section": "단체안심생활보험 보통약관", "article": "제17조", "article_title": "보험계약의 성립"}}
+{"key": "172::1년 넘은 단체보험이 해지됐는데, 지난번 낸 보험료는 어떻게 계산해요?", "pos": false, "neg": false, "hardneg": {"chunk_index": 154, "section": "단체안심생활보험 보통약관", "article": "제27조", "article_title": "보험료의 납입을 연체하여 해지된 계약의 부활(효력회복)"}}
+{"key": "35::우리 애가 동호회 활동하다가 다쳤는데, 이건 보험금 안 나온다면서요?", "pos": false, "neg": false, "hardneg": {"chunk_index": 516, "section": "직무상 선원 상해사망후유장해 특별약관", "article": "제3조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "35::아버지가 일하시다가 다치신 건데, 직업 때문에 사고 나도 보상 안 되나요", "pos": true, "neg": false, "hardneg": {"chunk_index": 839, "section": "의료사고 법률비용 특별약관", "article": "제2조", "article_title": "보상하지 않는 손해"}}
+{"key": "180::법 말고 따로 동의 안 해줘도 회사 마음대로 제 개인정보 조회할 수 있어", "pos": true, "neg": true, "hardneg": {"chunk_index": 1414, "section": "단체계약 보험료정산 추가특별약관(Ⅱ)", "article": "제3조", "article_title": "보험료의 정산방법"}}
+{"key": "1464::장해가 영구적이라는 건 의사 소견서에 회복 안 된다고 적혀있어야 되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 157, "section": "단체안심생활보험 보통약관", "article": "제28조", "article_title": "강제집행 등의 절차에 따라 해지된 계약의 특별부활(효력회복)"}}
+{"key": "1464::몸에 남은 후유증이 평생 안 고쳐진다는 걸 어떻게 증명하나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 252, "section": "헌혈후유증 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1772::사고 나서 눈알 터졌는데 이거 1급까지 나와?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1759, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "1453::수익자가 장애인인데 보험을 전환해서 계속 유지하는 게 가능한가요?", "pos": false, "neg": false, "hardneg": {"chunk_index": 1460, "section": "장애인전용보험전환 특별약관", "article": "제4조", "article_title": "전환 취소"}}
+{"key": "1453::장애인 전용 보험으로 바꾸고 싶은데 수익자가 이미 장애인이면 어떻게 해야", "pos": true, "neg": false, "hardneg": {"chunk_index": 1458, "section": "장애인전용보험전환 특별약관", "article": "제3조", "article_title": "장애인전용보험으로의 전환"}}
+{"key": "1440::아이가 알바해서 돈 벌고 있는데 이 보험료 내면 세금 깎아줘요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 158, "section": "단체안심생활보험 보통약관", "article": "제28조", "article_title": "강제집행 등의 절차에 따라 해지된 계약의 특별부활(효력회복)"}}
+{"key": "1440::아버지가 일용직으로 일하시는데, 이 보험료 내도 세금 혜택 못 받나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 158, "section": "단체안심생활보험 보통약관", "article": "제28조", "article_title": "강제집행 등의 절차에 따라 해지된 계약의 특별부활(효력회복)"}}
+{"key": "593::애가 자전거 타다 다쳤는데, 병원에서 며칠째 입원하고 있어요?", "pos": false, "neg": false, "hardneg": {"chunk_index": 580, "section": "자전거상해 입원위로금 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "593::아버지가 자전거 사고로 입원 중이신데, 병원에서 치료만 오래 받으면 돈 ", "pos": false, "neg": false, "hardneg": {"chunk_index": 580, "section": "자전거상해 입원위로금 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1186::학원 차 타고 가다가 사고 나면 이 보험 적용되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1420, "section": "포괄계약 추가특별약관", "article": "제1조", "article_title": "적용범위"}}
+{"key": "1186::운전자가 차 세워놓고 핸들만 잡고 있어도 운전인가요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 65, "section": "단체안심생활보험 보통약관", "article": "제14조", "article_title": "상해보험계약 후 알릴 의무"}}
+{"key": "7::고객님이 가입하실 때 건강검진을 따로 받아야 하는 계약도 있나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 92, "section": "단체안심생활보험 보통약관", "article": "제17조", "article_title": "보험계약의 성립"}}
+{"key": "7::진단계약이라는 게 정확히 어떤 걸 의미하는지 설명 부탁드려요.", "pos": true, "neg": false, "hardneg": {"chunk_index": 106, "section": "단체안심생활보험 보통약관", "article": "제19조", "article_title": "약관교부 및 설명의무 등"}}
+{"key": "1227::우리 애가 타던 전동 휠체어 때문에 사고 났는데, 보험금 청구할 때 서류", "pos": false, "neg": false, "hardneg": {"chunk_index": 1177, "section": "전동보조기기(전동휠체어, 의료용스쿠터) 사고 부상진단비 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1227::사고 나서 보험금 타려고 하는데, 아버지가 직접 못 가시면 본인 확인은 ", "pos": true, "neg": true, "hardneg": {"chunk_index": 1152, "section": "기상특보 교통비 특별약관", "article": "제3조", "article_title": "보험금의 청구 및 구비서류"}}
+{"key": "40::병원 영수증이나 진단서 같은 서류는 아무 데서나 떼도 되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 142, "section": "단체안심생활보험 보통약관", "article": "제25조", "article_title": "제2회 이후 보험료의 납입"}}
+{"key": "153::보험료 밀려서 계약 해지되면 돈 좀 돌려받을 수 있어?", "pos": true, "neg": false, "hardneg": {"chunk_index": 154, "section": "단체안심생활보험 보통약관", "article": "제27조", "article_title": "보험료의 납입을 연체하여 해지된 계약의 부활(효력회복)"}}
+{"key": "153::보험료 안 내고 버티면 회사에서 나한테 뭐 연락 오나?", "pos": true, "neg": false, "hardneg": {"chunk_index": 136, "section": "단체안심생활보험 보통약관", "article": "제24조", "article_title": "제1회 보험료 및 회사의 보장개시"}}
+{"key": "54::보험금 한 번에 안 받고 여러 번 나눠서 받는 것도 가능한가요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1425, "section": "보험료분납 특별약관Ⅱ", "article": "제2조", "article_title": "나눠 내는 보험료의 납입"}}
+{"key": "54::보험금을 나눠서 받게 되면 이자가 붙어서 나오나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1425, "section": "보험료분납 특별약관Ⅱ", "article": "제2조", "article_title": "나눠 내는 보험료의 납입"}}

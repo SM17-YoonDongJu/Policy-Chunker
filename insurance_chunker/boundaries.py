@@ -82,13 +82,47 @@ SCORE_THRESHOLD = 2.4
 
 
 _SENT_END = re.compile(r"[다요]\s*\.\s*$")  # 완결 문장 — 제목은 '다.'로 끝나지 않는다
+# 제목은 조사·연결어미로 끝나지 않는다. 이렇게 끝나면 본문 문장이 줄바꿈·컬럼폭에
+# 잘려 들어온 조각이다 — KB 용어정의 표의 "【별표1】(장해분류표)에서 정한 …장해상태를",
+# 메리츠 잔존 오탐의 "이 추가특별약관에 가입된 피보험자는 …" 류가 여기 걸린다.
+_DANGLING_PARTICLE = re.compile(
+    r"(?:을|를|이|가|은|는|에|의|로|으로|와|과|에서|에게|부터|까지|보다|라|며|고)\s*$")
+# 인용 접속으로 시작하는 줄("제2항에도 불구하고 …")은 본문이지 제목이 아니다.
+_CITE_LEAD = re.compile(r"^제\s*\d+\s*[항호목조][의\s]*\S*\s*(?:에도|에|은|는)?\s*(?:불구|따라|정한)")
+# 본문 열거 항목("∙ 제1호 : …", "· 제2항 …")은 글머리표+항/호 표기로 시작한다.
+# KB에서 이런 줄 하나가 우연히 "…특별약관"으로 끝나 청크 절반(3,149개)을 흡수했다.
+_BULLET_ENUM = re.compile(r"^\s*[∙·▪▫◦・\-–—]\s*제\s*\d+\s*[항호목]")
+# 제목 길이 상한. 실측 분포(메리츠 30327 섹션 148개: 중앙 17자, 90%tile 28자,
+# 최대 45자 / KB 실제 특약명 ~40자)에 근거해 55자로 둔다. 이보다 길면 본문 문장이다.
+_MAX_TITLE_LEN = 55
+# 접미사로 끝나더라도 중간에 문장 구조(부사격 조사·관형형 어미)가 있으면 본문 조각이다.
+# "이 추가특별약관에 가입된 피보험자는 … 특별", "…산출방법서"에서 정하는 바에 따라 … 특별약관".
+# 특약명은 명사구라 이런 성분이 없다. 주격/목적격 조사는 '어린이 ', '장애인 ' 같은
+# 정상 제목을 오탐하므로 제외하고, 오탐 위험이 낮은 것만 넣는다.
+# 주의: '따른'·'의한'은 넣으면 안 된다 — "기상현상에 따른 피해 분류표",
+# "유독성 물질에 의한 불의의 중독 및 노출 분류표"처럼 실제 별표 제목에 쓰인다
+# (30327 diff에서 정상 별표 2개가 사라져 실측으로 확인).
+_SENTENCE_MID = re.compile(
+    r"(?:에서|에게|에도|에는|으로|로서|로써|보다|까지|부터)\s"
+    r"|(?:된|하는|되는|하지|따라|정한|정하는|말하는)\s")
 
 
 def _invalid_candidate(txt: str) -> bool:
-    return (not (2 <= len(txt) <= 90) or bool(_PURE_SYMBOLIC.match(txt))
+    return (not (2 <= len(txt) <= _MAX_TITLE_LEN) or bool(_BULLET_ENUM.match(txt))
+            or bool(_PURE_SYMBOLIC.match(txt))
             or bool(_ART_LIKE.match(txt)) or bool(_CALLOUT.match(txt))
             or bool(_MID_SENTENCE.search(txt)) or bool(_BARE_SUFFIX.match(txt))
-            or bool(_SENT_END.search(txt)) or bool(_CHAPTER_DIV.match(txt)))
+            or bool(_SENT_END.search(txt)) or bool(_CHAPTER_DIV.match(txt))
+            or bool(_DANGLING_PARTICLE.search(txt)) or bool(_CITE_LEAD.match(txt))
+            or bool(_SENTENCE_MID.search(txt)))
+
+
+def is_title_like(txt: str) -> bool:
+    """제목 후보로 쓸 수 있는 줄인가 (문장 조각·조 헤딩·콜아웃 등 배제).
+
+    boundaries 밖(rechunk의 경계 복구)에서도 같은 기준을 쓰기 위한 공개 함수.
+    """
+    return not _invalid_candidate(txt.strip())
 
 
 def _signal_score(txt: str, has_suffix: bool, sz: float, is_bold: bool,
@@ -301,7 +335,9 @@ def find(doc, det: Detection | None = None) -> tuple[list[Boundary], Detection]:
 
     for pno, sz, txt, is_bold, is_isolated in _lines_rich(doc):
         m = BYEOLPYO.match(txt)
-        if m and len(txt) < 45:
+        # 본문·표 셀 안의 별표 인용("【별표1】(장해분류표)에서 정한 …장해상태를")은
+        # 헤딩이 아니다 — 꼬리가 문장으로 이어지면 경계로 만들지 않는다.
+        if m and len(txt) < 45 and (not m.group(2).strip() or is_title_like(m.group(2))):
             lab = re.sub(r"\s+", " ", f"별표{m.group(1)} {m.group(2)}").strip()
             bounds.append(Boundary(pno, lab, "byeolpyo"))
             _flush()

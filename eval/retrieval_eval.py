@@ -40,7 +40,15 @@ VERSIONS = {
     "v5": EVAL_DIR / "chunks_30327_v5.jsonl",  # v3 + 다항목 나열조 호 단위 분할 (boilerplate 제외)
     "v6": EVAL_DIR / "chunks_30327_v6.jsonl",  # v5 + 특약 경계 누락 복구 (제1조 리셋 → 제목 승격)
 }
-QUESTIONS = EVAL_DIR / "questions_30327.jsonl"
+# 질문셋 교체: EVAL_QUESTIONS=eval/questions_gen_v6.jsonl (eval/qgen.py 산출)
+# 질의 모양 교체: EVAL_VARIANT=utterance|rewritten|followup|report (랭그래프 레이어가
+#   search()에 실제로 넣는 4가지 모양. 미지정 시 기존과 동일하게 question 필드 사용)
+# 비교 대상 축소: EVAL_VERSIONS=v3,v6 (미지정 시 전 버전 — 기존 동작)
+if os.environ.get("EVAL_VERSIONS"):
+    _want = [v.strip() for v in os.environ["EVAL_VERSIONS"].split(",")]
+    VERSIONS = {k: v for k, v in VERSIONS.items() if k in _want}
+QUESTIONS = Path(os.environ.get("EVAL_QUESTIONS", str(EVAL_DIR / "questions_30327.jsonl")))
+VARIANT = os.environ.get("EVAL_VARIANT", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "qwen3-embedding:0.6b")
 TOP_K = 10
@@ -49,6 +57,27 @@ BATCH = 32
 
 def load_jsonl(path: Path) -> list[dict]:
     return [json.loads(l) for l in path.open() if l.strip()]
+
+
+def query_of(q: dict) -> str:
+    """검색에 넣을 질의 문자열. EVAL_VARIANT 미지정이면 기존 동작(question)과 동일."""
+    if not VARIANT:
+        return q["question"]
+    v = q.get("variants", {}).get(VARIANT)
+    if isinstance(v, dict):          # followup: {"prev":..., "query":...}
+        return v.get("query") or q["question"]
+    return v or q["question"]
+
+
+def out_suffix() -> str:
+    """기본 질문셋이면 빈 문자열 — 기존 캐시·결과 파일 이름을 그대로 유지한다."""
+    s = "" if QUESTIONS.stem == "questions_30327" else f"_{QUESTIONS.stem}"
+    return s + (f"_{VARIANT}" if VARIANT else "")
+
+
+def query_cache_path() -> Path:
+    """질문셋·변형별로 질의 임베딩 캐시를 분리 (기존 기본 캐시는 그대로 재사용)."""
+    return EVAL_DIR / f"emb_cache_queries{out_suffix()}.jsonl"
 
 
 # ---------- 판정 ----------
@@ -175,8 +204,8 @@ def check_gold():
 
 def do_embed():
     questions = load_jsonl(QUESTIONS)
-    build_embed_cache(EVAL_DIR / "emb_cache_queries.jsonl",
-                      [(q["qid"], QUERY_INSTRUCT + q["question"]) for q in questions])
+    build_embed_cache(query_cache_path(),
+                      [(q["qid"], QUERY_INSTRUCT + query_of(q)) for q in questions])
     for ver, path in VERSIONS.items():
         chunks = load_jsonl(path)
         build_embed_cache(EVAL_DIR / f"emb_cache_{ver}.jsonl",
@@ -211,7 +240,7 @@ def rrf(rank_a: list[int], rank_b: list[int], n: int, k: int = 60) -> list[int]:
 
 def run():
     questions = load_jsonl(QUESTIONS)
-    qvecs = {r["key"]: r["vec"] for r in load_jsonl(EVAL_DIR / "emb_cache_queries.jsonl")}
+    qvecs = {r["key"]: r["vec"] for r in load_jsonl(query_cache_path())}
     results = {}          # (ver, method, mode) -> {metric: mean}
     per_q_rows = []
 
@@ -230,7 +259,7 @@ def run():
 
         agg = defaultdict(lambda: defaultdict(list))
         for q in questions:
-            bm_scores = bm25.scores(tokenize_korean(q["question"]).split())
+            bm_scores = bm25.scores(tokenize_korean(query_of(q)).split())
             bm_rank = list(np.argsort(-bm_scores))
 
             qv = np.array(qvecs[q["qid"]])
@@ -246,7 +275,7 @@ def run():
             if RERANK:
                 # RRF 상위 후보를 cross-encoder로 재정렬 (bge-reranker-v2-m3)
                 cand = rrf_rank[:RERANK_TOP]
-                pairs = [(q["question"], chunks[i]["content"][:1500]) for i in cand]
+                pairs = [(query_of(q), chunks[i]["content"][:1500]) for i in cand]
                 scores = _reranker().predict(pairs, batch_size=16, show_progress_bar=False)
                 order = np.argsort(-np.asarray(scores))
                 rankings["rerank"] = [cand[j] for j in order] + rrf_rank[RERANK_TOP:]
@@ -267,7 +296,7 @@ def run():
             results[(ver, method, mode)] = {k: float(np.mean(v)) for k, v in ms.items()}
 
     # 저장
-    with (EVAL_DIR / "retrieval_eval_perq.jsonl").open("w") as f:
+    with (EVAL_DIR / f"retrieval_eval_perq{out_suffix()}.jsonl").open("w") as f:
         for row in per_q_rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -277,7 +306,8 @@ def run():
 def report(results: dict, per_q_rows: list[dict], n_q: int):
     lines = ["# 검색 품질 평가: v1 vs v2 청킹",
              "",
-             f"- 문서: 메리츠 단체안심생활보험(30327) / 질문 {n_q}개",
+             f"- 문서: 메리츠 단체안심생활보험(30327) / 질문 {n_q}개"
+             f" (`{QUESTIONS.name}`, 질의 모양: {VARIANT or 'question'})",
              f"- 임베딩: {EMBED_MODEL} (코사인), BM25: Kiwi 형태소 + Okapi, RRF k=60",
              "- strict: (section, article) 라벨 일치 / lenient: section 일치 + 내용(키워드) 일치",
              ""]
@@ -309,7 +339,7 @@ def report(results: dict, per_q_rows: list[dict], n_q: int):
             lines.append(f"| {method} | {ver} | " + " | ".join(cells) + " |")
     lines.append("")
 
-    out = EVAL_DIR / "retrieval_eval_results.md"
+    out = EVAL_DIR / f"retrieval_eval_results{out_suffix()}.md"
     out.write_text("\n".join(lines))
     print("\n".join(lines))
     print(f"\n저장: {out}")

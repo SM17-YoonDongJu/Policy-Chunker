@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 import warnings
@@ -22,7 +23,14 @@ DOCS = [
     ("30327", "in/상해보험_단체안심생활보험_30327.pdf", "메리츠화재", "단체안심생활보험"),
     ("프리미엄간편보험2604", "in/프리미엄간편보험2604.pdf", "메리츠화재", "프리미엄간편보험2604"),
     ("DB빅히트", "in/단체상해_빅히트_동부.pdf", "동부화재", "빅히트"),
+    # 타사(KB) 편입 — 게이트가 메리츠 조판 관습만 담고 있으면 과적합을 구조적으로
+    # 탐지할 수 없다. KB는 특약명이 접미사 없이 끝나(…(감액없음)) 경계 검출의
+    # 일반성을 검증한다. 1250p라 느리므로 REGRESS_FAST=1이면 건너뛴다.
+    ("KB자녀보험(타사)", "in/KB_금쪽같은자녀보험Plus_26.04.pdf", "KB손해보험",
+     "KB 금쪽같은 자녀보험Plus(26.04) 1종 세만기"),
 ]
+if os.environ.get("REGRESS_FAST") == "1":
+    DOCS = [d for d in DOCS if "타사" not in d[0]]
 
 
 def run(label: str, pdf: str, insurer: str, product: str) -> None:

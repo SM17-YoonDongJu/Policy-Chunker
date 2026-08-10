@@ -135,9 +135,16 @@ def check(pdf_path: str) -> dict:
                   for prev, cur in zip(seq, seq[1:]) if cur < prev or cur - prev > 10)
     cite_runs = sum(1 for c in chunk_dicts if c.get("article_title") == "인용 조문")
 
+    # 경계 붕괴 시그니처: 여러 특약이 한 섹션으로 뭉치면 1~N조가 모두 들어차
+    # 결번(gaps)이 사라지는 대신 조번호 역행(art_nonmono)이 폭증한다. 즉 gaps=0은
+    # 양호 신호가 아닐 수 있다 — 두 지표를 함께 읽어야 오판하지 않는다(KB 실측).
+    n_sec = len({c["section"] for c in chunk_dicts if c["section"]})
+    collapse = gaps == 0 and nonmono > max(30, n_sec)
+
     return {
         "coverage": round(1 - missing_probes / total_probes, 4) if total_probes else None,
         "gaps": gaps, "chunks": len(chunk_dicts), "dup": dup,
+        "sections": n_sec, "boundary_collapse": collapse,
         "table_chunks": table_chunks,
         "table_ragged": round(ragged / table_chunks, 3) if table_chunks else None,
         "table_page_recall": page_recall,

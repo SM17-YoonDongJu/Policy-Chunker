@@ -1,0 +1,13 @@
+{"key": "1539::치아 몇 개가 빠졌을 때 장해지급률이 얼마인지 궁금해요.", "pos": true, "neg": false, "hardneg": {"chunk_index": 262, "section": "익사사고 사망 특별약관", "article": "제2조", "article_title": "준용규정"}}
+{"key": "1539::씹는 기능이나 말하는 게 좀 불편해지면 보상받나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 576, "section": "미아찾기 지원금 특별약관", "article": "제4조", "article_title": "보상하지 않는 손해"}}
+{"key": "494::배가 아예 없어지거나 행방불명이 된 경우에도 보험금 지급이 가능한가요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 570, "section": "미성년자 유괴․인신매매 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1283::성형수술로 인한 사고는 보상 안 되나요? 미용 목적인 경우 말이에요.", "pos": true, "neg": true, "hardneg": {"chunk_index": 949, "section": "상해응급실내원비(비응급) 특별약관", "article": "제4조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "1283::고객님이 태어날 때부터 가지고 있던 기형 때문에 생긴 문제는 보상이 안 ", "pos": true, "neg": false, "hardneg": {"chunk_index": 567, "section": "온열질환 진단비(연간 1회) 특별약관", "article": "제2조", "article_title": "계약의 소멸"}}
+{"key": "951::라식이나 라섹 같은 시력교정술 받아서 응급실 가면 보상 안 되나요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 1309, "section": "유상운송 중 교통상해수술비 특별약관", "article": "제3조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "951::건강보험 적용 안 되는 시력교정 수술도 면책 사유에 포함되는지 확인 부탁", "pos": true, "neg": false, "hardneg": {"chunk_index": 1481, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
+{"key": "1068::애가 버스 타려고 기다리다가 사고 났는데 이것도 보상되나요?", "pos": true, "neg": false, "hardneg": {"chunk_index": 1185, "section": "어린이 통학버스사고부상치료비보장 특별약관", "article": "제1조", "article_title": "보험금의 지급사유"}}
+{"key": "1068::아버지가 택시 타다가 사고 나셨는데, 일반 택시도 포함인가요?", "pos": true, "neg": true, "hardneg": {"chunk_index": 1069, "section": "대중교통상해 부상진단비(택시포함) 특별약관", "article": "제2조", "article_title": "보험금을 지급하지 않는 사유"}}
+{"key": "84::고객님이 계약 해지되기 전에 이미 사고가 나서 보험금 청구한 상태라면, ", "pos": true, "neg": true, "hardneg": {"chunk_index": 154, "section": "단체안심생활보험 보통약관", "article": "제27조", "article_title": "보험료의 납입을 연체하여 해지된 계약의 부활(효력회복)"}}
+{"key": "84::고지 의무 위반으로 계약이 해지되는 상황이라도, 사고가 먼저 발생했다면 ", "pos": true, "neg": true, "hardneg": {"chunk_index": 154, "section": "단체안심생활보험 보통약관", "article": "제27조", "article_title": "보험료의 납입을 연체하여 해지된 계약의 부활(효력회복)"}}
+{"key": "1228::사고 나서 보험금 신청하려는데 내가 따로 더 준비해서 내야 할 게 또 있", "pos": true, "neg": false, "hardneg": {"chunk_index": 44, "section": "단체안심생활보험 보통약관", "article": "제8조", "article_title": "보험금의 지급절차"}}
+{"key": "24::보험금 받는 거 가지고 회사랑 말싸움만 계속되면 어떻게 해야 돼? 나 혼", "pos": true, "neg": false, "hardneg": {"chunk_index": 1760, "section": "별표1 장해 분류표", "article": null, "article_title": null}}
