@@ -14,7 +14,7 @@ import re
 import uuid as _uuid
 from typing import Optional
 
-from .boundaries import Boundary, label_for
+from .boundaries import Boundary, TITLE_SUFFIX, label_for
 from .models import DocMeta, InsuranceChunk, TableMeta
 
 logger = logging.getLogger(__name__)
@@ -288,6 +288,23 @@ def _dense(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
+def _rescue_title(prev: dict) -> Optional[str]:
+    """직전 조각 끝에서 특약 제목으로 보이는 줄을 찾는다 (경계 누락 복구용).
+
+    boundaries가 점수 미달로 놓친 특약 경계는 "이전 특약 마지막 조각의 끝에
+    제목 줄 + 새 특약 제1조" 형태로 남는다. 제목 줄 조건: 특약 접미사로 끝나고
+    짧으며 조 헤딩/인용이 아닐 것.
+    """
+    if prev.get("is_table"):
+        return None
+    lines = [l.strip() for l in prev["text"].rstrip().split("\n") if l.strip()]
+    for ln in reversed(lines[-3:]):
+        if (TITLE_SUFFIX.search(ln) and len(ln) <= 50
+                and not ART.match(ln) and not CITE.match(ln)):
+            return ln
+    return None
+
+
 def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
     """약관 라벨 부여 + 조 재추출(인용 가드) + 푸터/목차/제목누수 제거."""
     for c in data:
@@ -307,6 +324,10 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
     cur_pg = None
     todo: list[Boundary] = []       # 이 페이지에서 아직 전환 안 된 경계들
     lab, kind = None, "front"
+    # 경계 누락 복구 상태: (복구 라벨, 복구 당시 bounds 기준 라벨).
+    # bounds 기준 라벨이 바뀌면(진짜 경계 도달) 복구를 해제한다.
+    rescue: Optional[tuple[str, str]] = None
+    bounds_lab: Optional[str] = None    # rescue 무시하고 bounds가 주는 라벨
 
     for c in data:
         pg = c["_key"][0]
@@ -320,6 +341,12 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
                 lab, kind = label_for(bounds, pg - 1)
             else:
                 lab, kind = label_for(bounds, pg)
+            bounds_lab = lab
+            if rescue is not None:
+                if kind == "yak" and lab == rescue[1]:
+                    lab = rescue[0]     # bounds가 아직 놓친 구간 — 복구 라벨 유지
+                else:
+                    rescue = None       # 진짜 경계 도달
         if todo:
             frag = _dense(c["text"])
             switched = None
@@ -339,6 +366,8 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
             if switched is not None:
                 lab, kind = switched.label, switched.kind
                 todo = todo[todo.index(switched) + 1:]
+                bounds_lab = lab
+                rescue = None
         if lab != cur_label:
             cur_label, cur_art, cur_title = lab, None, None
 
@@ -395,6 +424,22 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
                     # 새 라벨 첫 조각이 형법 조문 나열("제297조(강간)")일 수 있으므로
                     # new_art==1이 아니면 받지 않고 진짜 제1조가 나올 때까지 기다린다.
                     if new_art == 1 or (cur_art is not None and cur_art < new_art <= cur_art + 10):
+                        # 경계 누락 복구: 특약 진행 중 제1조로 리셋되면 새 특약이
+                        # 시작된 것인데 boundaries가 경계를 못 잡은 상태다. 직전
+                        # 조각 끝의 제목 줄을 찾아 섹션 라벨로 승격한다 (art_nonmono
+                        # 지표가 잡던 "3→1 리셋 = 이전 특약에 오염" 문제의 대응).
+                        if (new_art == 1 and kind == "yak"
+                                and cur_art is not None and cur_art >= 2 and cleaned):
+                            t = _rescue_title(cleaned[-1])
+                            if t:
+                                prev = cleaned[-1]
+                                cut = prev["text"].rstrip().rfind(t)
+                                if cut >= 0:
+                                    prev["text"] = (prev["text"][:cut]
+                                                    + prev["text"][cut + len(t):]).rstrip()
+                                rescue = (t, bounds_lab)
+                                lab = t
+                                cur_label = lab
                         cur_art, cur_title = new_art, new_title
 
             cc = c if si == 0 else {**c, "chunk_id": f"{c['chunk_id']}~{si}"}
