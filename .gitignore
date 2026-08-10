@@ -14,5 +14,7 @@ dist/
 eval/*.jsonl
 !eval/goldenset.jsonl
 !eval/questions_30327.jsonl
+# qgen.py 산출 질문셋은 온도 0.8 생성이라 재현 불가 — 골든셋으로 커밋
+!eval/questions_gen_*.jsonl
 eval/*.log
 eval/*.csv
