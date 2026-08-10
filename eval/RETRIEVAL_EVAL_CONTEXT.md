@@ -28,7 +28,7 @@ token_count, table_id, content` (v2는 `chunk_type_keyword`, 일부 `chunk_type_
   - `qwen3.6:35b-a3b`, `gemma4:26b-a4b-it-qat` — 예비/심판용.
     **주의: 둘 다 thinking 모델 — API 호출 시 `"think": false` 필수** (안 끄면 content가 빈 문자열)
 - **임베딩**: `insurance_chunker/embedder.py`가 기대하는 기본값은
-  `EMBED_BACKEND=ollama`, `EMBED_MODEL=qwen3:embedding`(1024d) —
+  `EMBED_BACKEND=ollama`, `EMBED_MODEL=qwen3-embedding:0.6b`(1024d) —
   **이 임베딩 모델은 아직 ollama에 설치 안 돼 있음.** 선택지:
   1. `~/ollama-bin/ollama pull <임베딩 모델>` (qwen3 embedding 계열 태그 확인 필요)
   2. `EMBED_BACKEND=sentence_transformers`로 BGE-M3 사용 (`uv pip install -e ".[st]"` 필요, 다운로드 ~2GB)

@@ -134,13 +134,22 @@ def _chunk_policy_terms(
     # 폰트 기반 경계 감지
     bounds = None
     det = None
+    toc_titles: list[str] = []
     if pdf_path:
         try:
             import fitz
             from .boundaries import assess
+            from .toc import extract_toc_titles_ordered
             with fitz.open(pdf_path) as doc:
                 bounds, det = find_bounds(doc)
                 level, reasons = assess(doc, det, bounds)
+                # 목차는 문서가 스스로 선언한 특약 목록 — 조판 관습과 무관하다.
+                # 경계 검출이 놓친 특약의 이름을 여기서 찾는다(rechunk.clean).
+                try:
+                    toc_titles = extract_toc_titles_ordered(doc, det.front_end_page)
+                    logger.info(f"목차 제목 수확: {len(toc_titles)}개")
+                except Exception as e:
+                    logger.warning(f"목차 추출 실패(경계 검출만으로 진행): {e}")
             logger.info(f"폰트 경계 감지: {len(bounds)}개 (본문폰트={det.body_size}, 제목폰트={det.title_size})")
             if level == "weak":
                 for r in reasons:
@@ -166,7 +175,7 @@ def _chunk_policy_terms(
         logger.warning("경계 없음 → 단순 페이지 청킹으로 폴백")
         return _chunk_plain_text(pages, meta), []
 
-    cleaned = clean(base_chunks, bounds)
+    cleaned = clean(base_chunks, bounds, toc_titles=toc_titles)
     merged = merge(cleaned, meta, target=target, hard_max=hard_max)
     chunks, table_metas = finalize(merged, meta)
     chunks = mark_boilerplate(chunks)
@@ -190,9 +199,36 @@ _ART_HEAD_LINE = re.compile(
     r"(?:\)?\s*$|\)\s*(?=①|1\.\s))", re.M)
 
 
+_MIN_HEAD_BODY_CHARS = 4  # 헤더 매치 사이 실질 텍스트 최소치(공백 제외)
+
+
 def _split_at_article_heads(para: str) -> list[str]:
-    """빈 줄 없이 이어진 단락을 조 제목 줄 앞에서 분할."""
-    starts = [m.start() for m in _ART_HEAD_LINE.finditer(para) if m.start() != 0]
+    """빈 줄 없이 이어진 단락을 조 제목 줄 앞에서 분할.
+
+    헤더로 보이는 줄이 바로 앞/뒤에 실질 본문 없이 다른 헤더와 곧장 붙어 있으면
+    (예: 정의 조항 안에 "형법 제297조(강간)/제298조(강제추행)/…"처럼 타법령
+    조문을 목록으로 나열) 진짜 조 제목이 아니라 인용 목록이다 — 진짜 조는 항상
+    본문 문장을 동반하므로, 그런 매치는 분할 지점에서 제외해 나열 전체를
+    이웃 조각에 붙여 둔다.
+    """
+    matches = list(_ART_HEAD_LINE.finditer(para))
+    if not matches:
+        return [para]
+
+    def gap_len(a_end: int, b_start: int) -> int:
+        return len(re.sub(r"\s+", "", para[a_end:b_start]))
+
+    starts = []
+    for i, m in enumerate(matches):
+        if m.start() == 0:
+            continue
+        prev_trivial = i > 0 and gap_len(matches[i - 1].end(), m.start()) < _MIN_HEAD_BODY_CHARS
+        next_trivial = (i + 1 < len(matches)
+                        and gap_len(m.end(), matches[i + 1].start()) < _MIN_HEAD_BODY_CHARS)
+        if prev_trivial or next_trivial:
+            continue
+        starts.append(m.start())
+
     if not starts:
         return [para]
     bounds = [0] + starts + [len(para)]

@@ -18,13 +18,158 @@ from dataclasses import dataclass, field
 import fitz  # PyMuPDF
 
 
-TITLE_SUFFIX = re.compile(r"(특별약관|보통약관|특약|담보)\s*$")
+TITLE_SUFFIX = re.compile(r"(특별약관|보통약관|특약|담보)\s*[ⅠⅡⅢⅣⅤIVX0-9()]*\s*$")
 # 제목 폰트 인정 임계: '특약/약관'으로 끝나는 줄이 이만큼은 있어야 한다
 MIN_TITLE_EVIDENCE = 4
 MIN_TITLE_GAP = 0.8
-PRODUCT = re.compile(r".*보험[\sⅠⅡⅢⅣⅤIVX0-9]*$")
-DIVIDER = re.compile(r"^\d+\.\s")
+PRODUCT = re.compile(r".*보험")
+# 보험료정산 추가특약 등, 상품명이 아닌 "보험" 포함 짧은 줄이 후보로 끼어드는 걸 막는
+# 최소 근거는 두지 않고 대신 크기·길이로 우선순위를 매긴다(아래 product_cands 정렬).
+GWAN = re.compile(r"^제\s*\d+\s*관\b")
+# 절/관 장 구분 헤더 — 제목 폰트로 조판돼 후보 점수를 받지만 특약 제목의 일부가
+# 될 수 없다. pending에 섞이면(예: "제2절 보장조항" + "2-1. 갱신형…") 뒤따르는
+# 진짜 제목의 앞줄로 오인돼 라벨이 잘리므로 후보 단계에서 원천 차단한다.
+_CHAPTER_DIV = re.compile(r"^제\s*\d+\s*[절관장편]\b")
+# 번호 접두 — 순번("13. ") / 하위그룹 번호("2-1. ", "2-6. ") 모두 인식.
+# 하이픈형을 놓치면(예전 버그) "2-1. 갱신형 중증화상환자 산정특례대상" 같은
+# 앞줄이 이어붙일 근거 없는 본문 조각으로 오판돼 통째로 버려진다.
+DIVIDER = re.compile(r"^\d+(?:-\d+)*\.\s")
 BYEOLPYO = re.compile(r"^【\s*(?:별표|부표)\s*([0-9\-]+)\s*】\s*(.*)")
+
+# ── 다중 신호 경계 점수제 ────────────────────────────────────────────────────
+# 폰트 크기 하나에만 기대면 (a) 노이즈(목차·마케팅 문구)를 제목으로 오인하거나
+# (b) 문서에 제목 폰트 신호가 아예 없을 때 경계 감지가 통째로 죽는다.
+# 여러 신호를 점수로 합산해 완충하고, 폰트는 그중 하나로 낮춘다.
+_DOT_LEADER = re.compile(r"[·.]{4,}|…{2,}")
+_OTHER_LAW = re.compile(r"(법률|법|규칙|시행령|고시)\s*$")
+_PURE_SYMBOLIC = re.compile(r"^[\d.\-\s※▪◉]+$")
+# "제N조(...)"는 조 단위 제목 — 특약(yak) 경계와는 다른 계층이라 rechunk.py의
+# ART 정규식이 별도로 처리한다. 여기서 후보로 안 잡아야 짧고 굵은 조 제목이
+# 전부 특약 경계로 오인되는 대량 오탐(문서당 수백 건)을 막을 수 있다.
+_ART_LIKE = re.compile(r"^제\s*\d+\s*조(?:의\s*\d+)?\s*[\(（]")
+# <용어풀이> [절차 안내] 같은 본문 내 콜아웃 박스 — 별표(【】)와 다른 괄호 기호라
+# BYEOLPYO에 안 걸리고 짧고 굵게 조판돼 특약 제목처럼 보이지만 특약 경계는 아니다.
+_CALLOUT = re.compile(r"^[<\[].{1,30}[>\]]$")
+# 본문 문장이 다른 특약명을 인용하며 끝나는 경우("...다만 A특약 또는 B특별약관")
+# — 접미사 매치는 통과하지만 문장 내부 어미·접속사가 섞여 있으면 제목이 아니라
+# 인용 조각이다. 진짜 제목엔 이런 문장 성분이 없다.
+_MID_SENTENCE = re.compile(r"(다만|습니다|합니다|또는|정하지|않은|않는|①|②|③|④|⑤)")
+# 조판상 앞 특약의 마지막 문장("…따릅니다.")과 다음 특약 제목이 한 물리 줄로 붙어
+# 나오는 문서(표 형태 단체약관)가 있다 — 마지막 문장 종결 뒤 꼬리만 제목 후보로 쓴다.
+_SENT_TAIL = re.compile(r"^.*(?:니다|한다|된다)\.\s+(\S.*)$")
+# 접미사 단독 줄("특별약관")은 표지/장 구분 페이지의 장식 — 제목이 아니다.
+# "약관"은 3줄 감김의 마지막 꼬리("…보장 특별" + "약관")로도 나타난다.
+_BARE_SUFFIX = re.compile(r"^(특별약관|보통약관|특약|담보|약관)$")
+# 로마숫자 장 구분("Ⅰ. 상해 관련 특별약관")은 특약 묶음 헤더 — 경계로 만들면
+# 뒤따르는 첫 특약과 라벨이 충돌한다.
+_ROMAN_CH = re.compile(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\.\s")
+# 번호 구분선("5. 기타 특별약관")과 번호 특약 제목("13. …(355간편가입)보장 특별약관")
+# 구분: 구분선은 괄호 한정어가 없고 짧거나 묶음 명사(기타/관련/…)로 이뤄진다.
+# 폰트로는 못 가른다(30327은 구분선과 특약 제목이 같은 12.9pt).
+_GENERIC_GROUP = re.compile(r"기타|관련|담보\s*등|및\s")
+# 【별표N】표기 없이 제목 폰트로 조판된 부록 표 제목(산정특례대상질병 분류표 등)
+_TABLE_TITLE = re.compile(r"^.{2,40}(분류표|등급표|급표)\s*$")
+# 약관 뒤에 붙는 부록 헤더 — 이 아래는 타 법령 전문이 수십 페이지 이어져서
+# 법령 조번호(의료법 제36조 등)가 직전 특약의 조로 오인된다(실손류 문서).
+_APPENDIX_HEAD = re.compile(
+    r"^(?:약관에서\s*)?인용(?:된)?\s*법[\W\s]*규정\s*$"
+    r"|^(?:가나다\s*순?\s*)?특별약관\s*색인\s*$"
+    r"|^약관\s*요약서\s*$")
+
+_W_SUFFIX, _W_FONT, _W_BOLD, _W_ISOLATED, _W_SHORT = 1.6, 1.4, 1.0, 0.8, 0.6
+_W_DOT_LEADER, _W_OTHER_LAW = 2.0, 1.5
+SCORE_THRESHOLD = 2.4
+
+
+_SENT_END = re.compile(r"[다요]\s*\.\s*$")  # 완결 문장 — 제목은 '다.'로 끝나지 않는다
+# 제목은 조사·연결어미로 끝나지 않는다. 이렇게 끝나면 본문 문장이 줄바꿈·컬럼폭에
+# 잘려 들어온 조각이다 — KB 용어정의 표의 "【별표1】(장해분류표)에서 정한 …장해상태를",
+# 메리츠 잔존 오탐의 "이 추가특별약관에 가입된 피보험자는 …" 류가 여기 걸린다.
+_DANGLING_PARTICLE = re.compile(
+    r"(?:을|를|이|가|은|는|에|의|로|으로|와|과|에서|에게|부터|까지|보다|라|며|고)\s*$")
+# 인용 접속으로 시작하는 줄("제2항에도 불구하고 …")은 본문이지 제목이 아니다.
+_CITE_LEAD = re.compile(r"^제\s*\d+\s*[항호목조][의\s]*\S*\s*(?:에도|에|은|는)?\s*(?:불구|따라|정한)")
+# 본문 열거 항목("∙ 제1호 : …", "· 제2항 …")은 글머리표+항/호 표기로 시작한다.
+# KB에서 이런 줄 하나가 우연히 "…특별약관"으로 끝나 청크 절반(3,149개)을 흡수했다.
+_BULLET_ENUM = re.compile(r"^\s*[∙·▪▫◦・\-–—]\s*제\s*\d+\s*[항호목]")
+# 제목 길이 상한. 실측 분포(메리츠 30327 섹션 148개: 중앙 17자, 90%tile 28자,
+# 최대 45자 / KB 실제 특약명 ~40자)에 근거해 55자로 둔다. 이보다 길면 본문 문장이다.
+_MAX_TITLE_LEN = 55
+# 접미사로 끝나더라도 중간에 문장 구조(부사격 조사·관형형 어미)가 있으면 본문 조각이다.
+# "이 추가특별약관에 가입된 피보험자는 … 특별", "…산출방법서"에서 정하는 바에 따라 … 특별약관".
+# 특약명은 명사구라 이런 성분이 없다. 주격/목적격 조사는 '어린이 ', '장애인 ' 같은
+# 정상 제목을 오탐하므로 제외하고, 오탐 위험이 낮은 것만 넣는다.
+# 주의: '따른'·'의한'은 넣으면 안 된다 — "기상현상에 따른 피해 분류표",
+# "유독성 물질에 의한 불의의 중독 및 노출 분류표"처럼 실제 별표 제목에 쓰인다
+# (30327 diff에서 정상 별표 2개가 사라져 실측으로 확인).
+_SENTENCE_MID = re.compile(
+    r"(?:에서|에게|에도|에는|으로|로서|로써|보다|까지|부터)\s"
+    r"|(?:된|하는|되는|하지|따라|정한|정하는|말하는)\s")
+
+
+def _invalid_candidate(txt: str) -> bool:
+    return (not (2 <= len(txt) <= _MAX_TITLE_LEN) or bool(_BULLET_ENUM.match(txt))
+            or bool(_PURE_SYMBOLIC.match(txt))
+            or bool(_ART_LIKE.match(txt)) or bool(_CALLOUT.match(txt))
+            or bool(_MID_SENTENCE.search(txt)) or bool(_BARE_SUFFIX.match(txt))
+            or bool(_SENT_END.search(txt)) or bool(_CHAPTER_DIV.match(txt))
+            or bool(_DANGLING_PARTICLE.search(txt)) or bool(_CITE_LEAD.match(txt))
+            or bool(_SENTENCE_MID.search(txt)))
+
+
+def is_title_like(txt: str) -> bool:
+    """제목 후보로 쓸 수 있는 줄인가 (문장 조각·조 헤딩·콜아웃 등 배제).
+
+    boundaries 밖(rechunk의 경계 복구)에서도 같은 기준을 쓰기 위한 공개 함수.
+    """
+    return not _invalid_candidate(txt.strip())
+
+
+def _signal_score(txt: str, has_suffix: bool, sz: float, is_bold: bool,
+                  is_isolated: bool, det: "Detection") -> float:
+    s = 0.0
+    if has_suffix:
+        s += _W_SUFFIX
+    if det.title_size is not None:
+        ratio = max(0.0, sz - det.body_size) / max(0.1, det.title_size - det.body_size)
+        s += _W_FONT * min(1.0, ratio)
+    if is_bold:
+        s += _W_BOLD
+    if is_isolated:
+        s += _W_ISOLATED
+    s += _W_SHORT * (1.0 if len(txt) < 25 else max(0.0, (60 - len(txt)) / 35))
+    if _DOT_LEADER.search(txt):
+        s -= _W_DOT_LEADER
+    if _OTHER_LAW.search(txt) and not has_suffix:
+        s -= _W_OTHER_LAW
+    return s
+
+
+def _score_candidate(txt: str, sz: float, is_bold: bool, is_isolated: bool,
+                      det: "Detection") -> float:
+    if _invalid_candidate(txt) or len(txt) > 60:
+        return 0.0
+    return _signal_score(txt, bool(TITLE_SUFFIX.search(txt)), sz, is_bold, is_isolated, det)
+
+
+def _try_title(parts: list[tuple[str, float, bool, bool]],
+               det: "Detection") -> str | None:
+    """pending 줄 묶음을 하나의 제목으로 판정. 미완성(접미사 미도달)이면 None.
+
+    접미사 검사는 공백 제거본으로 한다 — 줄바꿈이 '특별'/'약관' 사이를 가르면
+    공백 포함 병합문에서는 접미사가 안 잡힌다.
+    """
+    joined = re.sub(r"\s+", " ", " ".join(p[0] for p in parts)).strip()
+    dense = joined.replace(" ", "")
+    if not TITLE_SUFFIX.search(dense):
+        return None
+    if _invalid_candidate(joined):
+        return None
+    sz = max(p[1] for p in parts)
+    is_bold = any(p[2] for p in parts)
+    is_isolated = any(p[3] for p in parts)
+    s = _signal_score(joined, True, sz, is_bold, is_isolated, det)
+    return joined if s >= SCORE_THRESHOLD else None
 BASE_START = re.compile(r"^제\s*1\s*조\s*\(")
 TOC = re.compile(r"[·.]{6,}|…{3,}")
 
@@ -54,17 +199,35 @@ class Detection:
     title_evidence: int = 0        # 제목 폰트 판정 근거 줄 수
 
 
+_BOLD_FLAG = 1 << 4  # PyMuPDF span flags 비트4 = 굵게
+
+
 def _lines(doc):
-    """(page_1based, max_size, text) 단위로 페이지의 모든 줄을 순회."""
+    """(page_1based, max_size, text) 단위로 페이지의 모든 줄을 순회. (하위호환)"""
+    for pno, sz, txt, _bold, _isolated in _lines_rich(doc):
+        yield pno, sz, txt
+
+
+def _lines_rich(doc):
+    """(page, size, text, is_bold, is_isolated) — 다중신호 점수제 입력.
+
+    is_isolated: 이 줄이 속한 블록이 한 줄짜리인가(제목은 보통 단독 블록으로
+    조판됨, 본문 단락은 여러 줄이 한 블록에 뭉침) — 빈 줄 위아래 신호의 근사치.
+    """
     for pno in range(1, doc.page_count + 1):
         for b in doc[pno - 1].get_text("dict")["blocks"]:
-            for ln in b.get("lines", []):
+            block_lines = b.get("lines", [])
+            is_isolated = len(block_lines) == 1
+            for ln in block_lines:
                 sp = [s for s in ln["spans"] if s["text"].strip()]
                 if not sp:
                     continue
                 sz = max(s["size"] for s in sp)
                 txt = "".join(s["text"] for s in sp).strip()
-                yield pno, round(sz, 1), txt
+                is_bold = any(s["flags"] & _BOLD_FLAG for s in sp) or any(
+                    "bold" in s.get("font", "").lower() for s in sp
+                )
+                yield pno, round(sz, 1), txt, is_bold, is_isolated
 
 
 def detect(doc) -> Detection:
@@ -102,7 +265,10 @@ def detect(doc) -> Detection:
 
     product = None
     if product_cands:
-        product_cands.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        # "(무)"(무배당) 접두는 상품명 표지 줄의 강한 신호 — 동급 후보 중 우선.
+        # 그다음 폰트 크기, 그다음 길이(짧은 "보험약관" 같은 잡음 줄보다 실제 상품명이 김).
+        product_cands.sort(key=lambda x: (x[2].strip().startswith("(무)"), x[0], x[1]),
+                           reverse=True)
         product = product_cands[0][2].strip()
 
     front_end_page = (base_start_page - 1) if base_start_page else None
@@ -116,34 +282,123 @@ def detect(doc) -> Detection:
 
 
 def _is_divider(txt: str, product: str | None) -> bool:
-    if DIVIDER.match(txt) or txt.endswith("담보"):
+    if _ROMAN_CH.match(txt):
+        return True
+    if DIVIDER.match(txt):
+        # 번호가 붙어도 괄호 한정어가 있는 긴 이름은 특약 제목이다
+        # ("13. 일반상해입원일당(1일이상)(355간편가입)보장 특별약관").
+        if not TITLE_SUFFIX.search(txt.replace(" ", "")):
+            return True
+        if "(" in txt or "（" in txt:
+            return False
+        return bool(_GENERIC_GROUP.search(txt)) or len(txt) < 18
+    if txt.endswith("담보"):
         return True
     if product and txt == f"{product} 특별약관":
         return True
     if re.match(r"^.{2,30}\s특별약관$", txt) and "제" not in txt and len(txt) < 25:
         return txt.endswith("보험 특별약관")
+    # "제N관 OOO"(예: 제1관 목적 및 용어의 정의)는 보통약관·각 특약 내부에 반복되는
+    # 하위 목차 제목이다. 제목 폰트로 잡히면 그때마다 새 "yak" 경계가 되어 현재
+    # 특약/보통약관 라벨을 덮어쓰므로, 여러 특약이 같은 관 이름을 재사용하는 문서에서
+    # 서로 다른 특약의 조항이 같은 section으로 뒤섞이는 원인이 된다. 새 경계로 만들지
+    # 않고 현재 라벨(부모 특약/보통약관)이 계속 이어지게 한다.
+    if GWAN.match(txt):
+        return True
     return False
 
 
 def find(doc, det: Detection | None = None) -> tuple[list[Boundary], Detection]:
-    """제목 폰트·별표 헤더로 경계 목록을 만든다."""
+    """다중 신호 점수제(폰트+굵기+고립도+접미사+길이)로 경계 목록을 만든다.
+
+    폰트 크기 단독 판정(예전 방식)은 (a) 목차·마케팅 문구를 제목으로 오인하거나
+    (b) 문서에 제목 폰트 신호가 없으면 경계 감지가 통째로 죽는 문제가 있었다.
+    점수제는 폰트를 여러 신호 중 하나로 낮춰서 신호 없는 문서에서도 접미사·굵기·
+    고립도만으로 버틸 여지를 주고, 노이즈는 음의 신호(점선·타법령 인용)로 누른다.
+    """
     if det is None:
         det = detect(doc)
 
     bounds: list[Boundary] = []
-    has_font = det.title_size is not None
     front_end = det.front_end_page or 0
+    # 제목이 여러 줄로 감길 수 있어("2. 일반상해사망(체증형,10년후2배지급)" +
+    # "(355간편가입)보장 특별약관") 경계 확정은 항상 pending 묶음 단위로 한다:
+    # 신호가 있는 줄(score>0)을 같은 (페이지,폰트크기) 키로 모으고, 묶음의
+    # 공백 제거본이 특약 접미사에 도달한 순간 병합 라벨로 판정한다. 접미사에
+    # 도달하지 못한 묶음(법령명·콜아웃·상품명 조각)은 경계가 되지 않는다.
+    pending: list[tuple[str, float, bool, bool]] = []
+    pending_key: tuple[int, float] | None = None
 
-    for pno, sz, txt in _lines(doc):
-        if has_font and det.title_lo <= sz <= det.title_hi:
-            if pno <= front_end or _is_divider(txt, det.product):
+    def _flush():
+        nonlocal pending, pending_key
+        pending, pending_key = [], None
+
+    for pno, sz, txt, is_bold, is_isolated in _lines_rich(doc):
+        m = BYEOLPYO.match(txt)
+        # 본문·표 셀 안의 별표 인용("【별표1】(장해분류표)에서 정한 …장해상태를")은
+        # 헤딩이 아니다 — 꼬리가 문장으로 이어지면 경계로 만들지 않는다.
+        if m and len(txt) < 45 and (not m.group(2).strip() or is_title_like(m.group(2))):
+            lab = re.sub(r"\s+", " ", f"별표{m.group(1)} {m.group(2)}").strip()
+            bounds.append(Boundary(pno, lab, "byeolpyo"))
+            _flush()
+            continue
+        if pno <= front_end:
+            _flush()
+            continue
+        if (det.title_lo is not None and sz >= det.title_lo
+                and _TABLE_TITLE.match(txt) and not _MID_SENTENCE.search(txt)):
+            bounds.append(Boundary(pno, txt, "byeolpyo"))
+            _flush()
+            continue
+        if _APPENDIX_HEAD.match(txt) and (is_isolated or
+                (det.title_lo is not None and sz >= det.title_lo)):
+            bounds.append(Boundary(pno, txt, "byeolpyo"))
+            _flush()
+            continue
+
+        mt = _SENT_TAIL.match(txt)
+        if mt:
+            txt = mt.group(1).strip()
+
+        key = (pno, sz)
+        if _score_candidate(txt, sz, is_bold, is_isolated, det) <= 0:
+            # 접미사 단독 줄("특별약관")은 표지 장식이라 후보가 아니지만,
+            # 같은 키의 미완성 제목 조각이 대기 중이면 감긴 제목의 꼬리다
+            # ("75. 암진단비(유사암제외)(355간편가입)보장" + "특별약관").
+            if not (pending and pending_key == key and _BARE_SUFFIX.match(txt)):
+                _flush()
                 continue
-            bounds.append(Boundary(pno, txt, "yak"))
-        else:
-            m = BYEOLPYO.match(txt)
-            if m and len(txt) < 45:
-                lab = re.sub(r"\s+", " ", f"별표{m.group(1)} {m.group(2)}").strip()
-                bounds.append(Boundary(pno, lab, "byeolpyo"))
+        if pending_key != key:
+            pending = []
+        pending_key = key
+        pending = (pending + [(txt, sz, is_bold, is_isolated)])[-3:]
+
+        label = _try_title(pending, det)
+        if label is None:
+            continue                      # 접미사 미도달 — 다음 줄과 병합 대기
+        if len(pending) > 1:
+            # 마지막 줄이 그 자체로 완결된 제목이고 이어붙일 단서(여는 괄호로
+            # 시작, 접미사 단독, 앞부분 괄호 미닫힘, 번호 시작 앞줄)가 없으면
+            # 앞의 대기분은 우연히 낀 본문 조각이다 — 버리고 단독 제목만 쓴다.
+            last_txt = pending[-1][0]
+            head_items = pending[:-1]
+            head = " ".join(p[0] for p in head_items)
+            # 장/절 구분("제2절 보장조항") 같은 무관한 줄이 앞에 끼어 pending[0]이
+            # 실제 제목 시작이 아닐 수 있다 — 번호 신호는 head 전체에서 찾는다.
+            continuation = (last_txt.startswith(("(", "（"))
+                            or _BARE_SUFFIX.match(last_txt)
+                            or any(DIVIDER.match(p[0]) for p in head_items)
+                            or (head.count("(") + head.count("（")
+                                > head.count(")") + head.count("）")))
+            if not continuation:
+                alone = _try_title([pending[-1]], det)
+                if alone is not None:
+                    label = alone
+        if _is_divider(label, det.product):
+            _flush()
+            continue
+        bounds.append(Boundary(pno, label, "yak"))
+        _flush()
 
     if det.base_start_page is not None:
         base_label = f"{det.product} 보통약관" if det.product else "보통약관"

@@ -29,7 +29,7 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
   │
   ├─ chunker.py       오케스트레이터 → InsuranceChunk + TableMeta 출력
   │
-  ├─ embedder.py      임베딩 (Ollama qwen3:embedding / BGE-M3)
+  ├─ embedder.py      임베딩 (Ollama qwen3-embedding:0.6b / BGE-M3)
   │
   ├─ db/storage.py    pgvector upsert (policy_chunks 테이블)
   │
@@ -238,7 +238,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 |---|---|---|
 | `DATABASE_URL` | — | PostgreSQL 연결 문자열 (필수, dry-run 제외) |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama 서버 주소 |
-| `EMBED_MODEL` | `qwen3:embedding` | Ollama 임베딩 모델 |
+| `EMBED_MODEL` | `qwen3-embedding:0.6b` | Ollama 임베딩 모델 |
 | `EMBED_BACKEND` | `ollama` | `ollama` \| `sentence_transformers` (BGE-M3 전환) |
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
 | `CLAUDE_BIN` | `claude` | VLM 표 추출에 사용하는 Claude CLI 실행 경로 |

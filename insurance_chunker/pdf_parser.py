@@ -19,9 +19,13 @@ from .models import PageResult
 logger = logging.getLogger(__name__)
 
 
-def _overlap(a, b, tol: float = 1.0) -> bool:
-    return not (a[2] <= b[0] + tol or b[2] <= a[0] + tol
-                or a[3] <= b[1] + tol or b[3] <= a[1] + tol)
+def _center_in(line_bbox, table_bbox) -> bool:
+    """줄 중심점이 표 bbox 안인가 — 블록 단위 any-overlap 제외는 표에 인접한
+    조 헤딩 줄까지 블록째 삼켜 텍스트/표 양쪽에서 유실시켰다(프리미엄 p332
+    제9조). 줄 중심점 기준이면 경계에 걸친 헤딩은 살고 표 내용은 빠진다."""
+    cx = (line_bbox[0] + line_bbox[2]) / 2
+    cy = (line_bbox[1] + line_bbox[3]) / 2
+    return table_bbox[0] <= cx <= table_bbox[2] and table_bbox[1] <= cy <= table_bbox[3]
 
 
 def parse_text(
@@ -53,18 +57,21 @@ def parse_text(
             except Exception:
                 tboxes = []
 
-            # 텍스트 블록 추출 — 표 영역과 겹치는 블록 제외
+            # 텍스트 추출 — 표 영역 제외는 줄 단위로 (블록 단위는 헤딩 유실)
             blocks_text: list[str] = []
-            for blk in page.get_text("blocks"):
-                x0, y0, x1, y1, txt, _bno, btype = blk
-                if btype != 0:  # 텍스트 블록만
+            for blk in page.get_text("dict")["blocks"]:
+                if blk.get("type", 1) != 0:  # 텍스트 블록만
                     continue
-                txt = txt.strip()
-                if not txt:
-                    continue
-                if any(_overlap((x0, y0, x1, y1), tb) for tb in tboxes):
-                    continue
-                blocks_text.append(txt)
+                keep: list[str] = []
+                for ln in blk.get("lines", []):
+                    txt = "".join(s["text"] for s in ln["spans"]).strip()
+                    if not txt:
+                        continue
+                    if any(_center_in(ln["bbox"], tb) for tb in tboxes):
+                        continue
+                    keep.append(txt)
+                if keep:
+                    blocks_text.append("\n".join(keep))
 
             results.append(PageResult(
                 page_num=pno,

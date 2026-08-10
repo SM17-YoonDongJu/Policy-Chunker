@@ -1,7 +1,7 @@
 """임베딩 생성.
 
 EMBED_BACKEND 환경변수:
-  ollama              → qwen3:embedding 1024d
+  ollama              → qwen3-embedding:0.6b 1024d
   sentence_transformers → BGE-M3 1024d
 출처: rag/pipeline/embedder.py
 """
@@ -20,10 +20,15 @@ logger = logging.getLogger(__name__)
 
 EMBED_BACKEND = os.environ.get("EMBED_BACKEND", "ollama")
 OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("EMBED_MODEL",  "qwen3:embedding")
+OLLAMA_MODEL = os.environ.get("EMBED_MODEL",  "qwen3-embedding:0.6b")
 OLLAMA_DIM   = int(os.environ.get("EMBED_DIM", "1024"))
 ST_MODEL     = os.environ.get("ST_MODEL", "BAAI/bge-m3")
 ST_DIM       = int(os.environ.get("ST_DIM",   "1024"))
+
+# qwen3-embedding 비대칭 검색: 질의에만 instruct 프리픽스를 붙이고 문서는 원문 그대로
+# 색인한다. eval/retrieval_eval.py와 동일 문자열이어야 평가 수치가 재현된다.
+QUERY_INSTRUCT = ("Instruct: Given a Korean insurance policy question, "
+                  "retrieve relevant policy clauses that answer the question.\nQuery: ")
 
 _BATCH_SIZE  = 32
 _RETRY_MAX   = 3
@@ -119,6 +124,16 @@ def embed_texts(texts: list[str], ollama_url: Optional[str] = None,
     vectors = _embed_ollama(texts, url, model or OLLAMA_MODEL)
     _check_dim(vectors, OLLAMA_DIM)
     return vectors
+
+
+def embed_query(query: str, ollama_url: Optional[str] = None,
+                model: Optional[str] = None) -> list[float]:
+    """검색 질의용 임베딩. instruct 프리픽스를 붙여 문서 벡터와 비대칭 정합시킨다.
+
+    문서는 embed_chunks가 원문 그대로 색인하므로, 질의만 프리픽스를 붙여야
+    qwen3-embedding이 학습된 사용법·eval 측정 조건과 일치한다.
+    """
+    return embed_texts([QUERY_INSTRUCT + query], ollama_url=ollama_url, model=model)[0]
 
 
 def embed_chunks(chunks: list[InsuranceChunk], ollama_url: Optional[str] = None,

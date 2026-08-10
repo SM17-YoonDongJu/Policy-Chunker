@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#80868B"/>
+    </marker>
+    <style>
+      .t  { font-family: "Apple SD Gothic Neo","AppleSDGothicNeo",sans-serif; }
+      .h1 { font-size: 34px; font-weight: 700; fill: #202124; }
+      .h2 { font-size: 18px; fill: #5F6368; }
+      .bt { font-size: 22px; font-weight: 700; fill: #202124; }
+      .bd { font-size: 15px; fill: #5F6368; }
+      .fn { font-size: 16px; fill: #80868B; }
+      .num{ font-size: 15px; font-weight: 700; fill: #FFFFFF; }
+      .rl { font-size: 17px; font-weight: 700; fill: #80868B; letter-spacing: 2px; }
+      .ln { stroke: #9AA0A6; stroke-width: 2.2; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="1200" fill="#FFFFFF"/>
+
+  <text class="t h1" x="60" y="74">약관 PDF가 청크가 되기까지</text>
+  <text class="t h2" x="60" y="108">추출 → 구조 복원 → 청킹 → 색인 · 검색</text>
+  <line x1="60" y1="134" x2="1140" y2="134" stroke="#E8EAED" stroke-width="2"/>
+
+  <!-- 단계 레일 -->
+  <rect x="70" y="262" width="126" height="84"  rx="12" fill="#F8F9FA"/>
+  <text class="t rl" x="133" y="304" text-anchor="middle" transform="rotate(-90 133 304)" dominant-baseline="central">추출</text>
+
+  <rect x="70" y="374" width="126" height="308" rx="12" fill="#F8F9FA"/>
+  <text class="t rl" x="133" y="528" text-anchor="middle" transform="rotate(-90 133 528)" dominant-baseline="central">구조 복원</text>
+
+  <rect x="70" y="710" width="126" height="84"  rx="12" fill="#F8F9FA"/>
+  <text class="t rl" x="133" y="752" text-anchor="middle" transform="rotate(-90 133 752)" dominant-baseline="central">청킹</text>
+
+  <rect x="70" y="822" width="126" height="196" rx="12" fill="#F8F9FA"/>
+  <text class="t rl" x="133" y="920" text-anchor="middle" transform="rotate(-90 133 920)" dominant-baseline="central">색인 · 검색</text>
+
+  <!-- 입력 -->
+  <rect x="240" y="172" width="810" height="62" rx="14" fill="#F1F3F4" stroke="#9AA0A6" stroke-width="2"/>
+  <text class="t bt" x="645" y="211" text-anchor="middle">약관 PDF</text>
+  <path class="ln" d="M 645 234 L 645 258" marker-end="url(#ah)"/>
+
+  <!-- 1 -->
+  <rect x="240" y="262" width="810" height="84" rx="16" fill="#E8F0FE" stroke="#1A73E8" stroke-width="2"/>
+  <circle cx="280" cy="300" r="15" fill="#1A73E8"/>
+  <text class="t num" x="280" y="305" text-anchor="middle">1</text>
+  <text class="t bt" x="310" y="302">본문 텍스트 · 표 추출</text>
+  <text class="t bd" x="310" y="328">본문은 표 영역을 제외하고, 표는 4개 소스에서 뽑아 페이지별 best-of 선택</text>
+  <path class="ln" d="M 645 346 L 645 370" marker-end="url(#ah)"/>
+
+  <!-- 2 -->
+  <rect x="240" y="374" width="810" height="84" rx="16" fill="#E8F0FE" stroke="#1A73E8" stroke-width="2"/>
+  <circle cx="280" cy="412" r="15" fill="#1A73E8"/>
+  <text class="t num" x="280" y="417" text-anchor="middle">2</text>
+  <text class="t bt" x="310" y="414">실제 약관이 시작되는 지점 찾기</text>
+  <text class="t bd" x="310" y="440">첫 번째 조문 헤딩을 기준으로 상품 설명 · 가입 안내 · 목차 페이지를 제외</text>
+  <path class="ln" d="M 645 458 L 645 482" marker-end="url(#ah)"/>
+
+  <!-- 3 -->
+  <rect x="240" y="486" width="810" height="84" rx="16" fill="#E8F0FE" stroke="#1A73E8" stroke-width="2"/>
+  <circle cx="280" cy="524" r="15" fill="#1A73E8"/>
+  <text class="t num" x="280" y="529" text-anchor="middle">3</text>
+  <text class="t bt" x="310" y="526">특약 경계 확정 — 조판 신호 + 목차</text>
+  <text class="t bd" x="310" y="552">폰트 · 굵기 · 고립도를 점수화해 후보를 만들고, 목차가 채점과 이름을 담당</text>
+  <path class="ln" d="M 645 570 L 645 594" marker-end="url(#ah)"/>
+
+  <!-- 4 -->
+  <rect x="240" y="598" width="810" height="84" rx="16" fill="#E8F0FE" stroke="#1A73E8" stroke-width="2"/>
+  <circle cx="280" cy="636" r="15" fill="#1A73E8"/>
+  <text class="t num" x="280" y="641" text-anchor="middle">4</text>
+  <text class="t bt" x="310" y="638">조문 범위 복원 — 법령 인용 방어</text>
+  <text class="t bd" x="310" y="664">단조증가 가드 · 인용 조사 패턴 · 앞 줄 검사로 인용된 조번호를 걸러냄</text>
+  <path class="ln" d="M 645 682 L 645 706" marker-end="url(#ah)"/>
+
+  <!-- 5 -->
+  <rect x="240" y="710" width="810" height="84" rx="16" fill="#F3E8FD" stroke="#8430CE" stroke-width="2.4"/>
+  <circle cx="280" cy="748" r="15" fill="#8430CE"/>
+  <text class="t num" x="280" y="753" text-anchor="middle">5</text>
+  <text class="t bt" x="310" y="750">조문 단위 청킹 → 필요한 경우만 호 · 표 단위 추가 분할</text>
+  <text class="t bd" x="310" y="776">조문을 기본 단위로 두고, 길면서 나열형인 조문만 더 쪼갬</text>
+  <path class="ln" d="M 645 794 L 645 818" marker-end="url(#ah)"/>
+
+  <!-- 6 -->
+  <rect x="240" y="822" width="810" height="84" rx="16" fill="#E6F4EA" stroke="#1E8E3E" stroke-width="2"/>
+  <circle cx="280" cy="860" r="15" fill="#1E8E3E"/>
+  <text class="t num" x="280" y="865" text-anchor="middle">6</text>
+  <text class="t bt" x="310" y="862">임베딩 → pgvector 적재</text>
+  <text class="t bd" x="310" y="888">qwen3-embedding:0.6b (1024d) · halfvec HNSW + tsvector 생성 컬럼</text>
+  <path class="ln" d="M 645 906 L 645 930" marker-end="url(#ah)"/>
+
+  <!-- 7 -->
+  <rect x="240" y="934" width="810" height="84" rx="16" fill="#E6F4EA" stroke="#1E8E3E" stroke-width="2"/>
+  <circle cx="280" cy="972" r="15" fill="#1E8E3E"/>
+  <text class="t num" x="280" y="977" text-anchor="middle">7</text>
+  <text class="t bt" x="310" y="974">하이브리드 검색 — BM25 + 벡터 → RRF → 리랭커</text>
+  <text class="t bd" x="310" y="1000">각 50건 → RRF(k=60) → bge-reranker-v2-m3</text>
+
+  <line x1="60" y1="1062" x2="1140" y2="1062" stroke="#E8EAED" stroke-width="2"/>
+  <text class="t fn" x="60" y="1100">①은 내용을, ②–④는 사라진 구조를 되살리는 단계다 — 구조는 본문 텍스트가 아니라 PDF 조판 신호에서 가져온다.</text>
+  <text class="t fn" x="60" y="1130">①–⑥은 배치로 한 번 돌고, ⑦만 질의 시점에 매번 실행된다.</text>
+</svg>

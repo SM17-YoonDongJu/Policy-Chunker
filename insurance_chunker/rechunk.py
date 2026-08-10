@@ -9,38 +9,69 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import uuid as _uuid
 from typing import Optional
 
-from .boundaries import Boundary, label_for
+from .boundaries import Boundary, TITLE_SUFFIX, is_title_like, label_for
 from .models import DocMeta, InsuranceChunk, TableMeta
 
 logger = logging.getLogger(__name__)
 
 ROWS_PER_TABLE_CHUNK = 20  # 이 행 수를 초과하면 표를 child 청크로 분할
 
+# 다항목 나열형 조(면책 총칙 제5조 등)를 호/목 단위로 쪼개는 기능. 긴 면책조를
+# 통짜로 두면 희소어(스카이다이빙·오토바이 등) 신호가 희석돼 검색에서 밀린다.
+# 환경변수로 끄면(=0) 이전(v3/v4) 동작을 재현한다.
+ENUM_SPLIT       = os.environ.get("RECHUNK_ENUM_SPLIT", "1") != "0"
+# 조번호 리셋(N→1)을 특약 경계로 인정할지. 리셋은 폰트·접미사와 무관한 구조 신호라
+# 보험사 조판이 달라도 통한다(KB처럼 제목 인식이 무너진 문서의 최후 방어선).
+# RECHUNK_RESET_SPLIT=0으로 끄면 이전(v6) 동작.
+RESET_SPLIT      = os.environ.get("RECHUNK_RESET_SPLIT", "1") != "0"
+ENUM_MIN_TOKENS  = int(os.environ.get("RECHUNK_ENUM_MIN_TOKENS", "400"))
+ENUM_MIN_ITEMS   = int(os.environ.get("RECHUNK_ENUM_MIN_ITEMS", "4"))
+# 호/목 열거 항목의 시작 줄: "1." "2)" "①" "가." "나)" 등
+_ENUM_HEAD = re.compile(
+    r"^\s*(?:\d{1,2}\s*[.)]"                         # 1.  2)
+    r"|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]"                     # 원문자 호
+    r"|[가나다라마바사아자차카타파하]\s*[.)]"          # 가.  나)  목
+    r")\s+\S")
+
 def _tok(text: str) -> int:
     return int(len(text) * 0.6)  # 글자 수 × 0.6 ≈ Kiwi 형태소 토큰 수 근사
 
 # ── 범용 패턴 (한국 약관 공통) ────────────────────────────────────────────────
 FOOTER = re.compile(r"^\s*[-‐–—]\s*\d{1,3}\s*[-‐–—]\s*$")
-# 괄호 변형: ()  （）  【】 모두 허용
+# 괄호 변형: ()  （）  【】 [] 모두 허용 — DB류는 대괄호 제목을 쓴다
+# ("제23조[보험료의 납입이 연체되는 경우 납입최고(독촉)와 계약의 해지]")
 _ART_NUM   = r"제\s*(\d+)\s*조(?:의\s*\d+)?\s*"
-# 제목 내 중첩 괄호 1단계 허용 — 예: "특별부활(효력회복)", "납입최고(독촉)"
-_ART_TITLE = r"(?:[\(（]((?:[^()（）]|[\(（][^()（）]{0,20}[\)）]){1,50})[\)）]|【([^】]{1,40})】)"
+# 제목 내 중첩 괄호 1단계 허용 — 예: "특별부활(효력회복)", "납입최고(독촉)",
+# "(암(유사암, 뇌·수막의 양성신생물 제외)) 산정특례대상"(중첩 내용이 길다)
+_ART_TITLE = (r"(?:[\(（]((?:[^()（）]|[\(（][^()（）]{0,40}[\)）]){1,80})[\)）]"
+              r"|【([^】]{1,60})】|\[([^\]]{1,80})\])")
 _PARTICLES = (
-    r"(?:의|에|는|은|을|를|와|과|도|만|부터|이라|라고|에서|에도|제\s*\d|"
+    # "제\s*\d+\s*항"만 인용 신호로 인정 — "제\s*\d"까지 넓히면 진짜 헤딩 뒤에
+    # 조 인용이 바로 오는 문장("제5조(보험금의 분담) 제1조(…)의 비용")을 죽인다.
+    # 뒤에 경계(공백/쉼표/문장끝)를 요구하는 lookahead는 넣지 않는다 — "제3항에서"
+    # 처럼 조사가 공백 없이 연이어 붙는 게 한국어에서 정상이라("제3항"+"에서")
+    # 그런 lookahead는 정상 인용을 오히려 걸러낸다(실측 회귀로 확인됨).
+    r"(?:의|에|는|은|을|를|와|과|도|만|부터|이라|라고|에서|에도|제\s*\d+\s*항|"
     r"를\s*준용|의\s*죄|에\s*따|에\s*의|에\s*기재)"
 )
 
 ART       = re.compile(r"^" + _ART_NUM + _ART_TITLE)
+# 표로 추출된 영역에 흡수된 조 헤딩("| 제9조(…의 정의 및 장소) …") — 표 조각은
+# 분할하지 않지만 조 상태는 전진시켜야 뒤 조각들이 옳은 조 번호를 받는다.
+TABLE_ART = re.compile(r"(?m)^[|\s]*" + _ART_NUM + _ART_TITLE)
 # 제목이 다음 줄에 있는 형식: "제1조\n보험금의 지급"
 ART_NEXTLINE = re.compile(
     r"^" + _ART_NUM + r"\n([^①②③④⑤\(（【\n]{2,40})\s*(?:\n|$)"
 )
-# 조사 검사는 제목과 같은 줄로 제한 — 줄바꿈 뒤는 본문 시작(인용 아님)
-CITE      = re.compile(r"^" + _ART_NUM + _ART_TITLE + r"[^\S\n]*" + _PARTICLES)
+# 조사가 컬럼 폭에 밀려 다음 줄로 넘어가는 경우까지 허용한다
+# ("제6조(특정 임플란트 치조골 이식술 치료의 정의)\n에서 정한…") — 조사 뒤
+# 경계 lookahead(위 _PARTICLES)로 일반 단어 오탐은 걸러진다.
+CITE      = re.compile(r"^" + _ART_NUM + _ART_TITLE + r"\s*" + _PARTICLES)
 TITLE_ONLY = re.compile(r"^제\d+조(?:의\d+)?\s*" + _ART_TITLE + r"\s*$")
 TOC = re.compile(r"[·.]{6,}|…{3,}")
 
@@ -127,7 +158,8 @@ def _art_from_match(m: re.Match) -> tuple[int, str | None]:
     """ART / ART_NEXTLINE 매치 → (조번호, 제목). 제목 없으면 None."""
     num = int(m.group(1))
     title = next((g for g in m.groups()[1:] if g), None)
-    return num, title.strip() if title else None
+    # 감긴 제목의 개행이 제목 안에 들어올 수 있다("부활(효\n력회복)")
+    return num, re.sub(r"\s+", " ", title).strip() if title else None
 
 
 def _pageseq(cid: str) -> tuple:
@@ -142,6 +174,102 @@ def _pageseq(cid: str) -> tuple:
 
 def _is_toc(t: str) -> bool:
     return bool(TOC.search(t)) or "- 목 차 -" in t
+
+
+# 앞 줄이 조사·연결어로 끝나면 다음 줄의 "제N조(…)"는 줄바꿈으로 밀린 인용이다
+# ("…본인부담의료비는\n제3조(보장종목별 보상내용)에 따라"). 진짜 조 헤딩은 완결된
+# 문장(또는 표·빈 줄) 다음에 온다.
+_PREV_OPEN_END = re.compile(
+    r"(?:[는은이가을를의와과도만면서고며여든지]|또는|및|아래|다음|위한|따라|대한|[,·:]|-)\s*$"
+)
+# 앞 줄이 타 법령명으로 끝나면("…및 의료급여법 " + "제10조(급여비용의 부담) 동법
+# 시행령 제13조(…") 다음 줄이 "제N조("로 시작해도 그 법의 조문 인용이다 — 조사
+# 목록(_PARTICLES)엔 "법/령"이 없어 CITE가 놓친다. 실손·간편건강 특약의 산정특례
+# 정의 조항에 이런 타법령 나열이 흔하다.
+_PREV_LAW_NAME = re.compile(r"(?:법|법률|시행령|시행규칙|규정|고시|예규)\s*$")
+
+
+_ART_OPEN_NUM = re.compile(r"^제\s*(\d+)\s*조(?:의\s*\d+)?\s*[\(（](.{10,})$")
+
+
+def _art_open(ln: str) -> re.Match | None:
+    """닫는 괄호가 같은 조각에 없는 감긴 헤딩("제3조(암(유사암제외), …경계성종" —
+    제목이 다음 페이지로 넘어감). 여는 괄호가 닫는 괄호보다 많으면 미완 제목이다."""
+    m = _ART_OPEN_NUM.match(ln)
+    if m and ln.count("(") + ln.count("（") > ln.count(")") + ln.count("）"):
+        return m
+    return None
+
+
+def _heading_only_line(ln: str) -> bool:
+    """줄 전체가 헤딩 매치 하나로 완전히 소진되는가(뒤에 남는 텍스트 없음).
+
+    "제297조(강간)" 처럼 한 줄에 인용 조문 하나씩 나열하는 목록(형법/특례법
+    조문 열거)의 각 항목이 이 형태다 — 진짜 조 헤딩은 거의 항상 같은 줄이나
+    다음 줄에 본문이 이어진다."""
+    m = ART.match(ln)
+    return bool(m and not ln[m.end():].strip())
+
+
+_MIN_CITATION_RUN = 3
+
+
+def _citation_run_indices(lines: list[str]) -> set[int]:
+    """헤딩 하나로 줄 전체가 끝나는(본문 없음) 줄이 연쇄로 이어지는 구간을
+    찾는다("형법 제32장…의 죄 중\n제297조(강간)\n제298조(강제추행)\n…").
+
+    연쇄 길이 임계를 두는 이유: "제3조(정의)\n제4조(청구서류)\n보험수익자는…"
+    처럼 정의 조항의 본문이 표로 밀려 실제로 비어 있는 정상 조문도 이
+    형태(헤딩만 있는 줄)를 딱 1~2개 만든다 — 진짜 타법령 나열은 보통
+    5개 이상 이어지지만, 안전하게 3개 이상 연쇄일 때만 인용으로 판정한다.
+    """
+    nonblank = [i for i, l in enumerate(lines) if l.strip()]
+    run: list[int] = []
+    result: set[int] = set()
+
+    def flush():
+        if len(run) >= _MIN_CITATION_RUN:
+            result.update(run)
+        run.clear()
+
+    for i in nonblank:
+        if _heading_only_line(lines[i]):
+            run.append(i)
+        else:
+            flush()
+    flush()
+    return result
+
+
+def _split_articles(body: str) -> list[str]:
+    """조각 내부의 조 헤딩 줄에서 분할 — 첫 줄만 보는 ART 매치가 조각 중간에서
+    시작하는 조(제5조 헤딩이 제4조 본문과 같은 조각에 붙는 밀집 조판)를 통째로
+    앞 조에 흡수하는 문제를 막는다."""
+    lines = body.split("\n")
+    citation_run = _citation_run_indices(lines)
+    cuts = [0]
+    for i in range(1, len(lines)):
+        # 조 제목이 컬럼 폭에 잘려 닫는 괄호 없이 감기는 경우
+        # ("제20조(…부활(효" + "력회복))")가 있어 세 줄까지 붙여 검사한다.
+        probe = "\n".join(lines[i:i + 3])
+        ok = ART.match(probe) and not CITE.match(probe)
+        if not ok and not _art_open(lines[i]):
+            continue
+        if i in citation_run:
+            continue
+        prev = lines[i - 1].rstrip()
+        # "제1관 일반사항 및 용어의 정의"처럼 '의'로 끝나는 관(款) 헤더는 완결된
+        # 제목이다 — 미완 문장으로 취급하면 바로 아래 조 헤딩 분할이 막힌다.
+        if (prev and _PREV_OPEN_END.search(prev)
+                and not re.match(r"^제\s*\d+\s*관\b", prev)):
+            continue
+        if prev and _PREV_LAW_NAME.search(prev):
+            continue
+        cuts.append(i)
+    if len(cuts) == 1:
+        return [body]
+    return ["\n".join(lines[a:b]).strip()
+            for a, b in zip(cuts, cuts[1:] + [len(lines)])]
 
 
 def _parse_markdown_table(body: str) -> tuple[list[str], list[str]]:
@@ -160,19 +288,113 @@ def _parse_markdown_table(body: str) -> tuple[list[str], list[str]]:
 
 # ── clean ─────────────────────────────────────────────────────────────────────
 
-def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
+def _dense(s: str) -> str:
+    return re.sub(r"\s+", "", s)
+
+
+def _rescue_title(prev: dict) -> Optional[str]:
+    """직전 조각 끝에서 특약 제목으로 보이는 줄을 찾는다 (경계 누락 복구용).
+
+    boundaries가 점수 미달로 놓친 특약 경계는 "이전 특약 마지막 조각의 끝에
+    제목 줄 + 새 특약 제1조" 형태로 남는다. 제목 줄 조건: 특약 접미사로 끝나고
+    짧으며 조 헤딩/인용이 아닐 것.
+    """
+    if prev.get("is_table"):
+        return None
+    lines = [l.strip() for l in prev["text"].rstrip().split("\n") if l.strip()]
+    for ln in reversed(lines[-3:]):
+        # is_title_like: 본문 문장이 "…특별약관"으로 끝나 보이는 조각을 라벨로
+        # 승격시키던 문제를 차단(KB 1250p에서 한 조각이 청크 25%를 흡수했다).
+        if (TITLE_SUFFIX.search(ln) and len(ln) <= 50 and is_title_like(ln)
+                and not ART.match(ln) and not CITE.match(ln)):
+            return ln
+    return None
+
+
+def _toc_name(pool: list[str], used: set[int], context: str) -> Optional[str]:
+    """리셋 지점 주변 텍스트에서 아직 안 쓴 목차 제목을 찾는다.
+
+    목차는 특약을 문서 순서대로 나열하므로, 앞에서부터 훑되 이미 쓴 것은 건너뛴다.
+    조판 줄바꿈이 단어 중간에 공백을 넣으므로 공백을 지운 문자열로 비교한다.
+    """
+    ctx = re.sub(r"\s+", "", context)
+    for i, t in enumerate(pool):
+        if i in used or len(t) < 6:
+            continue
+        if t in ctx:
+            used.add(i)
+            return t
+    return None
+
+
+def clean(data: list[dict], bounds: list[Boundary],
+          toc_titles: Optional[list[str]] = None) -> list[dict]:
     """약관 라벨 부여 + 조 재추출(인용 가드) + 푸터/목차/제목누수 제거."""
     for c in data:
         c["_key"] = _pageseq(c["chunk_id"])
     data.sort(key=lambda c: c["_key"])
 
+    # 한 페이지에 경계가 2개 이상이면(밀집 조판 — 특약 2~3개/페이지) 페이지
+    # 단위 라벨은 페이지 전체를 마지막 특약으로 칠한다. 경계 라벨 텍스트가
+    # 나타나는 조각부터 전환하도록 페이지 내 경계 목록을 따로 관리한다.
+    page_bounds: dict[int, list[Boundary]] = {}
+    for b in bounds:
+        page_bounds.setdefault(b.page, []).append(b)
+
     cleaned: list[dict] = []
     cur_label = object()
     cur_art = cur_title = None
+    cur_pg = None
+    todo: list[Boundary] = []       # 이 페이지에서 아직 전환 안 된 경계들
+    lab, kind = None, "front"
+    # 경계 누락 복구 상태: (복구 라벨, 복구 당시 bounds 기준 라벨).
+    # bounds 기준 라벨이 바뀌면(진짜 경계 도달) 복구를 해제한다.
+    rescue: Optional[tuple[str, str]] = None
+    bounds_lab: Optional[str] = None    # rescue 무시하고 bounds가 주는 라벨
+    toc_pool: list[str] = list(toc_titles or [])
+    toc_used: set[int] = set()
+    seg_no = 0                          # 목차에서도 못 찾았을 때 붙일 합성 번호
+    n_since_art = 0                     # 현재 조가 확정된 뒤 쌓인 조각 수
 
     for c in data:
         pg = c["_key"][0]
-        lab, kind = label_for(bounds, pg)
+        if pg != cur_pg:
+            cur_pg = pg
+            todo = list(page_bounds.get(pg, []))
+            if todo:
+                # 페이지 시작은 직전 페이지까지의 라벨 — 경계 위쪽 조각(이전
+                # 특약의 끝부분)이 새 특약으로 오염되지 않게 한다. 전환은
+                # 아래에서 경계 라벨이 나타나는 조각부터 적용한다.
+                lab, kind = label_for(bounds, pg - 1)
+            else:
+                lab, kind = label_for(bounds, pg)
+            bounds_lab = lab
+            if rescue is not None:
+                if kind == "yak" and lab == rescue[1]:
+                    lab = rescue[0]     # bounds가 아직 놓친 구간 — 복구 라벨 유지
+                else:
+                    rescue = None       # 진짜 경계 도달
+        if todo:
+            frag = _dense(c["text"])
+            switched = None
+            for b in todo:
+                # base 라벨("{상품명} 보통약관")은 재구성 문자열이라 원문에 없다 —
+                # 경계 감지가 쓴 신호(제1조 시작)로 전환한다.
+                if b.kind == "base":
+                    if re.search(r"(?m)^제\s*1\s*조\s*[\(（]", c["text"]):
+                        switched = b
+                    continue
+                # 별표 라벨은 "별표3 골절 분류표"로 재구성돼 원문(【 별표3 】…)과
+                # 다르다 — 번호 뺀 제목부로도 찾아본다.
+                probes = (_dense(b.label)[:10],
+                          _dense(re.sub(r"^별표[\d\-]+\s*", "", b.label))[:10])
+                if any(p and p in frag for p in probes):
+                    switched = b
+            if switched is not None:
+                lab, kind = switched.label, switched.kind
+                todo = todo[todo.index(switched) + 1:]
+                bounds_lab = lab
+                rescue = None
         if lab != cur_label:
             cur_label, cur_art, cur_title = lab, None, None
 
@@ -199,30 +421,114 @@ def clean(data: list[dict], bounds: list[Boundary]) -> list[dict]:
         else:
             body = raw
 
-        if kind in ("base", "yak"):
-            m = ART.match(body)
-            if not m:
-                m = ART_NEXTLINE.match(body)
-            if m and not CITE.match(body):
-                new_art, new_title = _art_from_match(m)
-                # 단조증가 가드: 형법 등 타 법령 인용("제297조(강간)")이
-                # 조 번호를 오염시키지 못하게 큰 점프·역행은 무시.
-                # 단 제1조 리셋은 허용 — 경계 감지가 실패한 문서(DB류)에서
-                # 새 특약 시작을 놓치지 않기 위함
-                if cur_art is None or cur_art < new_art <= cur_art + 10 or new_art == 1:
-                    cur_art, cur_title = new_art, new_title
+        segments = ([body] if is_table or kind not in ("base", "yak")
+                    else _split_articles(body))
+        for si, seg in enumerate(segments):
+            if kind in ("base", "yak") and is_table:
+                for tm in TABLE_ART.finditer(seg):
+                    line = seg[tm.start():].split("\n", 1)[0].lstrip("| \t")
+                    if CITE.match(line):
+                        continue
+                    new_art, new_title = _art_from_match(tm)
+                    if new_art == 1 or (cur_art is not None
+                                        and cur_art < new_art <= cur_art + 10):
+                        cur_art, cur_title = new_art, new_title
+            elif kind in ("base", "yak"):
+                m = ART.match(seg)
+                if not m:
+                    m = ART_NEXTLINE.match(seg)
+                if not m and not CITE.match(seg):
+                    # 제목이 다음 페이지로 넘어가 이 조각 안에서 닫히지 않는 헤딩
+                    mo = _art_open(seg.split("\n", 1)[0])
+                    if mo:
+                        m = mo
+                if m and not CITE.match(seg):
+                    new_art, new_title = _art_from_match(m)
+                    # 단조증가 가드: 형법 등 타 법령 인용("제297조(강간)")이
+                    # 조 번호를 오염시키지 못하게 큰 점프·역행은 무시.
+                    # 제1조는 항상 허용 — 경계 감지가 실패한 문서(DB류)에서 새 특약
+                    # 시작을 놓치지 않기 위함. 단 cur_art가 막 리셋된(None) 직후엔
+                    # 새 라벨 첫 조각이 형법 조문 나열("제297조(강간)")일 수 있으므로
+                    # new_art==1이 아니면 받지 않고 진짜 제1조가 나올 때까지 기다린다.
+                    if new_art == 1 or (cur_art is not None and cur_art < new_art <= cur_art + 10):
+                        # 경계 누락 복구: 특약 진행 중 제1조로 리셋되면 새 특약이
+                        # 시작된 것인데 boundaries가 경계를 못 잡은 상태다. 직전
+                        # 조각 끝의 제목 줄을 찾아 섹션 라벨로 승격한다 (art_nonmono
+                        # 지표가 잡던 "3→1 리셋 = 이전 특약에 오염" 문제의 대응).
+                        # 리셋 판정: 직전 조가 2 이상이면 명백한 리셋(5→1).
+                        # 1조짜리 특약이 연달아 오면 1→1이라 그 조건에 안 걸리므로
+                        # (KB에 많다), 직전 제1조가 실제 본문을 가졌을 때만 추가로
+                        # 인정한다 — 같은 조 헤딩이 두 번 매치되는 오탐을 막는 조건.
+                        is_reset = cur_art is not None and (
+                            cur_art >= 2 or (cur_art == 1 and n_since_art >= 1))
+                        if new_art == 1 and kind == "yak" and is_reset and cleaned:
+                            t = _rescue_title(cleaned[-1])
+                            if t:
+                                prev = cleaned[-1]
+                                cut = prev["text"].rstrip().rfind(t)
+                                if cut >= 0:
+                                    prev["text"] = (prev["text"][:cut]
+                                                    + prev["text"][cut + len(t):]).rstrip()
+                            elif RESET_SPLIT:
+                                # 인라인 제목을 못 찾아도 리셋 자체가 "새 특약 시작"이라는
+                                # 구조 신호다(조판·접미사와 무관). 이름은 목차에서 찾고,
+                                # 그것도 없으면 합성 라벨로라도 **분할은 한다** —
+                                # 이름이 틀린 것보다 내용이 섞이는 게 검색에 더 해롭다.
+                                ctx = (cleaned[-1]["text"][-400:] + "\n" + seg[:400])
+                                t = _toc_name(toc_pool, toc_used, ctx)
+                                if not t:
+                                    seg_no += 1
+                                    t = f"{bounds_lab} · 구분{seg_no}"
+                            if t:
+                                rescue = (t, bounds_lab)
+                                lab = t
+                                cur_label = lab
+                        cur_art, cur_title = new_art, new_title
+                        n_since_art = 0
 
-        c.update(
-            _label=lab, _kind=kind,
-            _art=(cur_art if kind in ("base", "yak") else None),
-            _atitle=(cur_title if kind in ("base", "yak") else None),
-            text=(body if not is_table else raw),
-        )
-        cleaned.append(c)
+            cc = c if si == 0 else {**c, "chunk_id": f"{c['chunk_id']}~{si}"}
+            cc.update(
+                _label=lab, _kind=kind,
+                _art=(cur_art if kind in ("base", "yak") else None),
+                _atitle=(cur_title if kind in ("base", "yak") else None),
+                text=(seg if not is_table else raw),
+            )
+            cleaned.append(cc)
+            n_since_art += 1
     return cleaned
 
 
 # ── merge ─────────────────────────────────────────────────────────────────────
+
+def _split_enumerated(m: dict) -> list[dict]:
+    """다항목 나열형 조를 호/목 단위 청크로 쪼갠다. 조건 미충족 시 [m] 그대로.
+
+    첫 호 앞의 도입부("회사는 다음의 사유로 …지급하지 않습니다")는 각 조각에
+    붙여 문맥을 유지한다 — 조각이 작아도 도입부+호 항목만으로 자기완결적이 된다.
+    조 메타(article_no/title)·chunk_type은 부모에서 그대로 승계한다.
+    """
+    if not ENUM_SPLIT or m["is_table"]:
+        return [m]
+    body = m["body"]
+    lines = body.split("\n")
+    heads = [i for i, ln in enumerate(lines) if _ENUM_HEAD.match(ln)]
+    if _tok(body) < ENUM_MIN_TOKENS or len(heads) < ENUM_MIN_ITEMS:
+        return [m]
+    intro = "\n".join(lines[:heads[0]]).strip()
+    parts: list[dict] = []
+    bounds = heads + [len(lines)]
+    for a, b in zip(bounds, bounds[1:]):
+        seg = "\n".join(lines[a:b]).strip()
+        if not seg:
+            continue
+        seg_body = (intro + "\n" + seg).strip() if intro else seg
+        mm = dict(m)
+        mm["body"] = seg_body
+        mm["text"] = m["prefix"] + "\n" + m["header"] + "\n" + seg_body
+        mm["member_ids"] = list(m["member_ids"])
+        parts.append(mm)
+    return parts or [m]
+
 
 def merge(
     cleaned: list[dict],
@@ -274,9 +580,13 @@ def merge(
             flush()
     flush()
 
-    # hard_max 분할
+    # 다항목 나열조 호 단위 분할 → hard_max 분할
     final = []
     for m in merged:
+        enum_parts = _split_enumerated(m)
+        if len(enum_parts) > 1:
+            final.extend(enum_parts)
+            continue
         if _tok(m["body"]) <= hard_max:
             final.append(m)
             continue
