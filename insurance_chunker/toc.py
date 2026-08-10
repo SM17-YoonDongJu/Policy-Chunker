@@ -139,7 +139,45 @@ class _OrderedSet:
         return len(self._d)
 
 
+_OPEN, _CLOSE = "([{【〔", ")]}】〕"
+
+
+def _split_compound(t: str) -> list[str]:
+    """목차 한 줄에 '/'로 두 특약이 묶인 항목을 분리한다(현대해상 조판).
+
+        "1-13상해입원일당(1-10일)보장특별약관/상해입원일당(1-10일)[맞춤고지Ⅰ]보장특별약관"
+
+    괄호 안의 '/'는 한 이름의 일부이므로 건드리지 않는다
+    ("(3.5.5간편고지/3.2.5간편고지)", "(비갱신형/갱신형)").
+    """
+    parts, depth, cur = [], 0, []
+    for ch in t:
+        if ch in _OPEN:
+            depth += 1
+        elif ch in _CLOSE:
+            depth = max(0, depth - 1)
+        if ch == "/" and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    out = [p.strip() for p in parts if p.strip()]
+    return out if len(out) > 1 else [t]
+
+
 def _add(acc, raw: str) -> None:
+    raw = raw.strip()
+    if "/" in raw:
+        pieces = _split_compound(raw)
+        if len(pieces) > 1:
+            for p in pieces:
+                _add_one(acc, p)
+            return
+    _add_one(acc, raw)
+
+
+def _add_one(acc, raw: str) -> None:
     raw = raw.strip()
     t = _norm(raw)
     # 너무 짧거나(장 구분 조각), 전화번호·URL, 한글이 없는 항목, 본문 문장은 버린다.

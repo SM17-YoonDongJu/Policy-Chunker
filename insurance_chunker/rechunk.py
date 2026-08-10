@@ -354,6 +354,7 @@ def clean(data: list[dict], bounds: list[Boundary],
     toc_pool: list[str] = list(toc_titles or [])
     toc_used: set[int] = set()
     seg_no = 0                          # 목차에서도 못 찾았을 때 붙일 합성 번호
+    n_since_art = 0                     # 현재 조가 확정된 뒤 쌓인 조각 수
 
     for c in data:
         pg = c["_key"][0]
@@ -454,8 +455,13 @@ def clean(data: list[dict], bounds: list[Boundary],
                         # 시작된 것인데 boundaries가 경계를 못 잡은 상태다. 직전
                         # 조각 끝의 제목 줄을 찾아 섹션 라벨로 승격한다 (art_nonmono
                         # 지표가 잡던 "3→1 리셋 = 이전 특약에 오염" 문제의 대응).
-                        if (new_art == 1 and kind == "yak"
-                                and cur_art is not None and cur_art >= 2 and cleaned):
+                        # 리셋 판정: 직전 조가 2 이상이면 명백한 리셋(5→1).
+                        # 1조짜리 특약이 연달아 오면 1→1이라 그 조건에 안 걸리므로
+                        # (KB에 많다), 직전 제1조가 실제 본문을 가졌을 때만 추가로
+                        # 인정한다 — 같은 조 헤딩이 두 번 매치되는 오탐을 막는 조건.
+                        is_reset = cur_art is not None and (
+                            cur_art >= 2 or (cur_art == 1 and n_since_art >= 1))
+                        if new_art == 1 and kind == "yak" and is_reset and cleaned:
                             t = _rescue_title(cleaned[-1])
                             if t:
                                 prev = cleaned[-1]
@@ -478,6 +484,7 @@ def clean(data: list[dict], bounds: list[Boundary],
                                 lab = t
                                 cur_label = lab
                         cur_art, cur_title = new_art, new_title
+                        n_since_art = 0
 
             cc = c if si == 0 else {**c, "chunk_id": f"{c['chunk_id']}~{si}"}
             cc.update(
@@ -487,6 +494,7 @@ def clean(data: list[dict], bounds: list[Boundary],
                 text=(seg if not is_table else raw),
             )
             cleaned.append(cc)
+            n_since_art += 1
     return cleaned
 
 
