@@ -1,7 +1,20 @@
-"""여러 문서에 원문 커버리지 + 조 연속성 + 중복 검사를 일괄 실행 (이어받기 가능).
+"""여러 문서에 원문 커버리지 + 조 연속성 + 중복 + 표 구조/조 헤딩 검사를 일괄 실행.
 
-실행: .venv/bin/python eval/batch_integrity.py
+실행: .venv/bin/python eval/batch_integrity.py            # 17문서 배치 (이어받기 가능)
+      .venv/bin/python eval/batch_integrity.py --vlm <pdf>  # VLM 표 소스 승률 단건 측정
 결과: eval/batch_integrity.jsonl (문서당 한 줄 append)
+
+지표 (OHRBench 대조 — eval/GAP_ANALYSIS.md §3):
+  coverage      원문 유실률. norm()이 파이프·공백을 지우므로 표 구조 오류는 못 잡음.
+                주의: 호 분할(RECHUNK_ENUM_SPLIT) 후에는 분할 경계를 가로지르는
+                프로브가 false-missing이 되어 5~8%p 낮게 나온다(실제 유실 아님) —
+                코드 버전이 같은 실행끼리만 비교할 것
+  gaps          section별 조번호 결번 수
+  dup           인접 청크 동일 본문 수
+  table_ragged  표 청크 중 행별 열 개수가 어긋난(구조 붕괴 의심) 비율  ← 표 오류 사각 보완
+  table_page_recall  원문 표 페이지 중 표 청크가 존재하는 페이지 비율
+  art_nonmono   section 내 조번호 역행/비정상 점프(>10) 수 — 타법령 인용 오인 감시
+  cite_runs     "인용 조문"으로 병합된 청크 수 (참고용)
 """
 from __future__ import annotations
 
@@ -46,7 +59,7 @@ def check(pdf_path: str) -> dict:
 
     doc = fitz.open(pdf_path)
     chunk_dicts = [{"page": c.page_number, "content": c.content, "article": c.article_number,
-                    "section": c.section} for c in chunks]
+                    "section": c.section, "article_title": c.article_title} for c in chunks]
     first_page = min(c["page"] for c in chunk_dicts)
     page_text = {p + 1: doc[p].get_text() for p in range(first_page - 1, doc.page_count)}
 
@@ -90,10 +103,74 @@ def check(pdf_path: str) -> dict:
     dup = sum(1 for i, a in enumerate(contents) for b in contents[i + 1:i + 3]
               if a == b and len(a) > 30)
 
+    # 표 구조 충실도: 파이프 행의 열 개수가 행마다 어긋나면 정렬 붕괴 의심.
+    # coverage의 norm()이 파이프를 지워 표 붕괴에 무감각한 사각을 보완한다.
+    table_chunks = ragged = 0
+    table_chunk_pages: set[int] = set()
+    for c in chunk_dicts:
+        rows = [r for r in c["content"].splitlines() if r.lstrip().startswith("|")]
+        if len(rows) < 2:
+            continue
+        table_chunks += 1
+        table_chunk_pages.add(c["page"])
+        widths = [r.count("|") for r in rows]
+        if max(widths) - min(widths) > 1:
+            ragged += 1
+    src_table_pages = {p.number + 1 for p in doc
+                       if p.number + 1 >= first_page and p.find_tables().tables}
+    page_recall = (round(len(src_table_pages & table_chunk_pages) / len(src_table_pages), 3)
+                   if src_table_pages else None)
+
+    # 조 헤딩 오인 감시: 등장순 조번호의 역행/큰 점프는 타법령 인용을 조로
+    # 오인했거나 경계가 샌 신호다 (결번(gaps)과 달리 "그럴듯한 오번호"를 잡는다).
+    seq_by_sec = defaultdict(list)
+    for c in chunk_dicts:
+        if c["article"] and c["section"]:
+            m = re.match(r"제(\d+)조", c["article"])
+            if m:
+                n = int(m.group(1))
+                if not seq_by_sec[c["section"]] or seq_by_sec[c["section"]][-1] != n:
+                    seq_by_sec[c["section"]].append(n)
+    nonmono = sum(1 for seq in seq_by_sec.values()
+                  for prev, cur in zip(seq, seq[1:]) if cur < prev or cur - prev > 10)
+    cite_runs = sum(1 for c in chunk_dicts if c.get("article_title") == "인용 조문")
+
     return {
         "coverage": round(1 - missing_probes / total_probes, 4) if total_probes else None,
         "gaps": gaps, "chunks": len(chunk_dicts), "dup": dup,
+        "table_chunks": table_chunks,
+        "table_ragged": round(ragged / table_chunks, 3) if table_chunks else None,
+        "table_page_recall": page_recall,
+        "art_nonmono": nonmono, "cite_runs": cite_runs,
         "worst_pages": worst_pages[:5],
+    }
+
+
+def vlm_winrate(pdf_path: str) -> dict:
+    """VLM(Surya) vs pymupdf 표 소스 승률 단건 측정. 배치와 분리 — VLM 비용이 크다.
+
+    OHRBench의 "파서마다 표 품질 편차" 경고에 대응해, best_table 선택에서
+    VLM이 실제로 이기는 비율과 정렬 개선폭(더블스페이스 감소)을 수치화한다.
+    """
+    from insurance_chunker.combine import _double_spaces, select_best_tables
+    from insurance_chunker.extractor import extract_tables_for_doc
+
+    with fitz.open(pdf_path) as doc:
+        pages = list(range(1, doc.page_count + 1))
+    srcs = extract_tables_for_doc(pdf_path, pages, use_vision=True)
+    best = select_best_tables(srcs)
+    if not best:
+        return {"pdf": Path(pdf_path).stem, "table_pages": 0}
+    vlm_wins = sum(1 for _, s in best.values() if s == "vlm")
+    deltas = []
+    for pg, (md, _) in best.items():
+        pm = srcs.get("pymupdf", {}).get(pg)
+        if pm:
+            deltas.append(_double_spaces(pm) - _double_spaces(md))
+    return {
+        "pdf": Path(pdf_path).stem, "table_pages": len(best),
+        "vlm_win_rate": round(vlm_wins / len(best), 3),
+        "dspace_gain_avg": round(sum(deltas) / len(deltas), 1) if deltas else None,
     }
 
 
@@ -116,4 +193,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 2 and sys.argv[1] == "--vlm":
+        print(json.dumps(vlm_winrate(sys.argv[2]), ensure_ascii=False))
+    else:
+        main()
