@@ -1,7 +1,11 @@
-"""노션 '보험 약관 파일' DB에서 클로드 청킹 보유 약관 PDF 일괄 다운로드.
+"""노션 '보험 약관 파일' DB에서 약관 PDF 다운로드.
 
 페이지의 '파일' 속성 서명 URL로 받아 in/에 저장. 분할본(partN)은 PyMuPDF로 병합.
 단일 파일은 SHA256을 페이지 기록과 대조.
+
+실행:
+  .venv/bin/python eval/notion_download.py                    # PAGES 일괄(클로드 청킹 보유분)
+  .venv/bin/python eval/notion_download.py <page_id> <slug>   # 임의 페이지 단건
 """
 from __future__ import annotations
 
@@ -48,9 +52,9 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def main() -> None:
+def main(pages: dict[str, str] | None = None) -> None:
     out_dir = Path("in")
-    for pid, slug in PAGES.items():
+    for pid, slug in (pages if pages is not None else PAGES).items():
         dest = out_dir / f"{slug}.pdf"
         if dest.exists():
             print(f"[skip] {slug} — 이미 존재")
@@ -99,4 +103,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 2:
+        main({sys.argv[1].replace("-", ""): sys.argv[2]})
+    else:
+        main()
