@@ -1,5 +1,10 @@
 -- policy_chunks: 약관(policy_terms) 청크 테이블
 -- 출력 컬럼 = DB 컬럼 원칙: InsuranceChunk의 DB 저장 대상 필드와 1:1 대응
+--
+-- 적용 범위: 로컬 개발용 빈 DB 전용.
+-- 운영 RDS의 corpus.* DDL은 SM17-YoonDongJu/AI 레포 migrations/corpus/가 단일 관리한다
+-- (.env.prod의 SKIP_INIT_SCHEMA=1이 이 파일의 실행을 막는다). 운영 스키마를 바꿔야 하면
+-- 이 파일이 아니라 그쪽 마이그레이션에 추가할 것 — 여기만 고치면 운영에 반영되지 않는다.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;

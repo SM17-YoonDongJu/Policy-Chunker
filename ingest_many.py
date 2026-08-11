@@ -36,6 +36,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--no-ocr", action="store_true")
     p.add_argument("--no-vision", action="store_true")
     p.add_argument("--no-embed", action="store_true")
+    p.add_argument("--no-init-schema", action="store_true",
+                   help="스키마 DDL 실행 안 함 (운영은 AI 레포 migrations/corpus가 단일 관리)")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--target-tokens", type=int, default=500)
     p.add_argument("--hard-max-tokens", type=int, default=1000)
@@ -87,7 +89,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     if not args.dry_run:
         from db.storage import get_connection, init_schema, doc_already_ingested, delete_by_doc_hash
         conn = get_connection(args.db_url)
-        init_schema(conn)
+        init_schema(conn, skip=args.no_init_schema)
         if doc_already_ingested(conn, meta.doc_hash):
             if args.overwrite:
                 delete_by_doc_hash(conn, meta.doc_hash)
