@@ -2,9 +2,9 @@
 __pycache__/
 *.pyc
 *.pyo
+# 배포 시크릿 — 호스트의 .env는 커밋 금지(deploy/.env.example 템플릿만 커밋)
 .env
-# CI/CD — 배포 시크릿·데이터(예시 템플릿만 커밋)
-.env.prod
+# CI/CD — 처리 대상 데이터
 deploy/data/
 *.pdf
 *.json
