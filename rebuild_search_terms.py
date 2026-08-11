@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="search_terms 테이블 재구성")
     p.add_argument("--db-url", default=None, help="PostgreSQL 연결 URL (없으면 DATABASE_URL 환경변수)")
+    p.add_argument("--no-init-schema", action="store_true",
+                   help="스키마 DDL 실행 안 함 (운영은 AI 레포 migrations/corpus가 단일 관리)")
     return p.parse_args()
 
 
@@ -42,7 +44,7 @@ def main() -> None:
 
     logger.info("DB 연결 중...")
     conn = get_connection(args.db_url)
-    init_schema(conn)
+    init_schema(conn, skip=args.no_init_schema)
 
     logger.info("search_terms 재구성 시작")
     result = rebuild(conn)

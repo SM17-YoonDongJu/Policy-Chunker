@@ -40,6 +40,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--no-ocr", action="store_true")
     p.add_argument("--no-vision", action="store_true")
     p.add_argument("--no-embed", action="store_true", help="임베딩 건너뜀 (청킹 테스트 시 사용)")
+    p.add_argument("--no-init-schema", action="store_true",
+                   help="스키마 DDL 실행 안 함 (운영은 AI 레포 migrations/corpus가 단일 관리)")
     p.add_argument("--dry-run", action="store_true", help="DB 저장 없이 청킹 결과 JSON 출력 (DB 불필요)")
     p.add_argument("--dry-run-out", default=None, help="dry-run 결과 저장 경로 (없으면 stdout)")
     p.add_argument("--db-url", default=None)
@@ -114,7 +116,7 @@ def main() -> None:
     if not args.dry_run:
         from db.storage import get_connection, init_schema, doc_already_ingested, delete_by_doc_hash
         conn = get_connection(args.db_url)
-        init_schema(conn)
+        init_schema(conn, skip=args.no_init_schema)
         if doc_already_ingested(conn, doc_hash):
             if args.overwrite:
                 delete_by_doc_hash(conn, doc_hash)

@@ -25,7 +25,17 @@ def get_connection(db_url: Optional[str] = None) -> psycopg2.extensions.connecti
     return conn
 
 
-def init_schema(conn: psycopg2.extensions.connection) -> None:
+def init_schema(conn: psycopg2.extensions.connection, skip: bool = False) -> None:
+    """schema.sql을 적용한다. skip=True 또는 SKIP_INIT_SCHEMA=1이면 건너뛴다.
+
+    운영 RDS의 corpus.* 테이블은 SM17-YoonDongJu/AI 레포 migrations/corpus/가 단일 관리한다.
+    같은 테이블의 DDL 진실원이 둘이면 한쪽만 바뀔 때 드리프트가 생기므로(실제로 search_terms는
+    이미 컬럼이 다르다 — 우리 1컬럼 vs corpus 3컬럼) 운영에서는 .env.prod에 SKIP_INIT_SCHEMA=1로 끈다.
+    로컬 빈 DB에서는 자동 생성이 편하므로 기본값은 실행(opt-out)이다.
+    """
+    if skip or os.environ.get("SKIP_INIT_SCHEMA", "").strip().lower() in ("1", "true", "yes"):
+        logger.info("스키마 DDL 건너뜀 — DDL은 AI 레포 migrations/corpus가 단일 관리")
+        return
     sql = _SCHEMA_PATH.read_text(encoding="utf-8")
     with conn.cursor() as cur:
         cur.execute(sql)
