@@ -1,0 +1,79 @@
+# 재사용 Composite Action — 팀 백엔드/AI 레포의 discord-notify와 동일 규격(메시지는 한국어).
+# 상태(success/failure/cancelled)에 따라 색상·아이콘을 정하고 Embed 메시지를 Webhook으로 POST한다.
+name: discord-notify
+description: Discord Webhook으로 CI/배포 결과를 한국어로 알린다.
+
+inputs:
+  webhook_url:
+    description: Discord Webhook URL
+    required: true
+  status:
+    description: success | failure | cancelled
+    required: true
+  service:
+    description: 서비스 이름 (insurance-chunker / ci)
+    required: true
+  environment:
+    description: 배포 환경 (dev / prod)
+    required: false
+    default: prod
+  image_tag:
+    description: 배포된 이미지 태그(있으면 표시)
+    required: false
+    default: ""
+  failed_step:
+    description: 실패 스텝 이름(실패 시)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Send Discord notification
+      shell: bash
+      run: |
+        # webhook_url이 비면(시크릿 미설정) 조용히 건너뛴다 — 알림 미설정이 파이프라인을 깨지 않게.
+        if [ -z "${{ inputs.webhook_url }}" ]; then
+          echo "discord-notify: webhook_url 미설정 → 건너뜀"
+          exit 0
+        fi
+        # 상태별 색상·아이콘·한국어 라벨. 이미지 태그 유무로 CI/배포를 구분해 제목을 만든다.
+        case "${{ inputs.status }}" in
+          success)   COLOR=3066993;  ICON="✅"; STATUS_KO="성공" ;;
+          failure)   COLOR=15158332; ICON="❌"; STATUS_KO="실패" ;;
+          cancelled) COLOR=9807270;  ICON="⚠️"; STATUS_KO="취소" ;;
+          *)         COLOR=8421504;  ICON="ℹ️"; STATUS_KO="알림" ;;
+        esac
+        if [ -n "${{ inputs.image_tag }}" ]; then KIND="배포"; else KIND="CI"; fi
+        TITLE="$ICON insurance-chunker $KIND $STATUS_KO"
+
+        # 커밋 메시지는 JSON 값에 안전하게 넣도록 역슬래시·따옴표를 이스케이프한다.
+        COMMIT_MSG=$(git log -1 --pretty=%s 2>/dev/null | sed 's/\\/\\\\/g; s/"/\\"/g')
+        [ -z "$COMMIT_MSG" ] && COMMIT_MSG="-"
+        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+
+        FIELDS="[
+          {\"name\":\"서비스\",\"value\":\"${{ inputs.service }}\",\"inline\":true},
+          {\"name\":\"환경\",\"value\":\"${{ inputs.environment }}\",\"inline\":true},
+          {\"name\":\"브랜치\",\"value\":\"${{ github.ref_name }}\",\"inline\":true},
+          {\"name\":\"커밋\",\"value\":\"[\`${GITHUB_SHA::7}\`]($COMMIT_URL)\",\"inline\":true},
+          {\"name\":\"작업자\",\"value\":\"${{ github.actor }}\",\"inline\":true}"
+        if [ -n "${{ inputs.image_tag }}" ]; then
+          FIELDS="$FIELDS,{\"name\":\"이미지 태그\",\"value\":\"\`${{ inputs.image_tag }}\`\",\"inline\":true}"
+        fi
+        if [ -n "${{ inputs.failed_step }}" ]; then
+          FIELDS="$FIELDS,{\"name\":\"실패 스텝\",\"value\":\"${{ inputs.failed_step }}\",\"inline\":false}"
+        fi
+        FIELDS="$FIELDS,{\"name\":\"커밋 메시지\",\"value\":\"$COMMIT_MSG\",\"inline\":false}"
+        FIELDS="$FIELDS,{\"name\":\"상세 로그\",\"value\":\"[GitHub Actions]($RUN_URL)\",\"inline\":false}]"
+
+        curl -sf -H "Content-Type: application/json" -X POST "${{ inputs.webhook_url }}" -d @- <<JSON
+        {
+          "embeds": [{
+            "title": "$TITLE",
+            "color": $COLOR,
+            "fields": $FIELDS
+          }]
+        }
+        JSON

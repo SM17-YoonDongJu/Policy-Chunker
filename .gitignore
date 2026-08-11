@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+# CI/CD — 배포 시크릿·데이터(예시 템플릿만 커밋)
+.env.prod
+deploy/data/
 *.pdf
 *.json
 !eval/eval_set.example.jsonl
