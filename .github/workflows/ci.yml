@@ -48,3 +48,13 @@ jobs:
           webhook_url: ${{ secrets.DISCORD_WEBHOOK_CI_FAILURES }}
           status: failure
           service: ci
+
+      # push(=deploy.yml 경유 호출)일 때만 성공 알림. PR 직접 실행에선 조용히 통과(노이즈 방지).
+      - name: Notify success (Discord)
+        if: success() && github.event_name == 'push'
+        continue-on-error: true
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_CI_BUILDS }}
+          status: success
+          service: ci
