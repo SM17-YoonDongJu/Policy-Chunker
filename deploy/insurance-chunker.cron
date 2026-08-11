@@ -1,0 +1,9 @@
+# /etc/cron.d/insurance-chunker — 정기 인덱싱. deploy.yml이 SSM으로 이 파일을 설치(덮어쓰기)한다.
+# cron.d 형식:  m h dom mon dow  user  command   (설치 시 root:root 0644, 파일명에 '.' 금지)
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=Asia/Seoul
+# 매주 일요일 03:00(KST) — 매니페스트의 신규/변경 문서만 doc_hash 멱등 인덱싱 후 검색어(BM25) 재구성.
+# flock -n: 이전 회차가 아직 돌고 있으면 이번 회차는 건너뛴다(중첩 실행 방지).
+# 로그는 ~/insurance-chunker/cron.log. 매니페스트·PDF는 호스트 ~/insurance-chunker/data/ 아래 둔다.
+0 3 * * 0 ubuntu flock -n /tmp/insurance-chunker.lock bash -c 'echo "===== $(date) ingest 시작 ====="; cd /home/ubuntu/insurance-chunker && docker compose --env-file .env.prod run --rm chunker python ingest_many.py --manifest /data/docs.yaml && docker compose --env-file .env.prod run --rm chunker python rebuild_search_terms.py' >> /home/ubuntu/insurance-chunker/cron.log 2>&1

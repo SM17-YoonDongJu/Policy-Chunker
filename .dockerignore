@@ -1,0 +1,29 @@
+# 이미지에 불필요/민감 파일 제외 — 빌드 컨텍스트 최소화.
+.git
+.github
+.venv
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+# 데이터·산출물 (런타임에 볼륨/인자로 주입)
+*.pdf
+*.json
+!eval/eval_set.example.jsonl
+dry_run_out/
+deploy/data/
+# 실험·평가·문서 — 배치 실행 이미지에 불필요
+eval/
+tests/
+docs/
+_workspace/
+tempVectorDB/
+# 시크릿
+.env
+.env.*
+!deploy/.env.prod.example
+# 패키징 산출물
+*.egg-info/
+dist/

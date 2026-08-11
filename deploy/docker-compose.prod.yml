@@ -1,0 +1,28 @@
+# EC2(운영)용 compose — 배치 파이프라인을 온디맨드로 실행한다(상시 데몬 아님).
+# deploy.yml이 SSM으로 이 파일을 호스트에 기록하고 `docker compose pull chunker`까지 수행한다.
+# 실제 인덱싱은 호스트에서 직접 실행:
+#   cd ~/insurance-chunker
+#   docker compose --env-file .env.prod run --rm chunker \
+#     python ingest.py --pdf /data/약관.pdf --insurer 메리츠화재 --product "단체안심생활보험"
+#   docker compose --env-file .env.prod run --rm chunker python ingest_many.py --manifest /data/docs.yaml
+#   docker compose --env-file .env.prod run --rm chunker python rebuild_search_terms.py
+#
+# ${AWS_ECR_REGISTRY}는 배포 시 SSM 셸이 export하고, 이후 수동 실행 시엔 .env.prod가 채운다.
+
+# compose 프로젝트명 — 호스트에서 brbs-corpus 등과 나란히 구분되도록(팀 brbs-* 규약).
+name: brbs-insurance-chunker
+
+services:
+  chunker:
+    image: ${AWS_ECR_REGISTRY}/soma/insurance_chunker:${IMAGE_TAG:-main}
+    # 호스트에 뜬 ollama(127.0.0.1:11434)와 DB에 붙기 위해 호스트 네트워크를 쓴다.
+    # (컨테이너 기본 네트워크에선 host의 127.0.0.1에 닿지 못한다.)
+    network_mode: host
+    env_file:
+      - .env.prod
+    # 배치 실행이라 포트·restart 정책 없음. `run --rm`으로 1회성 실행한다.
+    volumes:
+      # 처리할 PDF/산출물 공유 디렉터리 — 운영 경로에 맞게 조정.
+      - ./data:/data
+    # up 대상이 아니므로 기본 커맨드는 사용법. 실제 커맨드는 run 인자로 전달.
+    command: ["python", "ingest.py", "--help"]

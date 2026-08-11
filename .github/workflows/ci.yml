@@ -1,0 +1,60 @@
+# CI — lint(ruff) + import 스모크. main PR에서 직접 실행되고,
+# deploy.yml(push)에서 workflow_call로 재사용돼 "검사 통과 후에만 배포"를 게이팅한다.
+# 테스트 실행은 포함하지 않는다: main의 tests/test_search_contract.py는 asyncpg·pytest-asyncio
+# (미선언 의존)를 요구해 별도 배선이 필요하다 → 추후 dev extra에 추가되면 pytest 스텝을 붙인다.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  # deploy.yml이 `uses: ./.github/workflows/ci.yml`로 호출한다. secrets: inherit로 웹훅 전달.
+  workflow_call:
+
+jobs:
+  lint-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install (dev)
+        run: pip install -e ".[dev]"
+
+      - name: Ruff lint
+        # 배포 대상 코드에 한정(eval/는 실험 스크립트라 제외).
+        # 기존 코드에 미정리 린트가 있어 현재는 비블로킹(경고로만). 코드 정리 후
+        # continue-on-error를 제거하면 배포 게이트로 승격된다. import 스모크는 계속 게이트.
+        continue-on-error: true
+        run: ruff check insurance_chunker db tests ingest.py ingest_many.py rebuild_search_terms.py
+
+      - name: Import smoke
+        # 패키지 import + CLI 엔트리포인트가 실제로 로드되는지 확인(의존성 해상도 검증).
+        run: |
+          python -c "import insurance_chunker; print('insurance_chunker import OK')"
+          python ingest.py --help > /dev/null
+          python ingest_many.py --help > /dev/null
+
+      # push(=deploy.yml 경유 호출)일 때만 실패 알림. PR 직접 실행에선 조용히 통과.
+      - name: Notify failure (Discord)
+        if: failure() && github.event_name == 'push'
+        continue-on-error: true
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_CI_FAILURES }}
+          status: failure
+          service: ci
+
+      # push(=deploy.yml 경유 호출)일 때만 성공 알림. PR 직접 실행에선 조용히 통과(노이즈 방지).
+      - name: Notify success (Discord)
+        if: success() && github.event_name == 'push'
+        continue-on-error: true
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_CI_BUILDS }}
+          status: success
+          service: ci
