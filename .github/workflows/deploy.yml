@@ -7,7 +7,7 @@
 #              DISCORD_WEBHOOK_DEPLOYMENT
 # 필요 변수(vars):  CORPUS_EC2_INSTANCE_ID (대상 EC2 인스턴스 ID — AI 레포 corpus EC2와 동일)
 # 사전 준비:  ECR 레포 soma/insurance_chunker, EC2에 docker/compose + SSM 에이전트,
-#            ECR pull·SSM 가능한 IAM 인스턴스 프로파일, 호스트 ~/insurance-chunker/.env.prod
+#            ECR pull·SSM 가능한 IAM 인스턴스 프로파일, 호스트 ~/insurance-chunker/.env
 name: Deploy
 
 on:
@@ -26,7 +26,7 @@ permissions:
 
 env:
   ECR_REPOSITORY: soma/insurance_chunker
-  EC2_DIR: /home/ubuntu/insurance-chunker # 호스트의 compose/.env.prod 위치
+  EC2_DIR: /home/ubuntu/insurance-chunker # 호스트의 compose/.env 위치
   COMPOSE_SERVICE: chunker
 
 jobs:
@@ -35,7 +35,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
 
-  # 2) 빌드 → ECR push (:main 가변 / :<sha7> 불변 — 감사·롤백용).
+  # 2) 빌드 → ECR push (:latest 가변 / :<sha7> 불변 — 감사·롤백용).
   build-and-push:
     needs: ci
     runs-on: ubuntu-latest
@@ -66,7 +66,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.AWS_ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:main
+            ${{ secrets.AWS_ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
             ${{ secrets.AWS_ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.short_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -107,10 +107,10 @@ jobs:
           cd ${{ env.EC2_DIR }}
           # compose를 레포 기준으로 갱신(코드가 진실원).
           echo "${{ steps.enc.outputs.compose_b64 }}" | base64 -d > docker-compose.yml
-          # .env.prod가 없으면 compose 파싱이 실패하므로 빈 파일로 생성(실행 전 값 채울 것).
-          if [ ! -f .env.prod ]; then
-            echo "WARN: .env.prod 없음 → 빈 파일 생성. 실행 전 DATABASE_URL·AWS_ECR_REGISTRY 등을 채우세요."
-            touch .env.prod
+          # .env가 없으면 compose 파싱이 실패하므로 빈 파일로 생성(실행 전 값 채울 것).
+          if [ ! -f .env ]; then
+            echo "WARN: .env 없음 → 빈 파일 생성. 실행 전 DATABASE_URL·AWS_ECR_REGISTRY 등을 채우세요."
+            touch .env
           fi
           # 정기 인덱싱 cron 설치(SSM은 root 실행 → /etc/cron.d 쓰기 가능). cron.d는 root:root 0644 필수.
           echo "${{ steps.enc.outputs.cron_b64 }}" | base64 -d > /etc/cron.d/insurance-chunker
@@ -120,11 +120,11 @@ jobs:
           mkdir -p ${{ env.EC2_DIR }}/data
           touch ${{ env.EC2_DIR }}/cron.log
           chown -R ubuntu:ubuntu ${{ env.EC2_DIR }}
-          # compose 이미지 태그(:main)와 레지스트리는 셸 env로 주입.
+          # compose 이미지 태그(:latest)와 레지스트리는 셸 env로 주입.
           export AWS_ECR_REGISTRY="$REGISTRY"
-          export IMAGE_TAG=main
+          export IMAGE_TAG=latest
           aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-          docker compose --env-file .env.prod pull ${{ env.COMPOSE_SERVICE }}
+          docker compose --env-file .env pull ${{ env.COMPOSE_SERVICE }}
           docker image prune -f
           echo "pull + cron 설치 완료(주 1회 일요일 03:00 인덱싱)."
           EOF
@@ -168,5 +168,5 @@ jobs:
           webhook_url: ${{ secrets.DISCORD_WEBHOOK_DEPLOYMENT }}
           status: ${{ (needs.build-and-push.result == 'success' && needs.deploy.result == 'success') && 'success' || 'failure' }}
           service: insurance-chunker
-          environment: prod
+          environment: dev
           image_tag: ${{ needs.build-and-push.outputs.short_sha }}
