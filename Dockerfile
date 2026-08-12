@@ -25,7 +25,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY insurance_chunker ./insurance_chunker
 COPY db ./db
-COPY ingest.py ingest_many.py rebuild_search_terms.py worker.py ./
+COPY ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py ./
 
 # base 의존 + 패키지 설치. setuptools packages.find가 insurance_chunker/db를 포함한다.
 RUN pip install .
