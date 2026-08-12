@@ -1,7 +1,7 @@
-# insurance-chunker — 배치 파이프라인 이미지.
-# 상시 데몬이 아니라 CLI(ingest.py / ingest_many.py / rebuild_search_terms.py)를
-# 온디맨드로 실행하는 용도다:
-#   docker compose --env-file .env.prod run --rm chunker \
+# insurance-chunker — 인덱싱 데몬 이미지.
+# worker.py가 상주하며 주기(INGEST_INTERVAL_SECONDS)마다 인덱싱한다 → docker ps에 상시 노출.
+# 일회성 실행이 필요하면 커맨드를 덮어쓴다:
+#   docker compose run --rm chunker \
 #     python ingest.py --pdf /data/약관.pdf --insurer 메리츠화재 --product "단체안심생활보험"
 #
 # base 의존만 설치한다: OCR(surya-ocr, GPU)·ST(sentence-transformers) extra는 무겁고
@@ -25,7 +25,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY insurance_chunker ./insurance_chunker
 COPY db ./db
-COPY ingest.py ingest_many.py rebuild_search_terms.py ./
+COPY ingest.py ingest_many.py rebuild_search_terms.py worker.py ./
 
 # base 의존 + 패키지 설치. setuptools packages.find가 insurance_chunker/db를 포함한다.
 RUN pip install .
@@ -34,5 +34,6 @@ RUN pip install .
 RUN useradd --create-home app && chown -R app:app /app
 USER app
 
-# 배치 도구라 상시 커맨드가 없다 — 기본은 사용법 출력. 실제 실행은 `docker compose run`으로 인자 전달.
-CMD ["python", "ingest.py", "--help"]
+# 상시 데몬(worker.py) — 주기마다 ingest_many + rebuild_search_terms를 돌린다.
+# SIGTERM에 우아하게 종료. 일회성 실행은 `docker compose run --rm chunker python ingest.py ...`.
+CMD ["python", "worker.py"]

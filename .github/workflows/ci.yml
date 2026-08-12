@@ -30,7 +30,7 @@ jobs:
         # 기존 코드에 미정리 린트가 있어 현재는 비블로킹(경고로만). 코드 정리 후
         # continue-on-error를 제거하면 배포 게이트로 승격된다. import 스모크는 계속 게이트.
         continue-on-error: true
-        run: ruff check insurance_chunker db tests ingest.py ingest_many.py rebuild_search_terms.py
+        run: ruff check insurance_chunker db tests ingest.py ingest_many.py rebuild_search_terms.py worker.py
 
       - name: Import smoke
         # 패키지 import + CLI 엔트리포인트가 실제로 로드되는지 확인(의존성 해상도 검증).
