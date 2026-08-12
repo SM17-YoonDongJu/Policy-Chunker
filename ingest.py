@@ -61,7 +61,10 @@ def _upload_tables_to_s3(table_metas: list) -> None:
         return
     try:
         import boto3
-        s3 = boto3.client("s3")
+        # boto3는 AWS_REGION을 보지 않는다(표준은 AWS_DEFAULT_REGION). 둘 다 없으면 us-east-1로
+        # 떨어져 ap-northeast-2 버킷과 어긋나므로 팀 규약 변수를 읽어 직접 넘긴다.
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        s3 = boto3.client("s3", region_name=region) if region else boto3.client("s3")
         for tm in table_metas:
             s3.put_object(
                 Bucket=bucket,

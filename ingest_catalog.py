@@ -107,10 +107,21 @@ def _fetch_catalog(conn, category: str, limit: int | None) -> list[dict]:
     return rows
 
 
-def _download(bucket: str, key: str, dest: Path) -> bool:
+def _s3_client():
+    """region을 명시해 S3 클라이언트를 만든다(corpus_worker와 동일).
+
+    boto3는 AWS_REGION을 보지 않는다 — 표준 변수는 AWS_DEFAULT_REGION이고, 둘 다 없으면
+    us-east-1로 떨어져 ap-northeast-2 버킷 접근이 어긋난다(실측 확인). 팀 .env 규약이
+    AWS_REGION이므로 그 값을 우선 읽어 직접 넘긴다.
+    """
     import boto3
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    return boto3.client("s3", region_name=region) if region else boto3.client("s3")
+
+
+def _download(bucket: str, key: str, dest: Path) -> bool:
     try:
-        boto3.client("s3").download_file(bucket, key, str(dest))
+        _s3_client().download_file(bucket, key, str(dest))
     except Exception as e:  # noqa: BLE001 - 한 건 실패가 전체를 멈추게 하지 않는다
         logger.error(f"  S3 다운로드 실패 s3://{bucket}/{key}: {e}")
         return False
