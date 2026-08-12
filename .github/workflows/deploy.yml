@@ -1,7 +1,6 @@
 # Deploy — main push(=병합) 시 CI 통과 후 이미지를 ECR로 빌드→push하고,
-# SSM으로 대상 EC2에서 최신 이미지 pull + 정기 인덱싱 cron을 설치한다(배치 도구라 up -d 데몬 아님).
-# 인덱싱은 주 1회(일요일 03:00 KST) cron이 `docker compose run --rm chunker python ingest_many.py ...`로 실행하며,
-# 동일 명령으로 수동 실행도 가능하다.
+# SSM으로 대상 EC2에서 pull → up -d 로 인덱싱 데몬을 기동한다(brbs-corpus-worker와 같은 상시 서비스).
+# 인덱싱 주기는 컨테이너 안 worker.py가 관리한다(.env의 INGEST_INTERVAL_SECONDS, 기본 7일).
 #
 # 필요 시크릿:  AWS_ROLE_ARN(OIDC), AWS_REGION, AWS_ECR_REGISTRY,
 #              DISCORD_WEBHOOK_DEPLOYMENT
@@ -71,7 +70,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # 3) SSM으로 EC2에서 최신 이미지 pull(데몬 기동 없음).
+  # 3) SSM으로 EC2에서 pull → up -d (데몬 기동/갱신).
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -84,14 +83,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 레포의 compose·cron을 base64로 인코딩 → SSM으로 호스트 파일을 덮는다(드리프트 차단).
+      # 레포의 compose를 base64로 인코딩 → SSM으로 호스트 파일을 덮는다(드리프트 차단).
       - name: Encode files from repo
         id: enc
-        run: |
-          echo "compose_b64=$(base64 -w0 deploy/docker-compose.prod.yml)" >> "$GITHUB_OUTPUT"
-          echo "cron_b64=$(base64 -w0 deploy/insurance-chunker.cron)" >> "$GITHUB_OUTPUT"
+        run: echo "compose_b64=$(base64 -w0 deploy/docker-compose.prod.yml)" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy via SSM (pull image + install cron)
+      - name: Deploy via SSM (pull + up -d)
         env:
           INSTANCE_ID: ${{ vars.CORPUS_EC2_INSTANCE_ID }}
           REGISTRY: ${{ secrets.AWS_ECR_REGISTRY }}
@@ -112,21 +109,21 @@ jobs:
             echo "WARN: .env 없음 → 빈 파일 생성. 실행 전 DATABASE_URL·AWS_ECR_REGISTRY 등을 채우세요."
             touch .env
           fi
-          # 정기 인덱싱 cron 설치(SSM은 root 실행 → /etc/cron.d 쓰기 가능). cron.d는 root:root 0644 필수.
-          echo "${{ steps.enc.outputs.cron_b64 }}" | base64 -d > /etc/cron.d/insurance-chunker
-          chown root:root /etc/cron.d/insurance-chunker
-          chmod 0644 /etc/cron.d/insurance-chunker
-          # 작업 디렉터리·로그는 cron 실행 주체(ubuntu) 소유로. data/에 PDF·docs.yaml을 둔다.
+          # 이전 배포가 설치한 호스트 cron 제거 — 이제 컨테이너 데몬이 주기를 관리한다.
+          # 남겨두면 cron과 데몬이 같은 인덱싱을 이중 실행한다.
+          rm -f /etc/cron.d/insurance-chunker
+          # 작업 디렉터리는 ubuntu 소유로. data/에 PDF·docs.yaml을 둔다.
           mkdir -p ${{ env.EC2_DIR }}/data
-          touch ${{ env.EC2_DIR }}/cron.log
           chown -R ubuntu:ubuntu ${{ env.EC2_DIR }}
           # compose 이미지 태그(:latest)와 레지스트리는 셸 env로 주입.
           export AWS_ECR_REGISTRY="$REGISTRY"
           export IMAGE_TAG=latest
           aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-          docker compose --env-file .env pull ${{ env.COMPOSE_SERVICE }}
+          docker compose pull ${{ env.COMPOSE_SERVICE }}
+          docker compose up -d --no-deps ${{ env.COMPOSE_SERVICE }}
           docker image prune -f
-          echo "pull + cron 설치 완료(주 1회 일요일 03:00 인덱싱)."
+          docker ps --filter name=brbs-insurance-chunker
+          echo "배포 완료 — 데몬 기동(docker logs -f brbs-insurance-chunker)."
           EOF
           )
           # 스크립트 전체를 base64로 감싸 전달 → 특수문자로 --parameters 파싱이 깨지지 않게.

@@ -1,13 +1,13 @@
-# EC2(운영)용 compose — 배치 파이프라인을 온디맨드로 실행한다(상시 데몬 아님).
-# deploy.yml이 SSM으로 이 파일을 호스트에 기록하고 `docker compose pull chunker`까지 수행한다.
-# 실제 인덱싱은 호스트에서 직접 실행:
-#   cd ~/insurance-chunker
-#   docker compose --env-file .env run --rm chunker \
-#     python ingest.py --pdf /data/약관.pdf --insurer 메리츠화재 --product "단체안심생활보험"
-#   docker compose --env-file .env run --rm chunker python ingest_many.py --manifest /data/docs.yaml
-#   docker compose --env-file .env run --rm chunker python rebuild_search_terms.py
+# EC2 배포용 compose — 인덱싱 데몬(brbs-corpus-worker와 같은 상시 서비스 규격).
+# deploy.yml이 SSM으로 이 파일을 호스트에 기록하고 `docker compose up -d chunker`까지 수행한다.
+# 사용: docker compose up -d chunker  /  로그: docker logs -f brbs-insurance-chunker
 #
-# ${AWS_ECR_REGISTRY}는 배포 시 SSM 셸이 export하고, 이후 수동 실행 시엔 .env가 채운다.
+# worker.py가 상주하며 INGEST_INTERVAL_SECONDS마다 ingest_many + rebuild_search_terms를 돌린다.
+# 일회성 실행이 필요하면 커맨드를 덮어쓴다(데몬과 별개로 1회성 컨테이너가 뜬다):
+#   docker compose run --rm chunker \
+#     python ingest.py --pdf /data/약관.pdf --insurer 메리츠화재 --product "단체안심생활보험"
+#
+# ${AWS_ECR_REGISTRY}는 배포 시 SSM 셸이 export하고, 수동 실행 시엔 compose가 .env를 자동 로드해 채운다.
 
 # compose 프로젝트명 — 호스트에서 brbs-corpus 등과 나란히 구분되도록(팀 brbs-* 규약).
 name: brbs-insurance-chunker
@@ -15,14 +15,18 @@ name: brbs-insurance-chunker
 services:
   chunker:
     image: ${AWS_ECR_REGISTRY}/soma/insurance_chunker:${IMAGE_TAG:-latest}
+    container_name: brbs-insurance-chunker
+    restart: unless-stopped
     # 호스트에 뜬 ollama(127.0.0.1:11434)와 DB에 붙기 위해 호스트 네트워크를 쓴다.
     # (컨테이너 기본 네트워크에선 host의 127.0.0.1에 닿지 못한다.)
     network_mode: host
     env_file:
       - .env
-    # 배치 실행이라 포트·restart 정책 없음. `run --rm`으로 1회성 실행한다.
+    environment:
+      TZ: Asia/Seoul
     volumes:
-      # 처리할 PDF/산출물 공유 디렉터리 — 운영 경로에 맞게 조정.
+      # 처리할 PDF·매니페스트(docs.yaml) 공유 디렉터리.
       - ./data:/data
-    # up 대상이 아니므로 기본 커맨드는 사용법. 실제 커맨드는 run 인자로 전달.
-    command: ["python", "ingest.py", "--help"]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
