@@ -51,6 +51,11 @@ ORDER BY f.priority DESC, f.notion_page_id, p.part_order
 
 _SUMMARY_PAT = re.compile(r"요약서|상품안내|상품설명서")
 
+# corpus_worker는 원본이 무엇이든 S3 키를 .pdf로 만든다(s3.py의 _KEY_SUFFIX). 그래서 키만 보면
+# .txt·.hwp.zip도 PDF처럼 보인다 — 실제 형식은 notion_file_name의 확장자로만 판별된다.
+# 우리 파이프라인은 PDF 전용이라(PyMuPDF) 그 외 형식은 파싱해도 0청크로 끝난다.
+_PDF_EXT = ".pdf"
+
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ai.corpus_file 카탈로그 기반 인덱싱 (S3에서 PDF 수신)")
@@ -107,6 +112,20 @@ def _fetch_catalog(conn, category: str, limit: int | None) -> list[dict]:
     return rows
 
 
+def _split_pdf_rows(rows: list[dict]) -> tuple[list[dict], dict[str, int]]:
+    """PDF만 남기고, 제외된 형식을 확장자별로 센다(무엇을 안 했는지 로그로 드러내기 위함)."""
+    pdfs, skipped = [], {}
+    for r in rows:
+        name = r["notion_file_name"]
+        # 파일명을 모르면 판별할 수 없으므로 시도한다(키는 항상 .pdf라 단서가 안 된다).
+        if not name or name.lower().endswith(_PDF_EXT):
+            pdfs.append(r)
+            continue
+        ext = Path(name).suffix.lower() or "(확장자 없음)"
+        skipped[ext] = skipped.get(ext, 0) + 1
+    return pdfs, skipped
+
+
 def _s3_client():
     """region을 명시해 S3 클라이언트를 만든다(corpus_worker와 동일).
 
@@ -143,7 +162,12 @@ def main() -> None:
     init_schema(conn, skip=args.no_init_schema)
 
     rows = _fetch_catalog(conn, args.category, args.limit)
+    rows, skipped_ext = _split_pdf_rows(rows)
     logger.info(f"카탈로그 대상 {len(rows)}건 (category={args.category}, bucket={bucket})")
+    if skipped_ext:
+        detail = ", ".join(f"{k} {v}건" for k, v in sorted(skipped_ext.items(),
+                                                          key=lambda kv: -kv[1]))
+        logger.info(f"PDF 아님 {sum(skipped_ext.values())}건 제외 — {detail}")
 
     dry_run_dir = Path(args.dry_run_dir)
     if args.dry_run:
@@ -182,7 +206,12 @@ def main() -> None:
             result["pdf"] = name
             results.append(result)
 
-            if result["status"] == "OK":
+            if result["status"] == "OK" and result.get("chunks", 0) == 0:
+                # 청크가 0이면 DB에 행이 안 생겨 doc_already_ingested가 영원히 False다
+                # → 다음 주기에 또 받아서 또 파싱한다. 조용히 넘기면 진도가 안 나가는 걸 모른다.
+                logger.warning(f"  0청크 — 적재 없음(PDF 아님/파싱 실패 가능). "
+                               f"다음 주기에 재시도된다. {result['elapsed_s']}s")
+            elif result["status"] == "OK":
                 logger.info(f"  OK: {result['chunks']}청크 | 경고 {result['warnings']}건 "
                             f"| {result['elapsed_s']}s")
             elif result["status"] == "SKIPPED":
@@ -194,11 +223,15 @@ def main() -> None:
 
     conn.close()
 
-    ok = sum(1 for r in results if r["status"] == "OK")
+    ok = sum(1 for r in results if r["status"] == "OK" and r.get("chunks", 0) > 0)
+    empty = sum(1 for r in results if r["status"] == "OK" and r.get("chunks", 0) == 0)
     skipped = sum(1 for r in results if r["status"] == "SKIPPED")
     err = sum(1 for r in results if r["status"] == "ERROR")
     total_chunks = sum(r.get("chunks", 0) for r in results if r["status"] == "OK")
-    logger.info(f"\nOK={ok} SKIPPED={skipped} ERROR={err} | 총 청크={total_chunks}개")
+    logger.info(f"\nOK={ok} 0청크={empty} SKIPPED={skipped} ERROR={err} | 총 청크={total_chunks}개")
+    if empty:
+        logger.warning(f"0청크 {empty}건은 DB에 남지 않아 다음 주기에 다시 처리된다 — "
+                       "반복되면 대상 선정(category/파일형식)을 재검토할 것")
     if err:
         sys.exit(1)
 
