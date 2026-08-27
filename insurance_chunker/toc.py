@@ -79,7 +79,7 @@ def extract_toc_titles_ordered(doc, front_end: Optional[int] = None) -> list[str
     """
     titles: _OrderedSet = _OrderedSet()
     for pno in _toc_page_range(doc, front_end):
-        lines = [l for l in doc[pno].get_text().split("\n") if l.strip()]
+        lines = [ln for ln in doc[pno].get_text().split("\n") if ln.strip()]
         if len(lines) < 5:
             continue
         # 컬럼 폭에 밀려 두 줄로 감긴 제목("…(감액없" / "음)")을 잇기 위한 버퍼.

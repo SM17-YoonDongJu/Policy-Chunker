@@ -30,12 +30,38 @@ dependencies = [
 [project.optional-dependencies]
 st  = ["sentence-transformers>=3.0"]
 ocr = ["surya-ocr>=0.22"]  # 스캔본 PDF 전처리용 (가중치 라이선스: 매출/투자 $5M 미만 무료)
-dev = ["pytest>=8", "ruff>=0.4"]
+# tests/test_search_contract.py가 db/search.py를 fake-pool로 검증한다. asyncpg·pydantic은
+# db/search.py의 의존인데 base dependencies에는 없다 — 그 모듈은 파트너(AI) 레포가 import해
+# 쓰는 계약 코드라 우리 런타임(worker/ingest)은 쓰지 않기 때문. 테스트에는 필요하므로 여기 둔다.
+# 이것들이 없어서 테스트가 CI에서 아예 수집되지 않았고, 배포 게이트가 import 스모크뿐이었다.
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "asyncpg>=0.29",
+    "pydantic>=2",
+    "ruff>=0.4",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["insurance_chunker*", "db*", "eval*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 비동기 테스트는 @pytest.mark.asyncio를 명시한 것만 돈다(암묵 실행 금지).
+asyncio_mode = "strict"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# 규칙을 명시적으로 고정한다. ruff의 기본 선택은 버전이 오르면 넓어져서, 코드를 안 건드려도
+# 어느 날 CI가 빨개진다 — 린트를 배포 게이트로 쓰려면 그 변동을 없애야 한다.
+#   E,W pycodestyle / F pyflakes / I import 정렬
+select = ["E", "W", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# LLM 프롬프트 원문이 삼중따옴표 문자열로 들어 있다. 줄을 접으면 프롬프트 자체가 바뀌어
+# 분류 결과가 달라진다(gemma4 골든셋 90% 기준이 흔들린다) — 이 파일만 길이 검사를 뺀다.
+"insurance_chunker/llm_classifier.py" = ["E501"]

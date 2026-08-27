@@ -91,8 +91,8 @@ def parse_pdf(
     use_vision: bool = True,
 ) -> list[PageResult]:
     """전체 파싱: 텍스트 + 표(다중 소스 best-of). 최종 PageResult 반환."""
-    from .extractor import extract_tables_for_doc
     from .combine import select_best_tables
+    from .extractor import extract_tables_for_doc
 
     pages, page_numbers = parse_text(pdf_path, use_ocr=use_ocr)
 

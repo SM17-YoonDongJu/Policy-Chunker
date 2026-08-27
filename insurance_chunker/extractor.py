@@ -309,11 +309,14 @@ def extract_surya_tables(pdf_path: str, pages: list[int]) -> dict[int, str]:
     # 결과 page 값의 기준(0/1-based)을 요청 페이지와 대조해서 판별
     p_vals = [e.get("page") for e in entries]
     if set(p_vals) == set(pages):
-        page_of = lambda e, i: e["page"]
+        def page_of(e, i):
+            return e["page"]
     elif set(p_vals) == {p - 1 for p in pages}:
-        page_of = lambda e, i: e["page"] + 1
+        def page_of(e, i):
+            return e["page"] + 1
     else:  # 순서 매칭 폴백
-        page_of = lambda e, i: pages[i]
+        def page_of(e, i):
+            return pages[i]
 
     out: dict[int, str] = {}
     for i, entry in enumerate(entries):
@@ -422,7 +425,8 @@ def extract_tables_for_doc(
         # VLM — PyMuPDF 표 탐지 페이지에만 실행
         if use_vision:
             total = len(table_pages)
-            logger.info(f"VLM 대상: {total}페이지 (전체 {len(page_numbers)}페이지 중 PyMuPDF 표 탐지 페이지만, backend={VLM_BACKEND})")
+            logger.info(f"VLM 대상: {total}페이지 (전체 {len(page_numbers)}페이지 중 "
+                        f"PyMuPDF 표 탐지 페이지만, backend={VLM_BACKEND})")
             if VLM_BACKEND == "surya":
                 vlm_tables = extract_surya_tables(pdf_path, table_pages)
             else:

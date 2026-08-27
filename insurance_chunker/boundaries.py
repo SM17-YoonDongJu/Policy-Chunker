@@ -11,12 +11,9 @@ boundaries.py — PDF의 '시각적 신호'로 약관/별표 경계를 잡는다
 """
 from __future__ import annotations
 
-import re
 import collections
-from dataclasses import dataclass, field
-
-import fitz  # PyMuPDF
-
+import re
+from dataclasses import dataclass
 
 TITLE_SUFFIX = re.compile(r"(특별약관|보통약관|특약|담보)\s*[ⅠⅡⅢⅣⅤIVX0-9()]*\s*$")
 # 제목 폰트 인정 임계: '특약/약관'으로 끝나는 줄이 이만큼은 있어야 한다
@@ -88,7 +85,8 @@ _SENT_END = re.compile(r"[다요]\s*\.\s*$")  # 완결 문장 — 제목은 '다
 _DANGLING_PARTICLE = re.compile(
     r"(?:을|를|이|가|은|는|에|의|로|으로|와|과|에서|에게|부터|까지|보다|라|며|고)\s*$")
 # 인용 접속으로 시작하는 줄("제2항에도 불구하고 …")은 본문이지 제목이 아니다.
-_CITE_LEAD = re.compile(r"^제\s*\d+\s*[항호목조][의\s]*\S*\s*(?:에도|에|은|는)?\s*(?:불구|따라|정한)")
+_CITE_LEAD = re.compile(
+    r"^제\s*\d+\s*[항호목조][의\s]*\S*\s*(?:에도|에|은|는)?\s*(?:불구|따라|정한)")
 # 본문 열거 항목("∙ 제1호 : …", "· 제2항 …")은 글머리표+항/호 표기로 시작한다.
 # KB에서 이런 줄 하나가 우연히 "…특별약관"으로 끝나 청크 절반(3,149개)을 흡수했다.
 _BULLET_ENUM = re.compile(r"^\s*[∙·▪▫◦・\-–—]\s*제\s*\d+\s*[항호목]")

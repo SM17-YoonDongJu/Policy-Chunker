@@ -20,7 +20,8 @@ _kiwi_available: bool | None = None  # None=미확인, True=사용가능, False=
 
 def _check_kiwi_subprocess() -> bool:
     """subprocess로 Kiwi() 초기화를 격리 테스트 — C 레벨 exit 오염 방지."""
-    import subprocess, sys
+    import subprocess
+    import sys
     try:
         r = subprocess.run(
             [sys.executable, "-c",

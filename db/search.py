@@ -100,7 +100,8 @@ async def _keyword_search(pool: asyncpg.Pool, tokens: str, k: int) -> list[async
         return await conn.fetch(_KEYWORD_SQL, tokens, k)
 
 
-async def _vector_search(pool: asyncpg.Pool, embedding: list[float], k: int) -> list[asyncpg.Record]:
+async def _vector_search(pool: asyncpg.Pool, embedding: list[float],
+                         k: int) -> list[asyncpg.Record]:
     async with pool.acquire() as conn:
         return await conn.fetch(_VECTOR_SQL, np.array(embedding, dtype=np.float32), k)
 

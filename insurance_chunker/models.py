@@ -54,7 +54,9 @@ class InsuranceChunk:
     section: str                        # 경계 라벨 또는 편/장 경로
     page_number: int
     doc_type: str                       # 내부용 — DB 저장 안 함
-    chunk_type: str                     # coverage | exclusion | definition | special_clause | duty | claim | termination | schedule | general
+    # coverage | exclusion | definition | special_clause | duty | claim
+    # | termination | schedule | general
+    chunk_type: str
 
     source_pdf: str                     # 내부용 — DB 저장 안 함
     doc_hash: str
