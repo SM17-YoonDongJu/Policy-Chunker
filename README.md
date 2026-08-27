@@ -245,6 +245,79 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
 | `VLM_TIMEOUT` | `600` | Claude CLI 호출 타임아웃(초) |
 | `VISION_MAX_PAGES` | `9999` | VLM 호출 상한 페이지 수 |
+| `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
+| `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
+| `HEALTH_GRACE_FACTOR` | `1.5` | 헬스체크 허용 배수 (마지막 성공 기준) |
+| `DISCORD_WEBHOOK_INGEST` | — | 사이클 결과 알림 웹훅 (없으면 알림만 생략) |
+| `INGEST_NOTIFY` | `always` | `always` \| `failure` |
+
+---
+
+## 운영 계측
+
+인덱싱은 7일 주기로 도는 상주 데몬이라(`worker.py`) 실패해도 눈에 잘 안 띈다. 그래서 매 실행을
+파일로 남기고, 그걸 근거로 건강을 판정하고 지표를 뽑는다.
+
+### 무엇이 남나
+
+`INGEST_STATE_DIR`(기본 `/data/state`, 호스트 볼륨이라 컨테이너를 다시 만들어도 유지):
+
+| 파일 | 내용 |
+|---|---|
+| `items.jsonl` | 문서 1건 처리 = 1줄. 상태·청크 수·**단계별 소요 시간**(hash/parse/chunk/embed/store) |
+| `runs.jsonl` | 적재 CLI 1회 실행 = 1줄. 사이클 집계 |
+| `attempts.json` | sha256 → 최근 시도 요약. 격리 판정에 쓴다 |
+| `daemon.json` | 기동 시각 · 마지막 사이클 성패 · **마지막 성공 시각** |
+
+DB 테이블이 아니라 파일인 이유: `corpus.*`의 DDL 진실원은 AI 레포 `migrations/corpus` 하나다.
+운영 이력은 우리 쪽 데이터라 그 계약을 건드리지 않는 곳에 둔다.
+
+### 지표 뽑기
+
+```bash
+python metrics.py             # 사람이 읽는 형태
+python metrics.py --last 5    # 최근 5개 사이클
+python metrics.py --json      # 대시보드·알림에 물릴 때
+```
+
+```
+문서 5건 — {'OK': 1, 'EMPTY': 3, 'ERROR': 1}
+  시도 대비 성공률   20.0%
+  멱등 스킵률        40.0%  (doc_hash 중복 제거로 다운로드·파싱을 아예 안 한 비율)
+
+문서당 처리 시간(n=1)  p50 41.3s  p95 41.3s  max 41.3s
+
+단계별 비중 — 여기가 병목 후보다
+  embed   55.2% ██████████████████████ (합 22.8s, p50 22.8s)
+  parse   30.0% ████████████ (합 12.4s, p50 12.4s)
+```
+
+### 헬스체크
+
+`docker ps`의 STATUS 열에 뜬다. 판정 기준은 **마지막 인덱싱 성공 시각** —
+프로세스는 살아 있는데 매 주기 실패하는 좀비를 프로세스 생존만으로는 못 잡기 때문이다.
+
+```bash
+docker inspect --format '{{.State.Health.Status}}' brbs-insurance-chunker
+docker exec brbs-insurance-chunker python /app/healthcheck.py
+```
+
+주기 × `HEALTH_GRACE_FACTOR`를 넘기면 unhealthy. compose의 `restart` 정책은 unhealthy로
+재시작하지 않으므로(그건 Swarm 기능) 자가치유가 아니라 드러내기 위한 신호다.
+
+### 실패 문서 격리
+
+0청크 문서는 `policy_chunks`에 행이 안 생겨 `doc_already_ingested`가 영원히 `False`다 —
+상한이 없으면 매 주기 S3에서 다시 받아 다시 파싱한다. `INGEST_MAX_RETRY`회 연속 실패하면
+격리해 다운로드조차 하지 않는다. 성공 한 번이면 카운터가 0으로 돌아간다.
+
+```bash
+# 격리 목록
+cat /data/state/attempts.json
+
+# 격리 해제하고 다시 시도
+python ingest_catalog.py --retry-quarantined
+```
 
 ---
 
@@ -254,7 +327,14 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 Policy-Chunker/
 ├── ingest.py               단일 PDF CLI 진입점
 ├── ingest_many.py          YAML manifest 기반 일괄 처리
+├── ingest_catalog.py       ai.corpus_file 카탈로그 + S3 기반 인덱싱
 ├── rebuild_search_terms.py BM25 쿼리 보정용 search_terms 테이블 재구축
+│
+├── worker.py               상시 인덱싱 데몬 (컨테이너 CMD)
+├── runlog.py               실행 이력 기록·조회 (items/runs/attempts/daemon)
+├── metrics.py              이력 → 운영 지표 (처리시간 분포·단계 비중·성공률)
+├── healthcheck.py          마지막 성공 시각 기반 좀비 판정
+├── notify.py               사이클 결과 Discord 알림
 │
 ├── insurance_chunker/
 │   ├── models.py           InsuranceChunk, TableMeta, DocMeta dataclass 정의

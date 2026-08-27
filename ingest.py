@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PDF 보험 문서 파싱·청킹·임베딩·저장")
     p.add_argument("--pdf", required=True)
-    p.add_argument("--doc-type", choices=["product_summary", "policy_terms", "schedule"], default=None)
+    p.add_argument("--doc-type", default=None,
+                   choices=["product_summary", "policy_terms", "schedule"])
     p.add_argument("--insurer", required=True)
     p.add_argument("--product", required=True)
     p.add_argument("--product-code", default=None)
@@ -42,7 +43,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--no-embed", action="store_true", help="임베딩 건너뜀 (청킹 테스트 시 사용)")
     p.add_argument("--no-init-schema", action="store_true",
                    help="스키마 DDL 실행 안 함 (운영은 AI 레포 migrations/corpus가 단일 관리)")
-    p.add_argument("--dry-run", action="store_true", help="DB 저장 없이 청킹 결과 JSON 출력 (DB 불필요)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="DB 저장 없이 청킹 결과 JSON 출력 (DB 불필요)")
     p.add_argument("--dry-run-out", default=None, help="dry-run 결과 저장 경로 (없으면 stdout)")
     p.add_argument("--db-url", default=None)
     p.add_argument("--ollama-url", default=None)
@@ -61,7 +63,10 @@ def _upload_tables_to_s3(table_metas: list) -> None:
         return
     try:
         import boto3
-        s3 = boto3.client("s3")
+        # boto3는 AWS_REGION을 보지 않는다(표준은 AWS_DEFAULT_REGION). 둘 다 없으면 us-east-1로
+        # 떨어져 ap-northeast-2 버킷과 어긋나므로 팀 규약 변수를 읽어 직접 넘긴다.
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        s3 = boto3.client("s3", region_name=region) if region else boto3.client("s3")
         for tm in table_metas:
             s3.put_object(
                 Bucket=bucket,
@@ -92,8 +97,8 @@ def main() -> None:
         logger.error(f"파일 없음: {pdf_path}")
         sys.exit(1)
 
-    from insurance_chunker.models import DocMeta, compute_doc_hash
     from insurance_chunker.chunker import auto_doc_type
+    from insurance_chunker.models import DocMeta, compute_doc_hash
 
     doc_type = args.doc_type or auto_doc_type(pdf_path.name)
     doc_hash = compute_doc_hash(str(pdf_path))
@@ -114,7 +119,7 @@ def main() -> None:
 
     conn = None
     if not args.dry_run:
-        from db.storage import get_connection, init_schema, doc_already_ingested, delete_by_doc_hash
+        from db.storage import delete_by_doc_hash, doc_already_ingested, get_connection, init_schema
         conn = get_connection(args.db_url)
         init_schema(conn, skip=args.no_init_schema)
         if doc_already_ingested(conn, doc_hash):

@@ -48,7 +48,9 @@ def fake_pool() -> _FakePool:
 
 @pytest.fixture(autouse=True)
 def fake_embed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(search_mod, "embed_texts", lambda texts: [[0.0] * 1024 for _ in texts])
+    # db/search.py는 embed_texts가 아니라 embed_query(단건, instruct 프리픽스 포함)를 쓴다.
+    # 이 테스트는 CI에서 한 번도 돌지 않아 그 변경을 놓친 채 남아 있었다.
+    monkeypatch.setattr(search_mod, "embed_query", lambda query: [0.0] * 1024)
 
 
 @pytest.mark.asyncio

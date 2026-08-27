@@ -10,6 +10,8 @@ deploy/data/
 *.json
 !eval/eval_set.example.jsonl
 dry_run_out/
+# 실행 이력(runlog) 로컬 폴백 — 운영에선 호스트 볼륨 /data/state에 쌓인다
+.state/
 *.egg-info/
 dist/
 .pytest_cache/

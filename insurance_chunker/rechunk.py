@@ -14,7 +14,7 @@ import re
 import uuid as _uuid
 from typing import Optional
 
-from .boundaries import Boundary, TITLE_SUFFIX, is_title_like, label_for
+from .boundaries import TITLE_SUFFIX, Boundary, is_title_like, label_for
 from .models import DocMeta, InsuranceChunk, TableMeta
 
 logger = logging.getLogger(__name__)
@@ -129,7 +129,8 @@ def _classify(text: str, label: Optional[str] = None) -> str:
     return result
 
 
-def _prefix(meta: DocMeta, section_label: Optional[str], art: Optional[int], atitle: Optional[str]) -> str:
+def _prefix(meta: DocMeta, section_label: Optional[str], art: Optional[int],
+            atitle: Optional[str]) -> str:
     parts = [meta.insurer, meta.product_name]
     if section_label:
         parts.append(section_label)
@@ -223,7 +224,7 @@ def _citation_run_indices(lines: list[str]) -> set[int]:
     형태(헤딩만 있는 줄)를 딱 1~2개 만든다 — 진짜 타법령 나열은 보통
     5개 이상 이어지지만, 안전하게 3개 이상 연쇄일 때만 인용으로 판정한다.
     """
-    nonblank = [i for i, l in enumerate(lines) if l.strip()]
+    nonblank = [i for i, ln in enumerate(lines) if ln.strip()]
     run: list[int] = []
     result: set[int] = set()
 
@@ -274,11 +275,11 @@ def _split_articles(body: str) -> list[str]:
 
 def _parse_markdown_table(body: str) -> tuple[list[str], list[str]]:
     """markdown 표에서 헤더 행(컬럼명 + 구분선)과 데이터 행 분리."""
-    lines = [l for l in body.split("\n") if l.strip().startswith("|")]
+    lines = [ln for ln in body.split("\n") if ln.strip().startswith("|")]
     if not lines:
         return [], []
     sep_idx = next(
-        (i for i, l in enumerate(lines) if re.match(r"^\|[-| :]+\|?\s*$", l.strip())),
+        (i for i, ln in enumerate(lines) if re.match(r"^\|[-| :]+\|?\s*$", ln.strip())),
         None,
     )
     if sep_idx is not None:
@@ -301,7 +302,7 @@ def _rescue_title(prev: dict) -> Optional[str]:
     """
     if prev.get("is_table"):
         return None
-    lines = [l.strip() for l in prev["text"].rstrip().split("\n") if l.strip()]
+    lines = [ln.strip() for ln in prev["text"].rstrip().split("\n") if ln.strip()]
     for ln in reversed(lines[-3:]):
         # is_title_like: 본문 문장이 "…특별약관"으로 끝나 보이는 조각을 라벨로
         # 승격시키던 문제를 차단(KB 1250p에서 한 조각이 청크 25%를 흡수했다).
@@ -415,7 +416,7 @@ def clean(data: list[dict], bounds: list[Boundary],
                     return True
                 return False
 
-            body = "\n".join(l for l in raw.split("\n") if not drop_line(l)).strip()
+            body = "\n".join(ln for ln in raw.split("\n") if not drop_line(ln)).strip()
             if not body:
                 continue
         else:
@@ -718,7 +719,8 @@ def finalize(
                     row_end = j + len(batch)
                     child_body = header_text + "\n" + "\n".join(batch)
                     text = m["prefix"] + "\n" + m["header"] + "\n" + child_body
-                    key = f"{meta.doc_hash}:{meta.source_pdf}:{m['page_start']}:tbl:{table_id}:{row_start}"
+                    key = (f"{meta.doc_hash}:{meta.source_pdf}:{m['page_start']}"
+                           f":tbl:{table_id}:{row_start}")
                     chunk_id = hashlib.sha256(key.encode()).hexdigest()[:24]
                     chunks.append(InsuranceChunk(
                         chunk_id=chunk_id,

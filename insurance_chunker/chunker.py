@@ -6,7 +6,6 @@ schedule       : 표 행 단위 청크
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from typing import Optional
@@ -129,7 +128,7 @@ def _chunk_policy_terms(
     hard_max: int,
 ) -> tuple[list[InsuranceChunk], list[TableMeta]]:
     from .boundaries import find as find_bounds
-    from .rechunk import clean, merge, finalize, mark_boilerplate, report
+    from .rechunk import clean, finalize, mark_boilerplate, merge, report
 
     # 폰트 기반 경계 감지
     bounds = None
@@ -138,6 +137,7 @@ def _chunk_policy_terms(
     if pdf_path:
         try:
             import fitz
+
             from .boundaries import assess
             from .toc import extract_toc_titles_ordered
             with fitz.open(pdf_path) as doc:
@@ -150,7 +150,8 @@ def _chunk_policy_terms(
                     logger.info(f"목차 제목 수확: {len(toc_titles)}개")
                 except Exception as e:
                     logger.warning(f"목차 추출 실패(경계 검출만으로 진행): {e}")
-            logger.info(f"폰트 경계 감지: {len(bounds)}개 (본문폰트={det.body_size}, 제목폰트={det.title_size})")
+            logger.info(f"폰트 경계 감지: {len(bounds)}개 "
+                        f"(본문폰트={det.body_size}, 제목폰트={det.title_size})")
             if level == "weak":
                 for r in reasons:
                     logger.warning(f"[신뢰도 WEAK] {r}")

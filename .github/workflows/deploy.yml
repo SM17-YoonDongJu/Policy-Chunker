@@ -113,7 +113,9 @@ jobs:
           # 남겨두면 cron과 데몬이 같은 인덱싱을 이중 실행한다.
           rm -f /etc/cron.d/insurance-chunker
           # 작업 디렉터리는 ubuntu 소유로. data/에 PDF·docs.yaml을 둔다.
-          mkdir -p ${{ env.EC2_DIR }}/data
+          # data/state는 실행 이력(runlog) — 컨테이너의 app 유저(uid 1000)가 써야 하므로
+          # ubuntu(uid 1000) 소유로 두면 맞아떨어진다. 이미지의 useradd --uid 1000과 짝.
+          mkdir -p ${{ env.EC2_DIR }}/data/state
           chown -R ubuntu:ubuntu ${{ env.EC2_DIR }}
           # compose 이미지 태그(:latest)와 레지스트리는 셸 env로 주입.
           export AWS_ECR_REGISTRY="$REGISTRY"
