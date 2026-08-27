@@ -24,7 +24,10 @@ import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+import runlog
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -56,6 +59,11 @@ _SUMMARY_PAT = re.compile(r"요약서|상품안내|상품설명서")
 # 우리 파이프라인은 PDF 전용이라(PyMuPDF) 그 외 형식은 파싱해도 0청크로 끝난다.
 _PDF_EXT = ".pdf"
 
+# 0청크·오류로 끝난 문서를 몇 번까지 다시 시도할지. 넘으면 격리(QUARANTINED)해 건너뛴다.
+# 0청크 문서는 policy_chunks에 행이 안 생겨 doc_already_ingested가 영원히 False라, 상한이
+# 없으면 매 주기 S3에서 다시 받아 다시 파싱한다(주기가 7일이니 영원히).
+_MAX_RETRY = int(os.environ.get("INGEST_MAX_RETRY", "3"))
+
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ai.corpus_file 카탈로그 기반 인덱싱 (S3에서 PDF 수신)")
@@ -73,6 +81,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--no-init-schema", action="store_true",
                    help="스키마 DDL 실행 안 함 (운영은 AI 레포 migrations/corpus가 단일 관리)")
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--retry-quarantined", action="store_true",
+                   help=f"{_MAX_RETRY}회 연속 실패로 격리된 문서도 다시 시도한다")
     p.add_argument("--target-tokens", type=int, default=500)
     p.add_argument("--hard-max-tokens", type=int, default=1000)
     return p.parse_args()
@@ -138,6 +148,17 @@ def _s3_client():
     return boto3.client("s3", region_name=region) if region else boto3.client("s3")
 
 
+def _should_quarantine(hist: dict | None, retry_ok: bool) -> bool:
+    """이 문서를 이번 주기에 건너뛸지. hist는 runlog.attempt()의 반환값.
+
+    0청크·오류가 _MAX_RETRY회 연속이면 다운로드도 파싱도 하지 않는다. 성공 한 번이면
+    runlog가 카운터를 0으로 되돌리므로, 파일이 고쳐져 다시 적재되면 자동으로 풀린다.
+    """
+    if retry_ok or not hist:
+        return False
+    return hist.get("attempts", 0) >= _MAX_RETRY
+
+
 def _download(bucket: str, key: str, dest: Path) -> bool:
     try:
         _s3_client().download_file(bucket, key, str(dest))
@@ -156,7 +177,7 @@ def main() -> None:
         sys.exit(1)
 
     from db.storage import doc_already_ingested, get_connection, init_schema
-    from ingest_many import _run_one
+    from ingest_many import _fmt_phases, run_one_safe
 
     conn = get_connection(args.db_url)
     init_schema(conn, skip=args.no_init_schema)
@@ -174,22 +195,38 @@ def main() -> None:
         dry_run_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[dict] = []
+    t_run = time.time()
+    retry_ok = args.retry_quarantined or args.overwrite
     with tempfile.TemporaryDirectory(prefix="corpus-pdf-") as tmp:
         for i, row in enumerate(rows, 1):
             name = row["notion_file_name"] or Path(row["s3_key"]).name
+            sha = row["sha256"]
             logger.info(f"\n[{i}/{len(rows)}] {name}  ({row['company']} / {row['product_name']})")
 
             # 1차 중복 제거 — 카탈로그 sha256이 곧 doc_hash라 내려받기 전에 거른다.
-            if not args.dry_run and not args.overwrite and row["sha256"] \
-                    and doc_already_ingested(conn, row["sha256"]):
+            if not args.dry_run and not args.overwrite and sha \
+                    and doc_already_ingested(conn, sha):
                 logger.info("  SKIPPED: 이미 적재됨(다운로드 생략)")
-                results.append({"status": "SKIPPED"})
+                results.append({"status": "SKIPPED", "pdf": name})
+                continue
+
+            # 격리 — 0청크/오류가 연속 _MAX_RETRY회면 더는 받지도, 파싱하지도 않는다.
+            hist = runlog.attempt(sha) if (sha and not args.dry_run) else None
+            if _should_quarantine(hist, retry_ok):
+                logger.warning(
+                    f"  QUARANTINED: {hist['status']} {hist['attempts']}회 연속 "
+                    f"(마지막 {hist['last_at']}) — 다운로드·파싱 생략. "
+                    f"다시 시도하려면 --retry-quarantined")
+                results.append({"status": "QUARANTINED", "pdf": name})
                 continue
 
             # auto_doc_type이 파일명을 보므로 원래 이름을 유지한다.
             dest = Path(tmp) / f"{row['sha256'] or i}_{Path(name).name}"
             if not _download(bucket, row["s3_key"], dest):
-                results.append({"status": "ERROR"})
+                results.append({"status": "ERROR", "pdf": name})
+                if not args.dry_run:
+                    runlog.record_item(sha256=sha, name=name, status="ERROR",
+                                       error="S3 다운로드 실패", source="catalog")
                 continue
 
             eff = row["effective_date"]
@@ -201,37 +238,61 @@ def main() -> None:
                 "product_code": row["product_code"],
                 "effective_date": eff.isoformat() if eff else None,
             }
-            result = _run_one(doc, args, dry_run_dir)
+            result = run_one_safe(doc, args, dry_run_dir)
             # 임시 파일명이 아니라 원래 파일명으로 로그·결과를 남긴다.
             result["pdf"] = name
+            # 0청크는 성공이 아니다 — 적재가 0건이므로 EMPTY로 따로 센다(재시도 상한 대상).
+            if result["status"] == "OK" and result.get("chunks", 0) == 0:
+                result["status"] = "EMPTY"
             results.append(result)
 
-            if result["status"] == "OK" and result.get("chunks", 0) == 0:
-                # 청크가 0이면 DB에 행이 안 생겨 doc_already_ingested가 영원히 False다
-                # → 다음 주기에 또 받아서 또 파싱한다. 조용히 넘기면 진도가 안 나가는 걸 모른다.
+            if result["status"] == "EMPTY":
+                left = max(0, _MAX_RETRY - ((hist or {}).get("attempts", 0) + 1))
                 logger.warning(f"  0청크 — 적재 없음(PDF 아님/파싱 실패 가능). "
-                               f"다음 주기에 재시도된다. {result['elapsed_s']}s")
+                               f"남은 재시도 {left}회. {result.get('elapsed_s', 0)}s")
             elif result["status"] == "OK":
                 logger.info(f"  OK: {result['chunks']}청크 | 경고 {result['warnings']}건 "
-                            f"| {result['elapsed_s']}s")
+                            f"| {result['elapsed_s']}s | {_fmt_phases(result['phases'])}")
             elif result["status"] == "SKIPPED":
                 logger.info(f"  SKIPPED: {result.get('reason')}")
             else:
                 logger.error(f"  ERROR: {result.get('error')}")
 
+            if not args.dry_run:
+                runlog.record_item(
+                    sha256=sha, name=name, status=result["status"],
+                    chunks=result.get("chunks", 0), warnings=result.get("warnings", 0),
+                    elapsed_s=result.get("elapsed_s", 0.0), phases=result.get("phases"),
+                    error=result.get("error"), source="catalog",
+                    insurer=row["company"], product=row["product_name"])
+
             dest.unlink(missing_ok=True)  # 디스크 점유를 건별로 반환
 
     conn.close()
 
-    ok = sum(1 for r in results if r["status"] == "OK" and r.get("chunks", 0) > 0)
-    empty = sum(1 for r in results if r["status"] == "OK" and r.get("chunks", 0) == 0)
-    skipped = sum(1 for r in results if r["status"] == "SKIPPED")
-    err = sum(1 for r in results if r["status"] == "ERROR")
+    def n(st: str) -> int:
+        return sum(1 for r in results if r["status"] == st)
+
+    ok, empty, skipped = n("OK"), n("EMPTY"), n("SKIPPED")
+    quarantined, err = n("QUARANTINED"), n("ERROR")
     total_chunks = sum(r.get("chunks", 0) for r in results if r["status"] == "OK")
-    logger.info(f"\nOK={ok} 0청크={empty} SKIPPED={skipped} ERROR={err} | 총 청크={total_chunks}개")
+    elapsed = round(time.time() - t_run, 1)
+    logger.info(f"\nOK={ok} 0청크={empty} SKIPPED={skipped} 격리={quarantined} ERROR={err} "
+                f"| 총 청크={total_chunks}개 | {elapsed}s")
     if empty:
-        logger.warning(f"0청크 {empty}건은 DB에 남지 않아 다음 주기에 다시 처리된다 — "
+        logger.warning(f"0청크 {empty}건 — {_MAX_RETRY}회 연속이면 격리된다. "
                        "반복되면 대상 선정(category/파일형식)을 재검토할 것")
+    if quarantined:
+        logger.warning(f"격리 {quarantined}건은 이번 주기에 손대지 않았다 — "
+                       "state/attempts.json에서 목록 확인")
+
+    if not args.dry_run:
+        runlog.record_run({
+            "source": "catalog", "category": args.category, "total": len(rows),
+            "ok": ok, "empty": empty, "skipped": skipped, "quarantined": quarantined,
+            "error": err, "total_chunks": total_chunks,
+            "skipped_non_pdf": sum(skipped_ext.values()), "elapsed_s": elapsed,
+        })
     if err:
         sys.exit(1)
 

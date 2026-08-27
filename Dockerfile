@@ -26,14 +26,23 @@ COPY pyproject.toml README.md ./
 COPY insurance_chunker ./insurance_chunker
 COPY db ./db
 COPY ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py ./
+# 운영 계측: 실행 이력(runlog) · 사이클 알림(notify) · 좀비 판정(healthcheck) · 지표(metrics).
+COPY runlog.py notify.py healthcheck.py metrics.py ./
 
 # base 의존 + 패키지 설치. setuptools packages.find가 insurance_chunker/db를 포함한다.
 RUN pip install .
 
-# 비루트 실행.
-RUN useradd --create-home app && chown -R app:app /app
+# 비루트 실행. uid를 1000으로 못박는다 — 호스트 ./data가 ubuntu(uid 1000) 소유로
+# chown되므로(deploy.yml) 여기가 어긋나면 /data/state에 이력을 못 써 로컬 폴백으로 떨어진다.
+RUN useradd --create-home --uid 1000 app && chown -R app:app /app
 USER app
 
 # 상시 데몬(worker.py) — 주기마다 ingest_many + rebuild_search_terms를 돌린다.
 # SIGTERM에 우아하게 종료. 일회성 실행은 `docker compose run --rm chunker python ingest.py ...`.
+# 마지막 인덱싱 성공 시각으로 건강을 판정한다 — 프로세스는 살아 있는데 매 주기 실패하는
+# 좀비를 프로세스 생존만으로는 못 잡기 때문. compose의 restart 정책은 unhealthy로 재시작하지
+# 않으므로(그건 Swarm 기능) 이건 자가치유가 아니라 `docker ps` STATUS로 드러내는 신호다.
+HEALTHCHECK --interval=5m --timeout=10s --start-period=1m --retries=3 \
+    CMD ["python", "/app/healthcheck.py"]
+
 CMD ["python", "worker.py"]
