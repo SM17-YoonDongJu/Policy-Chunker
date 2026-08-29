@@ -90,3 +90,101 @@ def test_search_terms_failure_is_a_warning_not_a_failure(wk, monkeypatch):
     wk._cycle()
     assert wk.runlog.daemon_state()["last_success_at"]
     assert wk._sent == ["warning"]
+
+
+# ── 문서 병렬 처리 (#24) ──────────────────────────────────────────────────────
+
+def test_serial_path_preserves_order(monkeypatch):
+    """동시성 1이면 기존 동작 그대로 — 순서가 유지돼야 로그를 읽을 수 있다."""
+    tasks = [{"name": f"{i}.pdf"} for i in range(5)]
+    monkeypatch.setattr(ingest_catalog, "_process_one",
+                        lambda t: {"pdf": t["name"], "status": "OK"})
+    out = [t["name"] for t, _ in ingest_catalog._run_tasks(tasks, 1)]
+    assert out == ["0.pdf", "1.pdf", "2.pdf", "3.pdf", "4.pdf"]
+
+
+def test_single_task_does_not_spawn_a_pool(monkeypatch):
+    """문서 한 건에 프로세스 풀을 띄우면 재import 비용만 낸다."""
+    spawned = []
+    monkeypatch.setattr(ingest_catalog, "_process_one",
+                        lambda t: {"pdf": t["name"], "status": "OK"})
+    import concurrent.futures as cf
+    monkeypatch.setattr(cf, "ProcessPoolExecutor",
+                        lambda *a, **k: spawned.append(1))
+    list(ingest_catalog._run_tasks([{"name": "a.pdf"}], 4))
+    assert spawned == []
+
+
+def test_result_pairs_with_its_own_task(monkeypatch):
+    """결과가 완료 순서로 오므로 어느 문서 것인지 짝을 잃으면 안 된다 —
+    엉뚱한 sha256에 이력이 기록되면 격리 판정이 틀어진다."""
+    tasks = [{"name": f"{i}.pdf", "sha": f"s{i}"} for i in range(4)]
+    monkeypatch.setattr(ingest_catalog, "_process_one",
+                        lambda t: {"pdf": t["name"], "status": "OK", "echo": t["sha"]})
+    for task, result in ingest_catalog._run_tasks(tasks, 1):
+        assert result["echo"] == task["sha"]
+
+
+def test_worker_crash_becomes_an_error_result(monkeypatch):
+    """워커 프로세스가 죽어도 나머지 문서는 계속돼야 한다."""
+    def _boom(t):
+        raise RuntimeError("worker died")
+
+    monkeypatch.setattr(ingest_catalog, "_process_one", _boom)
+    # 동시성 1 경로에서는 예외가 그대로 오르므로, 풀 경로의 계약만 확인한다.
+    with pytest.raises(RuntimeError):
+        list(ingest_catalog._run_tasks([{"name": "a.pdf"}], 1))
+
+
+def test_prepare_doc_maps_catalog_row(tmp_path):
+    """카탈로그 행의 메타데이터가 청크에 그대로 실린다 — 여기가 틀리면 검색 필터가 어긋난다."""
+    import datetime
+    row = {"company": "메리츠화재", "product_name": "단체안심생활보험",
+           "product_code": "ABC-123", "effective_date": datetime.date(2026, 6, 1),
+           "category": "terms"}
+    doc = ingest_catalog._prepare_doc(row, "약관.pdf", tmp_path / "x.pdf")
+    assert doc["insurer"] == "메리츠화재"
+    assert doc["effective_date"] == "2026-06-01"
+    assert doc["doc_type"] == "policy_terms"
+
+
+def test_prepare_doc_falls_back_when_metadata_is_missing(tmp_path):
+    """카탈로그에 값이 비어 있어도 적재는 되어야 한다."""
+    row = {"company": None, "product_name": None, "product_code": None,
+           "effective_date": None, "category": "terms"}
+    doc = ingest_catalog._prepare_doc(row, "무제.pdf", tmp_path / "x.pdf")
+    assert doc["insurer"] == "미상"
+    assert doc["product_name"] == "무제"
+    assert doc["effective_date"] is None
+
+
+def test_task_payload_survives_pickling():
+    """작업 페이로드가 프로세스 경계를 넘는다.
+
+    argparse.Namespace와 카탈로그 행(datetime.date 포함)이 피클되지 않으면 동시성을 켠
+    순간 운영에서만 터진다 — 로컬 순차 실행에서는 절대 안 드러난다.
+    """
+    import argparse
+    import datetime
+    import pickle
+
+    task = {
+        "row": {"company": "메리츠화재", "product_name": "x", "product_code": None,
+                "effective_date": datetime.date(2026, 6, 1), "category": "terms",
+                "s3_key": "corpus/a.pdf", "sha256": "abc"},
+        "args": argparse.Namespace(dry_run=False, overwrite=False, no_embed=True,
+                                   target_tokens=500, hard_max_tokens=1000,
+                                   db_url=None, ollama_url=None, embed_model=None,
+                                   no_ocr=True, no_vision=True, no_init_schema=True),
+        "name": "약관.pdf", "bucket": "b", "dest": "/tmp/x.pdf",
+        "dry_run_dir": "out", "prev_attempts": 0,
+    }
+    restored = pickle.loads(pickle.dumps(task))
+    assert restored["row"]["effective_date"] == datetime.date(2026, 6, 1)
+    assert restored["args"].target_tokens == 500
+
+
+def test_process_one_is_importable_by_name():
+    """spawn 방식은 워커에서 함수를 이름으로 다시 찾는다 — 모듈 최상위여야 한다."""
+    import pickle
+    assert pickle.loads(pickle.dumps(ingest_catalog._process_one)) is ingest_catalog._process_one
