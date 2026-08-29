@@ -7,10 +7,8 @@
 # base 의존만 설치한다: OCR(surya-ocr)·ST(sentence-transformers) extra는 무겁고 선택적이라 제외.
 #
 # VLM 표 추출은 이미지에 백엔드를 넣지 않고 같은 호스트의 ollama 컨테이너(brbs-ollama)를
-# 쓴다 — VLM_BACKEND=local + VLM_URL=...:11434 + VLM_MODEL=qwen3-vl:8b-instruct.
-# OpenAI 호환 /v1/chat/completions 한 번이라 추가 의존이 없다(.env.example 참고).
-# 설정을 안 켜면 코드 기본값이 surya인데 그 바이너리는 여기 없어서, VLM 단계는 경고만
-# 남기고 빈 결과로 넘어간다 — 표는 PyMuPDF/pdfplumber 결과만 쓰인다.
+# 쓴다 — OpenAI 호환 /v1/chat/completions 한 번이라 추가 의존이 없다. 기본값이 그쪽을
+# 가리키므로(extractor.py) 설정 없이 동작한다. 끄려면 VLM_BACKEND=off.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \

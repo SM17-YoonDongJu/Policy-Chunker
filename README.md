@@ -19,8 +19,7 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
   │     ├ pdfplumber  설치 시 자동 사용
   │     ├ camelot     설치 시 자동 사용 (ghostscript 필요)
   │     └ VLM         PyMuPDF가 표를 감지한 페이지만 (VLM_BACKEND)
-  │                   local=OpenAI 호환(Ollama qwen3-vl / llama-server)
-  │                   surya=Surya OCR, claude=Claude CLI
+  │                   local=OpenAI 호환 — 기본은 Ollama qwen3-vl
   │
   ├─ combine.py       페이지별 best-of 표 선택 (더블스페이스 기준)
   │
@@ -49,18 +48,18 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
 pip install -e ".[dev]"
 ```
 
-VLM 표 추출은 기본으로 꺼져 있는 것과 같다 — 코드 기본 백엔드가 `surya`인데 그 바이너리가
-없으면 경고만 남기고 넘어간다. 켜려면 백엔드를 하나 준비해야 한다:
+VLM 표 추출은 기본으로 켜져 있고, 같은 호스트의 **Ollama**(`qwen3-vl:8b-instruct`)에
+OpenAI 호환 `/v1/chat/completions`로 붙는다. 이미지에 추가 의존이 없다.
 
 | 백엔드 | 준비물 |
 |---|---|
-| `local` (권장) | OpenAI 호환 서버. **Ollama에 VLM 모델**(`qwen3-vl:8b-instruct` 등) 또는 llama-server |
+| `local` (기본) | OpenAI 호환 서버 — Ollama에 VLM 모델, 또는 llama-server |
 | `surya` | `pip install ".[ocr]"` |
-| `claude` | [Claude Code CLI](https://claude.ai/code) 설치·로그인 (유료 API — 사용 자제) |
+| `off` | 없음 (VLM 단계를 건너뛴다) |
 
 ```bash
-VLM_BACKEND=local VLM_URL=http://localhost:11434 VLM_MODEL=qwen3-vl:8b-instruct \
-  python ingest.py --pdf 약관.pdf --insurer ... --product ...
+# 로컬에서 Ollama 없이 청킹만 볼 때
+VLM_BACKEND=off python ingest.py --pdf 약관.pdf --insurer ... --product ...
 ```
 
 ### 단일 PDF — DB 저장
@@ -258,11 +257,10 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `EMBED_MAX_CHARS` | `1800` | 장문 절단 상한 — **eval과 같은 값이어야 수치가 재현된다** |
 | `EMBED_BACKEND` | `ollama` | `ollama` \| `sentence_transformers` (BGE-M3 전환) |
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
-| `VLM_BACKEND` | `surya` | `local` \| `surya` \| `claude` |
-| `VLM_URL` | `http://localhost:8090` | `local` 백엔드 서버. Ollama면 `:11434` |
-| `VLM_MODEL` | — | `local` 백엔드 모델명. **Ollama는 필수**, llama-server는 생략 |
+| `VLM_BACKEND` | `local` | `local` \| `surya` \| `off` |
+| `VLM_URL` | `http://localhost:11434` | `local` 백엔드 서버 (같은 호스트 Ollama) |
+| `VLM_MODEL` | `qwen3-vl:8b-instruct` | Ollama는 필수. llama-server면 비운다 |
 | `VLM_PROMPT` | (한국어 표 변환 지시) | PaddleOCR-VL이면 `Table Recognition:` 로 |
-| `CLAUDE_BIN` | `claude` | `claude` 백엔드 실행 경로 |
 | `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
 | `VLM_TIMEOUT` | `600` | VLM 호출 타임아웃(초) |
 | `VISION_MAX_PAGES` | `9999` | VLM 호출 상한 페이지 수 |

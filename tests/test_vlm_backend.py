@@ -107,7 +107,9 @@ def test_default_prompt_targets_a_general_vlm(ex, monkeypatch):
     extractor.extract_vision_local(_FakePage(), 1)
     prompt = seen["payload"]["messages"][0]["content"][1]["text"]
     assert "마크다운" in prompt
-    assert "표가 없으면" in prompt
+    assert "표가 전혀 없으면" in prompt
+    # 약관 표는 숫자·한자가 많아 의역이 곧 오답이다.
+    assert "의역" in prompt
 
 
 def test_prompt_is_overridable(ex, monkeypatch):
@@ -168,3 +170,44 @@ def test_page_budget_is_respected(ex, monkeypatch):
     for _ in range(3):
         extractor.extract_vision(_FakePage(), 1)
     assert extractor._vision_call_count == 2
+
+
+# ── 기본값 · off 스위치 ───────────────────────────────────────────────────────
+
+def test_defaults_point_at_the_host_ollama(ex, monkeypatch):
+    """claude CLI를 걷어내고 같은 호스트 Ollama의 qwen3-vl로 대체했다.
+
+    기본값이 어긋나면 아무도 설정을 안 건드린 채 VLM이 또 조용히 죽는다
+    (이전에 surya가 기본이라 273회 건너뛴 그대로).
+    """
+    for k in ("VLM_BACKEND", "VLM_URL", "VLM_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    extractor = ex()
+    assert extractor.VLM_BACKEND == "local"
+    assert extractor.VLM_URL == "http://localhost:11434"
+    assert extractor.VLM_MODEL == "qwen3-vl:8b-instruct"
+
+
+def test_off_backend_skips_without_calling(ex, monkeypatch):
+    """VLM을 끄는 명시적 스위치. 예전엔 '설치 안 된 백엔드'가 사실상 off 역할을 했다."""
+    extractor = ex(VLM_BACKEND="off")
+    seen = _capture(monkeypatch)
+    assert extractor.extract_vision(_FakePage(), 1) is None
+    assert seen == {}
+
+
+def test_off_backend_does_not_consume_the_page_budget(ex, monkeypatch):
+    extractor = ex(VLM_BACKEND="off", VISION_MAX_PAGES="2")
+    _capture(monkeypatch)
+    for _ in range(5):
+        extractor.extract_vision(_FakePage(), 1)
+    assert extractor._vision_call_count == 0
+
+
+def test_claude_backend_is_gone(ex, monkeypatch):
+    """유료 API 경로를 제거했다. 알 수 없는 값이 와도 local로 처리한다."""
+    extractor = ex(VLM_BACKEND="claude", VLM_MODEL="m")
+    assert not hasattr(extractor, "CLAUDE_BIN")
+    seen = _capture(monkeypatch)
+    extractor.extract_vision(_FakePage(), 1)
+    assert seen["url"].endswith("/v1/chat/completions")

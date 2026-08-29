@@ -4,7 +4,8 @@ Policy-Chunker(main) extract.py와 동일한 전략:
   - PyMuPDF    : fitz.find_tables() (괘선 있는 표, 빠름)
   - pdfplumber : 설치돼 있으면 자동 사용
   - camelot    : 설치돼 있으면 자동 사용 (ghostscript 필요)
-  - VLM        : claude CLI, PyMuPDF 표 탐지 페이지에만 실행
+  - VLM        : OpenAI 호환 VLM(기본: 같은 호스트 Ollama의 qwen3-vl),
+                 PyMuPDF가 표를 감지한 페이지에만 실행
 
 combine.py가 페이지별로 더블스페이스 가장 적은 소스를 선택한다.
 """
@@ -20,26 +21,30 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 VISION_MAX_PAGES = int(os.environ.get("VISION_MAX_PAGES", "9999"))
-CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 VLM_DPI = int(os.environ.get("VLM_DPI", "150"))
 VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "600"))
-# 'surya'  = Surya OCR (별도 바이너리 필요)
-# 'local'  = OpenAI 호환 /v1/chat/completions — Ollama(qwen3-vl 등) 또는 llama-server
-# 'claude' = claude CLI (유료 API — 사용 자제)
-VLM_BACKEND = os.environ.get("VLM_BACKEND", "surya")
-VLM_URL = os.environ.get("VLM_URL", "http://localhost:8090")
+# 'local' = OpenAI 호환 /v1/chat/completions — 같은 호스트의 Ollama(기본) 또는 llama-server
+# 'surya' = Surya OCR (별도 바이너리 필요 — [ocr] extra)
+# 'off'   = VLM 표 추출 안 함
+VLM_BACKEND = os.environ.get("VLM_BACKEND", "local")
+VLM_URL = os.environ.get("VLM_URL", "http://localhost:11434")
 # local 백엔드가 부르는 /v1/chat/completions는 OpenAI 호환 규격이라 Ollama도 그대로 받는다.
 # 다만 Ollama는 model 필드가 필수다(llama-server는 모델 하나만 서빙해 생략 가능).
 # 비워두면 페이로드에서 빼므로 llama-server 호환이 유지된다.
-VLM_MODEL = os.environ.get("VLM_MODEL", "")
+VLM_MODEL = os.environ.get("VLM_MODEL", "qwen3-vl:8b-instruct")
 # PaddleOCR-VL은 "Table Recognition:"이 태스크 토큰이지만, 범용 instruct VLM(qwen3-vl 등)에는
 # 명시적 지시가 필요하다. 기본값은 후자에 맞추고, PaddleOCR-VL을 쓰면 이 값을 바꾼다.
+# 규칙은 claude 백엔드를 쓰던 시절 쌓인 것을 옮겼다 — 약관 표는 숫자·한자가 많아
+# 의역이 곧 오답이고, 읽기 어려운 셀에서 멈추면 페이지 전체를 잃는다.
 _DEFAULT_VLM_PROMPT = (
-    "이 페이지 이미지에서 표를 찾아 GitHub 마크다운 표로 변환하세요.\n"
-    "- 표가 없으면 아무것도 출력하지 마세요.\n"
-    "- 설명·머리말·코드펜스 없이 표만 출력하세요.\n"
-    "- 병합된 셀은 값을 반복해 채우세요.\n"
-    "- 원문 텍스트를 그대로 옮기고 요약하지 마세요."
+    "이 페이지 이미지의 표를 GitHub 마크다운 표로만 옮겨라.\n"
+    "규칙(엄수):\n"
+    "- 셀 텍스트는 원문 그대로(숫자·한자·줄바꿈 보존). 의역·요약 금지.\n"
+    "- 병합된 셀은 값을 반복해 채워라.\n"
+    "- 읽기 어려운 셀은 [?]로 표기하고 계속 진행하라.\n"
+    "- 표가 여러 개면 빈 줄로 구분하라.\n"
+    "- 표가 전혀 없으면 아무것도 출력하지 마라.\n"
+    "- 설명·머리말·코드펜스 없이 표 마크다운만 출력하라."
 )
 VLM_PROMPT = os.environ.get("VLM_PROMPT", _DEFAULT_VLM_PROMPT)
 LLAMA_CPP_BINARY = os.environ.get(
@@ -49,16 +54,6 @@ LLAMA_CPP_BINARY = os.environ.get(
 
 _vision_call_count = 0
 
-_VLM_PROMPT = (
-    "이미지를 Read로 열어, 페이지의 표를 GitHub 마크다운 표로만 옮겨라. 경로: {path}\n"
-    "규칙(엄수):\n"
-    "- 질문하지 마라. Bash·python 등 다른 도구를 쓰지 말고 Read만 사용하라.\n"
-    "- 셀 텍스트는 원문 그대로(숫자·한자·줄바꿈 보존). 의역·요약 금지.\n"
-    "- 읽기 어려운 셀은 [?]로 표기하고 계속 진행하라.\n"
-    "- 표가 여러 개면 빈 줄로 구분.\n"
-    "- 표가 전혀 없으면 첫 줄에 NO_TABLE 한 단어만 출력.\n"
-    "- 설명·머리말 없이 표 마크다운만 출력."
-)
 
 
 def reset_vision_counter() -> None:
@@ -353,52 +348,15 @@ def extract_surya_tables(pdf_path: str, pages: list[int]) -> dict[int, str]:
 
 
 def extract_vision(fitz_page, pno: int) -> Optional[str]:
-    """fitz page → VLM → markdown 표 문자열. VLM_BACKEND로 로컬/claude 선택."""
+    """페이지 → VLM → markdown 표. 백엔드가 off거나 상한을 넘겼으면 None."""
     global _vision_call_count
+    if VLM_BACKEND == "off":
+        return None
     if _vision_call_count >= VISION_MAX_PAGES:
         logger.warning(f"Vision 상한({VISION_MAX_PAGES}회) 도달 — p{pno} 건너뜀")
         return None
-
-    if VLM_BACKEND == "local":
-        _vision_call_count += 1
-        return extract_vision_local(fitz_page, pno)
-
-    try:
-        pix = fitz_page.get_pixmap(dpi=VLM_DPI)
-        fd, png_path = tempfile.mkstemp(suffix=f"_p{pno}.png")
-        os.close(fd)
-        pix.save(png_path)
-    except Exception as e:
-        logger.warning(f"p{pno}: 이미지 렌더링 실패: {e}")
-        return None
-
-    try:
-        prompt = _VLM_PROMPT.format(path=png_path)
-        r = subprocess.run(
-            [CLAUDE_BIN, "-p", prompt, "--allowedTools", "Read"],
-            capture_output=True, text=True, timeout=VLM_TIMEOUT,
-            encoding="utf-8",
-        )
-        _vision_call_count += 1
-        out = (r.stdout or "").strip()
-        if not out or out.split("\n", 1)[0].strip().upper().startswith("NO_TABLE"):
-            return None
-        md = _strip_fences(out)
-        return md if "|" in md else None
-    except FileNotFoundError:
-        logger.error(f"claude CLI를 찾을 수 없음 (bin={CLAUDE_BIN}) — PATH 확인 필요")
-        return None
-    except subprocess.TimeoutExpired:
-        logger.warning(f"p{pno}: claude CLI 타임아웃 ({VLM_TIMEOUT}s)")
-        return None
-    except Exception as e:
-        logger.warning(f"p{pno}: claude CLI 실패: {e}")
-        return None
-    finally:
-        try:
-            os.remove(png_path)
-        except OSError:
-            pass
+    _vision_call_count += 1
+    return extract_vision_local(fitz_page, pno)
 
 
 # ── 문서 단위 추출 ────────────────────────────────────────────────────────────
@@ -443,7 +401,7 @@ def extract_tables_for_doc(
             table_sources["camelot"] = cm
 
         # VLM — PyMuPDF 표 탐지 페이지에만 실행
-        if use_vision:
+        if use_vision and VLM_BACKEND != "off":
             total = len(table_pages)
             logger.info(f"VLM 대상: {total}페이지 (전체 {len(page_numbers)}페이지 중 "
                         f"PyMuPDF 표 탐지 페이지만, backend={VLM_BACKEND}"
