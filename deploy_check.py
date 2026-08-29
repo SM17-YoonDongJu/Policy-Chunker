@@ -3,6 +3,9 @@
 실행(운영 환경에서):
     DATABASE_URL=postgres://... .venv/bin/python deploy_check.py
 
+※ 이건 큰 변경 전에 사람이 한 번 돌리는 스크립트다(asyncpg 필요 — dev extra).
+   매 사이클 도는 상시 점검은 slo.py가 맡는다(psycopg2, 컨테이너 안에서 실행).
+
 배경: 이번 사이클에서 검증된 개선 4건이 프로덕션에 미반영 상태다.
   1) v6 청킹        — 검색 R@5 0.851 → 0.894 (47문항, rerank 기준)
   2) SEARCH_RERANK  — v6은 rerank 전제로만 v3를 이긴다(embed 단독은 0.830 < 0.851)
@@ -14,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
@@ -59,7 +61,8 @@ async def main() -> None:
     if dim == EXPECT_DIM:
         findings.append(("ok", f"임베딩 차원 {dim} — 정상"))
     else:
-        findings.append(("재적재", f"임베딩 차원 {dim} ≠ 기대 {EXPECT_DIM} → 모델 불일치, 재적재 필요"))
+        findings.append(("재적재",
+                         f"임베딩 차원 {dim} ≠ 기대 {EXPECT_DIM} → 모델 불일치, 재적재 필요"))
 
     # 2) content_tsv 생성 컬럼 (파트너 레포 계약)
     has_tsv = await conn.fetchval(
@@ -81,13 +84,19 @@ async def main() -> None:
     if split and split > 0:
         findings.append(("ok", f"호 단위 분할 흔적 {split:,}건 — v5/v6 청킹으로 보임"))
     else:
-        findings.append(("재적재", "호 분할 흔적 없음 → v3 이전 청킹. 재적재해야 R@5 0.894를 얻는다"))
+        findings.append(("재적재",
+                         "호 분할 흔적 없음 → v3 이전 청킹. 재적재해야 R@5 0.894를 얻는다"))
 
-    # 4) 적재 시점 — 이번 사이클(8/10) 이전이면 구버전
+    # 4) 적재 시점 — 너무 오래됐으면 그 사이 청킹이 여러 번 바뀌었을 수 있다.
+    #    고정 날짜로 비교하던 것을 상대 기준으로 바꿨다(날짜가 지나면 영영 참이 된다).
     last = await conn.fetchval("SELECT max(ingested_at) FROM policy_chunks")
+    age_days = await conn.fetchval(
+        "SELECT EXTRACT(EPOCH FROM (now() - max(ingested_at)))/86400 FROM policy_chunks")
     print(f"마지막 적재: {last}")
-    if last and str(last) < "2026-08-10":
-        findings.append(("재적재", f"마지막 적재 {last} — 이번 사이클 수정 이전"))
+    stale_days = float(os.environ.get("STALE_DAYS", "30"))
+    if age_days and float(age_days) > stale_days:
+        findings.append(("재적재", f"마지막 적재 {float(age_days):.0f}일 전 — "
+                                   f"그 사이 청킹이 바뀌었는지 확인할 것"))
 
     # 5) 문서 목록 (보험사 커버리지)
     rows = await conn.fetch(
