@@ -30,9 +30,35 @@ ST_DIM       = int(os.environ.get("ST_DIM",   "1024"))
 QUERY_INSTRUCT = ("Instruct: Given a Korean insurance policy question, "
                   "retrieve relevant policy clauses that answer the question.\nQuery: ")
 
-_BATCH_SIZE  = 32
-_RETRY_MAX   = 3
-_RETRY_DELAY = 2.0
+# 배치가 클수록 HTTP 왕복이 줄어 GPU가 연속으로 일한다. 실측(T4)에서 SM 사용률이
+# 중간중간 62~70%로 떨어지는 구간이 관찰됐는데, 그게 배치 사이에 GPU가 비는 시간이다.
+# 다만 상한은 GPU 전력이다 — T4는 임베딩 부하에서 이미 70W 캡을 넘겨 부스트 클럭이
+# 1590→1200MHz까지 깎인다. 무한정 키운다고 선형으로 빨라지지 않으므로 실측으로 찾는다.
+_BATCH_SIZE  = int(os.environ.get("EMBED_BATCH_SIZE", "32"))
+_RETRY_MAX   = int(os.environ.get("EMBED_RETRY_MAX", "3"))
+_RETRY_DELAY = float(os.environ.get("EMBED_RETRY_DELAY", "2.0"))
+
+# qwen3-embedding 러너가 장문 입력에서 크래시(EOF)한다. eval/retrieval_eval.py:150이
+# 같은 상한으로 절단하는데 운영 경로엔 없었다 — 값이 다르면 색인 벡터와 평가 벡터가
+# 달라져 eval 수치(R@5 0.894 등)가 재현되지 않으므로 반드시 같이 움직여야 한다.
+_MAX_CHARS   = int(os.environ.get("EMBED_MAX_CHARS", "1800"))
+
+# 배치 타임아웃. GPU가 밀리면 여기서 터져 건별 폴백으로 떨어지므로, 배치를 키울 때
+# 같이 올려야 한다(eval은 300초를 쓴다).
+_BATCH_TIMEOUT = float(os.environ.get("EMBED_BATCH_TIMEOUT", "120"))
+
+
+def _truncate(texts: list[str]) -> list[str]:
+    """장문 절단 + 빈 문자열 방어. Ollama는 빈 입력에 오류를 낸다."""
+    out, cut = [], 0
+    for t in texts:
+        if len(t) > _MAX_CHARS:
+            cut += 1
+        out.append(t[:_MAX_CHARS] or " ")
+    if cut:
+        logger.info(f"  장문 {cut}건 절단 ({_MAX_CHARS}자)",
+                    extra={"event": "embed_truncated", "count": cut, "limit": _MAX_CHARS})
+    return out
 
 
 def get_embed_dim() -> int:
@@ -40,16 +66,32 @@ def get_embed_dim() -> int:
 
 
 def _ollama_batch(texts: list[str], url: str, model: str) -> Optional[list[list[float]]]:
+    """배치 임베딩. 실패하면 None을 돌려주되 사유를 반드시 남긴다.
+
+    예전엔 `except Exception: pass`로 전부 삼켰다. 폴백이 조용히 돌기 때문에 배치가
+    깨져 건별로 떨어져도(배치 32건이면 최악 32 x 3회 x 2초 = 3분) 로그에 흔적이 없었고,
+    "임베딩이 느린 이유"를 사후에 알 방법이 없었다.
+    """
+    reason: str
     try:
         resp = requests.post(f"{url}/api/embed",
-                             json={"model": model, "input": texts}, timeout=120)
-        if resp.status_code == 200:
-            data = resp.json()
-            embeddings = data.get("embeddings")
-            if embeddings and len(embeddings) == len(texts):
+                             json={"model": model, "input": texts}, timeout=_BATCH_TIMEOUT)
+        if resp.status_code != 200:
+            reason = f"HTTP {resp.status_code}: {resp.text[:200]}"
+        else:
+            embeddings = resp.json().get("embeddings")
+            if not embeddings:
+                reason = "응답에 embeddings 없음"
+            elif len(embeddings) != len(texts):
+                reason = f"개수 불일치 요청 {len(texts)} != 응답 {len(embeddings)}"
+            else:
                 return embeddings
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - 사유를 남기고 건별 폴백으로 넘긴다
+        reason = f"{type(e).__name__}: {e}"
+
+    logger.warning(
+        f"  [Ollama] 배치 실패 → 건별 폴백 {len(texts)}건 ({reason})",
+        extra={"event": "embed_batch_fallback", "batch_size": len(texts), "reason": reason})
     return None
 
 
@@ -72,11 +114,27 @@ def _embed_ollama(texts: list[str], url: str, model: str) -> list[list[float]]:
     from more_itertools import chunked  # type: ignore
     results: list[list[float]] = []
     batches = list(chunked(texts, _BATCH_SIZE))
+    fallbacks = 0
+    t0 = time.perf_counter()
     for i, batch in enumerate(batches):
         logger.info(f"  [Ollama] 배치 {i+1}/{len(batches)}")
-        vectors = _ollama_batch(list(batch), url, model) or \
-                  [_ollama_single(t, url, model) for t in batch]
+        vectors = _ollama_batch(list(batch), url, model)
+        if vectors is None:
+            fallbacks += 1
+            vectors = [_ollama_single(t, url, model) for t in batch]
         results.extend(vectors)
+
+    elapsed = round(time.perf_counter() - t0, 1)
+    # 폴백이 몇 번이었는지를 한 줄로 남긴다 — 이게 없으면 embed 시간이 실제 추론인지
+    # 폴백 대기인지 사후에 구분할 수 없다(단계 타이밍은 둘을 합쳐서 보여준다).
+    summary = {"event": "embed_done", "backend": "ollama", "texts": len(texts),
+               "batches": len(batches), "batch_size": _BATCH_SIZE,
+               "fallback_batches": fallbacks, "elapsed_s": elapsed}
+    if fallbacks:
+        logger.warning(f"  [Ollama] {len(batches)}배치 중 {fallbacks}배치가 건별 폴백 "
+                       f"— 임베딩이 느렸다면 이것 때문이다 ({elapsed}s)", extra=summary)
+    else:
+        logger.info(f"  [Ollama] {len(batches)}배치 완료 ({elapsed}s)", extra=summary)
     return results
 
 
@@ -116,6 +174,9 @@ def _check_dim(vectors: list[list[float]], expected: int) -> None:
 
 def embed_texts(texts: list[str], ollama_url: Optional[str] = None,
                 model: Optional[str] = None) -> list[list[float]]:
+    # 문서와 질의 모두 같은 상한을 거쳐야 한다 — eval도 양쪽에 같은 절단을 적용하므로
+    # 여기가 어긋나면 평가 수치가 재현되지 않는다.
+    texts = _truncate(texts)
     if EMBED_BACKEND == "sentence_transformers":
         vectors = _embed_st(texts, model or ST_MODEL)
         _check_dim(vectors, ST_DIM)
