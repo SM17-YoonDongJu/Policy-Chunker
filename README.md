@@ -250,6 +250,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VISION_MAX_PAGES` | `9999` | VLM 호출 상한 페이지 수 |
 | `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
 | `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
+| `INGEST_CONCURRENCY` | `1` | 동시 처리 문서 수 (프로세스). 호스트 vCPU 4 기준 2가 현실적 |
 | `HEALTH_GRACE_FACTOR` | `1.5` | 헬스체크 허용 배수 (마지막 성공 기준) |
 | `DISCORD_WEBHOOK_INGEST` | — | 사이클 결과 알림 웹훅 (없으면 알림만 생략) |
 | `INGEST_NOTIFY` | `always` | `always` \| `failure` |
@@ -394,6 +395,31 @@ aws ssm put-parameter --type SecureString --overwrite \
 **수동 롤백**은 Actions에서 `Deploy` 워크플로를 `workflow_dispatch`로 실행하고
 `image_tag`에 되돌릴 `sha7`을 넣으면 된다. 이때는 빌드도 CI도 건너뛴다 — `main`이 깨져서
 롤백하는 상황인데 CI가 막으면 복구를 못 하기 때문이다.
+
+### 문서 동시 처리
+
+`INGEST_CONCURRENCY`(기본 1 = 순차)로 문서를 동시에 처리한다. 실측 기준 `parse`가 전체
+시간의 **47.7%**이고 CPU 바운드(PyMuPDF·pdfplumber)라, 문서를 겹치면 A가 임베딩을
+기다리는 동안 B를 파싱할 수 있다. 스레드가 아니라 **프로세스**여야 하는 이유가 GIL이다.
+
+```bash
+INGEST_CONCURRENCY=2 python ingest_catalog.py
+```
+
+구조는 2단계다.
+
+| 단계 | 어디서 | 왜 |
+|---|---|---|
+| 스킵·격리 판정, 이력 기록 | **부모(순차)** | `attempts.json`이 읽고-고쳐-쓰기라 여러 프로세스가 만지면 서로 덮어쓴다 |
+| 다운로드 · 파싱 · 임베딩 · 저장 | 워커(동시) | 공유 상태를 안 건드린다 |
+
+`spawn`을 명시한다 — `fork`면 부모의 psycopg2 커넥션과 boto3 상태를 물려받는데 둘 다
+fork-safe하지 않다.
+
+**동시성 상한은 호스트가 정한다.** vCPU가 4개이고 `corpus_worker`·Ollama와 나눠 쓰므로
+2가 현실적이고 3부터는 실측이 필요하다. `embed`는 GPU가 큐잉하므로 여기를 올린다고
+비례해서 빨라지지 않는다 — T4 실측에서 임베딩 부하가 이미 70W 캡을 넘겨 부스트 클럭이
+1590→1200MHz로 깎인다.
 
 ### 인덱스 SLO 점검
 

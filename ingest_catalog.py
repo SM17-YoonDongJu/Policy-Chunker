@@ -64,6 +64,17 @@ _PDF_EXT = ".pdf"
 # 없으면 매 주기 S3에서 다시 받아 다시 파싱한다(주기가 7일이니 영원히).
 _MAX_RETRY = int(os.environ.get("INGEST_MAX_RETRY", "3"))
 
+# 문서를 동시에 몇 개 처리할지. 기본 1 = 기존 순차 동작.
+#
+# parse가 전체 시간의 47.7%이고 CPU 바운드(PyMuPDF·pdfplumber)라, 문서를 겹치면 A가
+# 임베딩을 기다리는 동안 B를 파싱할 수 있다. 스레드가 아니라 프로세스여야 하는 이유가
+# 그것이다(GIL).
+#
+# 상한은 호스트가 정한다 — brbs-etl은 vCPU 4이고 corpus_worker·Ollama와 나눠 쓴다.
+# 2가 현실적이고 3부터는 실측이 필요하다. embed 쪽은 GPU가 큐잉하므로 여기를 올린다고
+# 비례해서 빨라지지 않는다(T4 실측: 임베딩 부하가 이미 70W 캡을 넘겨 클럭이 깎인다).
+_CONCURRENCY = int(os.environ.get("INGEST_CONCURRENCY", "1"))
+
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ai.corpus_file 카탈로그 기반 인덱싱 (S3에서 PDF 수신)")
@@ -81,6 +92,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--no-init-schema", action="store_true",
                    help="스키마 DDL 실행 안 함 (운영은 AI 레포 migrations/corpus가 단일 관리)")
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--concurrency", type=int, default=None,
+                   help=f"동시 처리 문서 수 (기본 {_CONCURRENCY}, INGEST_CONCURRENCY)")
     p.add_argument("--retry-quarantined", action="store_true",
                    help=f"{_MAX_RETRY}회 연속 실패로 격리된 문서도 다시 시도한다")
     p.add_argument("--target-tokens", type=int, default=500)
@@ -168,6 +181,69 @@ def _download(bucket: str, key: str, dest: Path) -> bool:
     return True
 
 
+def _prepare_doc(row: dict, name: str, dest: Path) -> dict:
+    """카탈로그 행 → _run_one이 받는 문서 스펙."""
+    eff = row["effective_date"]
+    return {
+        "pdf": str(dest),
+        "doc_type": _doc_type_for(name, row["category"]),
+        "insurer": row["company"] or "미상",
+        "product_name": row["product_name"] or Path(name).stem,
+        "product_code": row["product_code"],
+        "effective_date": eff.isoformat() if eff else None,
+    }
+
+
+def _process_one(task: dict) -> dict:
+    """다운로드 + 처리. 워커 프로세스에서 실행된다.
+
+    공유 상태를 건드리지 않는 것이 이 함수의 계약이다 — runlog(attempts.json은
+    읽고-고쳐-쓰기라 경합한다)도, 부모의 DB 커넥션도 여기서는 쓰지 않는다. 기록은
+    결과를 받은 부모가 순차로 한다.
+    """
+    from ingest_many import run_one_safe
+
+    row, args, name = task["row"], task["args"], task["name"]
+    dest = Path(task["dest"])
+    if not _download(task["bucket"], row["s3_key"], dest):
+        return {"pdf": name, "status": "ERROR", "error": "S3 다운로드 실패", "phases": {}}
+    try:
+        result = run_one_safe(_prepare_doc(row, name, dest), args, Path(task["dry_run_dir"]))
+    finally:
+        dest.unlink(missing_ok=True)  # 디스크 점유를 건별로 반환
+
+    result["pdf"] = name  # 임시 파일명이 아니라 원래 이름으로 남긴다
+    # 0청크는 성공이 아니다 — 적재가 0건이므로 EMPTY로 따로 센다(재시도 상한 대상).
+    if result["status"] == "OK" and result.get("chunks", 0) == 0:
+        result["status"] = "EMPTY"
+    return result
+
+
+def _run_tasks(tasks: list[dict], concurrency: int):
+    """작업 목록을 순서대로(또는 동시에) 실행하며 (task, result)를 하나씩 내놓는다."""
+    if concurrency <= 1 or len(tasks) <= 1:
+        for t in tasks:
+            yield t, _process_one(t)
+        return
+
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    # spawn을 명시한다. fork면 부모의 psycopg2 커넥션과 boto3 상태를 그대로 물려받는데
+    # 둘 다 fork-safe하지 않다. 재import 비용(1~2초)은 문서 처리 시간에 비하면 무시할 만하다.
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=concurrency, mp_context=ctx) as ex:
+        futures = {ex.submit(_process_one, t): t for t in tasks}
+        for fut in as_completed(futures):
+            t = futures[fut]
+            try:
+                yield t, fut.result()
+            except Exception as e:  # noqa: BLE001 - 워커가 죽어도 나머지는 계속
+                logger.exception(f"워커 실패: {t['name']}")
+                yield t, {"pdf": t["name"], "status": "ERROR",
+                          "error": f"{type(e).__name__}: {e}", "phases": {}}
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -177,7 +253,7 @@ def main() -> None:
         sys.exit(1)
 
     from db.storage import doc_already_ingested, get_connection, init_schema
-    from ingest_many import _fmt_phases, run_one_safe
+    from ingest_many import _fmt_phases  # run_one_safe는 워커에서 직접 import
 
     conn = get_connection(args.db_url)
     init_schema(conn, skip=args.no_init_schema)
@@ -197,16 +273,21 @@ def main() -> None:
     results: list[dict] = []
     t_run = time.time()
     retry_ok = args.retry_quarantined or args.overwrite
+    concurrency = args.concurrency if args.concurrency is not None else _CONCURRENCY
+
     with tempfile.TemporaryDirectory(prefix="corpus-pdf-") as tmp:
+        # ── 1단계: 무엇을 처리할지 정한다(순차) ───────────────────────────────
+        # 스킵·격리 판정은 부모에서만 한다. 부모의 DB 커넥션과 attempts.json을 읽는데
+        # attempts.json은 읽고-고쳐-쓰기라 여러 프로세스가 만지면 서로 덮어쓴다.
+        tasks: list[dict] = []
         for i, row in enumerate(rows, 1):
             name = row["notion_file_name"] or Path(row["s3_key"]).name
             sha = row["sha256"]
-            logger.info(f"\n[{i}/{len(rows)}] {name}  ({row['company']} / {row['product_name']})")
 
             # 1차 중복 제거 — 카탈로그 sha256이 곧 doc_hash라 내려받기 전에 거른다.
             if not args.dry_run and not args.overwrite and sha \
                     and doc_already_ingested(conn, sha):
-                logger.info("  SKIPPED: 이미 적재됨(다운로드 생략)")
+                logger.info(f"[{i}/{len(rows)}] {name} — SKIPPED: 이미 적재됨(다운로드 생략)")
                 results.append({"status": "SKIPPED", "pdf": name})
                 # 이력에 남겨야 멱등 스킵률(중복 제거로 아낀 양)을 잴 수 있다.
                 runlog.record_item(sha256=sha, name=name, status="SKIPPED",
@@ -218,9 +299,9 @@ def main() -> None:
             hist = runlog.attempt(sha) if (sha and not args.dry_run) else None
             if _should_quarantine(hist, retry_ok):
                 logger.warning(
-                    f"  QUARANTINED: {hist['status']} {hist['attempts']}회 연속 "
-                    f"(마지막 {hist['last_at']}) — 다운로드·파싱 생략. "
-                    f"다시 시도하려면 --retry-quarantined")
+                    f"[{i}/{len(rows)}] {name} — QUARANTINED: "
+                    f"{hist['status']} {hist['attempts']}회 연속 (마지막 {hist['last_at']}) "
+                    f"— 다운로드·파싱 생략. 다시 시도하려면 --retry-quarantined")
                 results.append({"status": "QUARANTINED", "pdf": name})
                 runlog.record_item(sha256=sha, name=name, status="QUARANTINED",
                                    source="catalog", insurer=row["company"],
@@ -228,61 +309,55 @@ def main() -> None:
                                    error=f"{hist['status']} {hist['attempts']}회 연속")
                 continue
 
-            # auto_doc_type이 파일명을 보므로 원래 이름을 유지한다.
-            dest = Path(tmp) / f"{row['sha256'] or i}_{Path(name).name}"
-            if not _download(bucket, row["s3_key"], dest):
-                results.append({"status": "ERROR", "pdf": name})
-                if not args.dry_run:
-                    runlog.record_item(sha256=sha, name=name, status="ERROR",
-                                       error="S3 다운로드 실패", source="catalog")
-                continue
+            tasks.append({
+                "row": row, "args": args, "name": name, "bucket": bucket,
+                # auto_doc_type이 파일명을 보므로 원래 이름을 유지한다.
+                "dest": str(Path(tmp) / f"{sha or i}_{Path(name).name}"),
+                "dry_run_dir": str(dry_run_dir),
+                "prev_attempts": (hist or {}).get("attempts", 0),
+            })
 
-            eff = row["effective_date"]
-            doc = {
-                "pdf": str(dest),
-                "doc_type": _doc_type_for(name, row["category"]),
-                "insurer": row["company"] or "미상",
-                "product_name": row["product_name"] or Path(name).stem,
-                "product_code": row["product_code"],
-                "effective_date": eff.isoformat() if eff else None,
-            }
-            result = run_one_safe(doc, args, dry_run_dir)
-            # 임시 파일명이 아니라 원래 파일명으로 로그·결과를 남긴다.
-            result["pdf"] = name
-            # 0청크는 성공이 아니다 — 적재가 0건이므로 EMPTY로 따로 센다(재시도 상한 대상).
-            if result["status"] == "OK" and result.get("chunks", 0) == 0:
-                result["status"] = "EMPTY"
+        # ── 2단계: 실제 처리(동시) ────────────────────────────────────────────
+        if tasks:
+            logger.info(f"처리 대상 {len(tasks)}건 (동시 {concurrency})",
+                        extra={"event": "ingest_start", "pending": len(tasks),
+                               "concurrency": concurrency})
+        done = 0
+        for task, result in _run_tasks(tasks, concurrency):
+            done += 1
+            name, sha = task["name"], task["row"]["sha256"]
             results.append(result)
+            prefix = f"[{done}/{len(tasks)}] {name}"
 
             if result["status"] == "EMPTY":
-                left = max(0, _MAX_RETRY - ((hist or {}).get("attempts", 0) + 1))
-                logger.warning(f"  0청크 — 적재 없음(PDF 아님/파싱 실패 가능). "
+                left = max(0, _MAX_RETRY - (task["prev_attempts"] + 1))
+                logger.warning(f"{prefix} — 0청크, 적재 없음(PDF 아님/파싱 실패 가능). "
                                f"남은 재시도 {left}회. {result.get('elapsed_s', 0)}s")
             elif result["status"] == "OK":
-                logger.info(f"  OK: {result['chunks']}청크 | 경고 {result['warnings']}건 "
-                            f"| {result['elapsed_s']}s | {_fmt_phases(result['phases'])}")
+                logger.info(f"{prefix} — OK: {result['chunks']}청크 | "
+                            f"경고 {result['warnings']}건 | {result['elapsed_s']}s | "
+                            f"{_fmt_phases(result['phases'])}")
             elif result["status"] == "SKIPPED":
-                logger.info(f"  SKIPPED: {result.get('reason')}")
+                logger.info(f"{prefix} — SKIPPED: {result.get('reason')}")
             else:
-                logger.error(f"  ERROR: {result.get('error')}")
+                logger.error(f"{prefix} — ERROR: {result.get('error')}")
 
             # Loki에서 집계·알림이 가능하도록 결과를 구조화 필드로도 남긴다
-            # (/metrics 없이도 로그만으로 1차 알림을 걸 수 있게 — ocr-worker 선례와 같은 방식).
+            # (/metrics 없이도 로그만으로 1차 알림을 걸 수 있게).
             logger.info("문서 처리 완료", extra={
                 "event": "document_done", "status": result["status"],
-                "document": name, "insurer": row["company"],
+                "document": name, "insurer": task["row"]["company"],
                 "chunks": result.get("chunks", 0), "warnings": result.get("warnings", 0),
                 "elapsed_s": result.get("elapsed_s", 0.0), "phases": result.get("phases") or {},
             })
             if not args.dry_run:
+                # 이력 기록은 부모만 한다 — attempts.json 경합을 피하려는 것.
                 runlog.record_item(
                     sha256=sha, name=name, status=result["status"],
                     chunks=result.get("chunks", 0), warnings=result.get("warnings", 0),
                     elapsed_s=result.get("elapsed_s", 0.0), phases=result.get("phases"),
                     error=result.get("error"), source="catalog",
-                    insurer=row["company"], product=row["product_name"])
-
-            dest.unlink(missing_ok=True)  # 디스크 점유를 건별로 반환
+                    insurer=task["row"]["company"], product=task["row"]["product_name"])
 
     conn.close()
 
@@ -311,6 +386,7 @@ def main() -> None:
             "ok": ok, "empty": empty, "skipped": skipped, "quarantined": quarantined,
             "error": err, "total_chunks": total_chunks,
             "skipped_non_pdf": sum(skipped_ext.values()), "elapsed_s": elapsed,
+            "concurrency": concurrency,
         })
     if err:
         sys.exit(1)
