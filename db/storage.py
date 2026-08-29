@@ -60,25 +60,40 @@ def delete_by_doc_hash(conn: psycopg2.extensions.connection, doc_hash: str) -> i
     return deleted
 
 
+def _clean(text: Optional[str]) -> Optional[str]:
+    """NUL(0x00)을 제거한다.
+
+    Postgres의 text 타입은 NUL을 담지 못하고, psycopg2는 인용 단계에서
+    "A string literal cannot contain NUL (0x00) characters."로 거절한다. execute든
+    executemany든 execute_values든 같은 인용기를 쓰므로 삽입 방식과 무관하다.
+
+    PDF에서 나온다. 실제로 삼성화재 약관 한 건이 이걸로 통째로 실패했다 — 문서 하나가
+    아니라 그 배치 전체가 죽는다. 널 문자는 본문에 의미가 없으므로 지운다.
+    """
+    if text is None or "\x00" not in text:
+        return text
+    return text.replace("\x00", "")
+
+
 def _row(c: InsuranceChunk) -> tuple:
     """INSERT 컬럼 순서와 1:1로 대응하는 값 튜플."""
     return (
         c.chunk_id,
-        c.content,
-        c.content_tokens,
+        _clean(c.content),
+        _clean(c.content_tokens),
         np.array(c.embedding, dtype=np.float32) if c.embedding else None,
         c.token_count,
         c.chunk_type,
         c.doc_hash,
         c.page_number,
-        c.insurer,
-        c.product_name,
+        _clean(c.insurer),
+        _clean(c.product_name),
         c.product_code,
         c.effective_date,
-        c.article_number,
-        c.article_title,
+        _clean(c.article_number),
+        _clean(c.article_title),
         c.generation,
-        c.section,
+        _clean(c.section),
         c.chunk_index,
         c.table_id,
         c.row_start,

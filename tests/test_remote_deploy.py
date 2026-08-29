@@ -47,7 +47,12 @@ case "$1" in
       fi
     fi
     exit 0 ;;
-  logs)  cat "$S/logs" ;;
+  logs)
+    cat "$S/logs"
+    # 운영에서 docker logs는 SIGPIPE로 죽어 141을 낸다(아래 테스트 참고).
+    # 타이밍에 기대지 않고 종료코드만 흉내낸다.
+    [ -f "$S/logs_rc" ] && exit "$(cat "$S/logs_rc")"
+    exit 0 ;;
   ps)    echo "fake-ps" ;;
   image) exit 0 ;;
   # 실제 docker login은 stdin을 읽는다. 안 읽으면 앞 파이프가 SIGPIPE로 죽어
@@ -93,7 +98,7 @@ def host(tmp_path):
 
     def _run(tag: str, *, current="old111", up_status="running",
              up_restarts="0", up_logs=_OK_LOG, rollback_ok=True,
-             ssm: dict[str, str] | None = None, ssm_prefix=""):
+             ssm: dict[str, str] | None = None, ssm_prefix="", logs_rc=None):
         (state / "image").write_text(current)
         (state / "status").write_text("running")
         (state / "restarts").write_text("0")
@@ -105,6 +110,8 @@ def host(tmp_path):
         (state / "ok_logs").write_text(_OK_LOG)
         (state / "deployed").write_text("")
         (state / "ups").write_text("0")
+        if logs_rc is not None:
+            (state / "logs_rc").write_text(str(logs_rc))
         for k, v in (ssm or {}).items():
             (state / f"ssm_{k}").write_text(v)
 
@@ -233,3 +240,20 @@ def test_env_file_is_not_world_readable(host):
     """DB 비밀번호가 담긴 파일이다."""
     p = host("new222", ssm_prefix="/p", ssm={"DATABASE_URL": "x"})
     assert oct(p.env_file.stat().st_mode)[-3:] == "600"
+
+
+def test_verification_ignores_docker_logs_exit_code(host):
+    """docker logs가 실패로 끝나도 로그 내용으로 판정해야 한다.
+
+    운영 배포가 이것 때문에 실패했다. `docker logs | grep -q` 로 확인했는데, grep -q는
+    첫 매치에서 파이프를 닫고 그때 아직 쓰고 있던 docker logs가 SIGPIPE(141)로 죽는다.
+    set -o pipefail이 그걸 파이프라인 실패로 올려, 매치에 성공했는데도 "검증 시간 초과"가
+    되어 멀쩡한 배포를 롤백했다.
+
+    SIGPIPE 자체는 로그 크기·타이밍에 달려 있어 재현이 불안정하다. 대신 불변식을 본다 —
+    판정은 docker logs의 종료코드에 기대면 안 된다.
+    """
+    p = host("new222", logs_rc=141)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "데몬 기동 확인" in p.stdout
+    assert "롤백" not in p.stdout
