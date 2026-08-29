@@ -17,6 +17,7 @@ CLI를 subprocess로 부른다 — 한 사이클이 죽어도 데몬은 살아 �
   RUN_ON_START             기동 즉시 1회 실행 여부. 기본 1.
   DISCORD_WEBHOOK_INGEST   사이클 결과 알림 웹훅. 없으면 알림만 건너뛴다.
   INGEST_NOTIFY            always | failure. 기본 always.
+  METRICS_PORT             Prometheus /metrics 포트. 기본 9101, 0이면 노출 안 함.
 
 사이클 결과는 runlog가 /data/state에 남긴다 — 로그(json-file 링버퍼)와 달리 지워지지 않아
 성공률·처리시간·마지막 성공 시각 같은 지표를 나중에 뽑을 수 있고, healthcheck.py가 그
@@ -33,6 +34,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import exporter
 import logging_setup
 import notify
 import runlog
@@ -133,6 +135,9 @@ def main() -> None:
     # healthcheck가 첫 사이클 유예를 계산하는 기준점.
     runlog.record_start()
     logger.info(f"상태 디렉터리: {runlog.state_dir()}")
+    # 스크랩은 데몬이 떠 있는 내내 받는다 — 사이클이 안 도는 6일 23시간에도 신선도를
+    # 답해야 하므로 사이클과 무관하게 상시 열어둔다.
+    exporter.start()
 
     if _RUN_ON_START and not _stop.is_set():
         _cycle()

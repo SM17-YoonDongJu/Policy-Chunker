@@ -252,6 +252,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `INGEST_NOTIFY` | `always` | `always` \| `failure` |
 | `LOG_FORMAT` | `text` | `text` \| `json` (운영은 compose가 `json`) |
 | `LOG_LEVEL` | `INFO` | 루트 로거 레벨 |
+| `METRICS_PORT` | `9101` | Prometheus `/metrics` 포트 (`0`이면 노출 안 함) |
 
 ---
 
@@ -292,6 +293,34 @@ python metrics.py --json      # 대시보드·알림에 물릴 때
 단계별 비중 — 여기가 병목 후보다
   embed   55.2% ██████████████████████ (합 22.8s, p50 22.8s)
   parse   30.0% ████████████ (합 12.4s, p50 12.4s)
+```
+
+### Prometheus /metrics
+
+데몬이 상주하므로 pull 모델이 그대로 성립한다(Pushgateway·textfile collector 불필요).
+스크랩할 때마다 `runlog`를 읽어 렌더링하므로 앱이 상태를 들고 있지 않고, 적재 CLI가
+subprocess로 돌아도(=프로세스가 죽어도) 지표가 정확하다.
+
+```
+insurance_chunker_last_success_timestamp_seconds   ← 신선도 SLI
+insurance_chunker_last_cycle_success               1/0
+insurance_chunker_last_cycle_duration_seconds
+insurance_chunker_last_cycle_documents{status="ok|empty|skipped|quarantined|error"}
+insurance_chunker_last_cycle_chunks_indexed
+insurance_chunker_quarantined_documents
+insurance_chunker_documents_processed_total{status}   ← 누적
+insurance_chunker_chunks_indexed_total
+insurance_chunker_phase_duration_seconds_total{phase="parse|chunk|embed|store"}
+```
+
+주기가 7일이라 대부분의 시간 동안 카운터는 안 움직인다. **`rate()`가 아니라 "마지막 실행
+상태" 게이지가 주 신호다.** 활동량 기반 알림(예: "5분간 처리 0건")을 걸면 상시 발화한다.
+
+히스토그램은 두지 않는다 — 주당 문서 수백 건이면 p95를 낼 표본이 안 된다. 분포는
+`metrics.py`와 Loki가 맡는다.
+
+```bash
+curl -s localhost:9101/metrics | grep insurance_chunker
 ```
 
 ### 로그
@@ -353,6 +382,7 @@ Policy-Chunker/
 ├── healthcheck.py          마지막 성공 시각 기반 좀비 판정
 ├── notify.py               사이클 결과 Discord 알림
 ├── logging_setup.py        평문/JSON 로깅 설정
+├── exporter.py             Prometheus /metrics (runlog를 읽는 커스텀 컬렉터)
 │
 ├── insurance_chunker/
 │   ├── models.py           InsuranceChunk, TableMeta, DocMeta dataclass 정의

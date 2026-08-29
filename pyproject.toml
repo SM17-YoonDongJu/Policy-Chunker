@@ -22,6 +22,8 @@ dependencies = [
     "psycopg2-binary>=2.9",
     "pgvector>=0.3",
     "numpy>=1.26",
+    # 관측 — worker.py가 /metrics로 배치 잡 지표를 낸다(exporter.py)
+    "prometheus-client>=0.20",
     # 기타
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
