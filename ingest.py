@@ -15,14 +15,15 @@ from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
+import logging_setup
+
 try:
     from dotenv import load_dotenv  # type: ignore
     load_dotenv()
 except ImportError:
     pass
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
+logging_setup.configure()
 logger = logging.getLogger(__name__)
 
 

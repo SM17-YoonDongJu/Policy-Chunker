@@ -33,14 +33,11 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import logging_setup
 import notify
 import runlog
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+logging_setup.configure()
 logger = logging.getLogger("worker")
 
 _INTERVAL = int(os.environ.get("INGEST_INTERVAL_SECONDS", "604800"))  # 기본 7일
@@ -108,7 +105,9 @@ def _cycle() -> None:
         label, argv = "ingest_catalog", [sys.executable, "ingest_catalog.py"]
 
     if not _run(label, argv):
-        logger.error("적재 실패 — search_terms 재구성은 건너뛴다(부분 상태로 덮지 않기 위해)")
+        logger.error("적재 실패 — search_terms 재구성은 건너뛴다(부분 상태로 덮지 않기 위해)",
+                     extra={"event": "cycle_done", "ok": False, "failed_step": label,
+                            "source": _SOURCE})
         runlog.record_cycle(False, f"{label} 실패")
         notify.notify("failure", "insurance-chunker 인덱싱",
                       _summary_fields(f"{label} 실패 — search_terms 재구성 생략"))
@@ -118,6 +117,8 @@ def _cycle() -> None:
     # 적재가 됐으면 사이클은 성공으로 본다. search_terms 실패는 BM25 용어가 잠시 낡을 뿐
     # 색인 자체는 갱신됐고, 여기서 실패로 처리하면 healthcheck가 과하게 운다.
     detail = "완료" if terms_ok else "적재 완료 · search_terms 재구성 실패"
+    logger.info(f"사이클 {detail}", extra={"event": "cycle_done", "ok": True,
+                                          "search_terms_ok": terms_ok, "source": _SOURCE})
     runlog.record_cycle(True, detail)
     notify.notify("success" if terms_ok else "warning", "insurance-chunker 인덱싱",
                   _summary_fields(detail))

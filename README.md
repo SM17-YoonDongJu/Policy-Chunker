@@ -250,6 +250,8 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `HEALTH_GRACE_FACTOR` | `1.5` | 헬스체크 허용 배수 (마지막 성공 기준) |
 | `DISCORD_WEBHOOK_INGEST` | — | 사이클 결과 알림 웹훅 (없으면 알림만 생략) |
 | `INGEST_NOTIFY` | `always` | `always` \| `failure` |
+| `LOG_FORMAT` | `text` | `text` \| `json` (운영은 compose가 `json`) |
+| `LOG_LEVEL` | `INFO` | 루트 로거 레벨 |
 
 ---
 
@@ -291,6 +293,21 @@ python metrics.py --json      # 대시보드·알림에 물릴 때
   embed   55.2% ██████████████████████ (합 22.8s, p50 22.8s)
   parse   30.0% ████████████ (합 12.4s, p50 12.4s)
 ```
+
+### 로그
+
+운영에서는 JSON 한 줄 = 로그 하나다(`LOG_FORMAT=json`, compose가 지정). Alloy가 이걸
+파싱해 `level`을 Loki 라벨로 올린다. 로컬 기본값은 `text`라 사람이 읽기 좋다.
+
+문서·사이클 결과에는 집계용 필드가 실린다 — `/metrics` 없이 로그만으로도 알림을 걸 수 있다.
+
+```json
+{"timestamp":"...","level":"INFO","service":"insurance-chunker","logger":"ingest_catalog",
+ "message":"문서 처리 완료","event":"document_done","status":"OK","document":"약관.pdf",
+ "chunks":687,"elapsed_s":41.3,"phases":{"parse":12.4,"embed":22.8,"store":2.8}}
+```
+
+라벨 카디널리티 정책상 `document`·`sha256` 같은 값은 **본문에만** 둔다(라벨로 올리지 않는다).
 
 ### 헬스체크
 
@@ -335,6 +352,7 @@ Policy-Chunker/
 ├── metrics.py              이력 → 운영 지표 (처리시간 분포·단계 비중·성공률)
 ├── healthcheck.py          마지막 성공 시각 기반 좀비 판정
 ├── notify.py               사이클 결과 Discord 알림
+├── logging_setup.py        평문/JSON 로깅 설정
 │
 ├── insurance_chunker/
 │   ├── models.py           InsuranceChunk, TableMeta, DocMeta dataclass 정의
