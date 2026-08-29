@@ -13,6 +13,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "배포할 태그(sha7). 비우면 이번 커밋으로 빌드한다. 롤백은 여기에 이전 sha7을 넣는다."
+        required: false
+        default: ""
 
 # 동시 배포 방지(진행 중 배포를 취소하지 않고 큐잉).
 concurrency:
@@ -27,25 +32,41 @@ env:
   ECR_REPOSITORY: soma/insurance_chunker
   EC2_DIR: /home/ubuntu/insurance-chunker # 호스트의 compose/.env 위치
   COMPOSE_SERVICE: chunker
+  CONTAINER: brbs-insurance-chunker
 
 jobs:
   # 1) 검사 게이트 — ci.yml 재사용. 실패하면 아래 잡들은 시작되지 않는다.
+  # 태그를 직접 지정한 실행(=롤백)에서는 건너뛴다. main이 깨져서 롤백하는 상황인데
+  # CI가 막으면 복구 자체를 못 한다.
   ci:
+    if: inputs.image_tag == ''
     uses: ./.github/workflows/ci.yml
     secrets: inherit
 
   # 2) 빌드 → ECR push (:latest 가변 / :<sha7> 불변 — 감사·롤백용).
   build-and-push:
     needs: ci
+    # ci가 skipped여도 진행해야 롤백이 된다(needs는 skip을 실패로 보지 않지만,
+    # 명시하지 않으면 이 잡까지 통째로 skip된다).
+    if: always() && (needs.ci.result == 'success' || needs.ci.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
-      short_sha: ${{ steps.meta.outputs.short_sha }}
+      deploy_tag: ${{ steps.meta.outputs.deploy_tag }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Short SHA
+      - name: Resolve deploy tag
         id: meta
-        run: echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        # 태그를 지정했으면 이미 ECR에 있는 이미지를 그대로 쓴다(롤백) — 빌드하지 않는다.
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            echo "deploy_tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::롤백 모드 — 빌드 생략, ${{ inputs.image_tag }} 배포"
+          else
+            echo "deploy_tag=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -60,13 +81,14 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build & push
+        if: steps.meta.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
             ${{ secrets.AWS_ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
-            ${{ secrets.AWS_ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.short_sha }}
+            ${{ secrets.AWS_ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.deploy_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -86,46 +108,49 @@ jobs:
       # 레포의 compose를 base64로 인코딩 → SSM으로 호스트 파일을 덮는다(드리프트 차단).
       - name: Encode files from repo
         id: enc
-        run: echo "compose_b64=$(base64 -w0 deploy/docker-compose.prod.yml)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "compose_b64=$(base64 -w0 deploy/docker-compose.prod.yml)" >> "$GITHUB_OUTPUT"
+          echo "script_b64=$(base64 -w0 deploy/remote-deploy.sh)" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy via SSM (pull + up -d)
+      - name: Deploy via SSM (pull + up -d + 검증 + 롤백)
         env:
           INSTANCE_ID: ${{ vars.CORPUS_EC2_INSTANCE_ID }}
           REGISTRY: ${{ secrets.AWS_ECR_REGISTRY }}
           REGION: ${{ secrets.AWS_REGION }}
+          DEPLOY_TAG: ${{ needs.build-and-push.outputs.deploy_tag }}
         run: |
           if [ -z "$INSTANCE_ID" ]; then
             echo "::error::vars.CORPUS_EC2_INSTANCE_ID 가 비어 있습니다 — GitHub Variables에 설정하세요."
             exit 1
           fi
+          # 호스트에서 할 일은 deploy/remote-deploy.sh가 전부 한다(검증·롤백 포함).
+          # 여기서는 파일을 놓고 환경변수만 넘긴다 — 인라인 스크립트였을 때의
+          # "어디서 전개되는 $인가" 이스케이프 문제를 없애기 위해서다.
           CMD=$(cat <<EOF
           set -e
-          mkdir -p ${{ env.EC2_DIR }}
+          mkdir -p ${{ env.EC2_DIR }}/data/state
           cd ${{ env.EC2_DIR }}
-          # compose를 레포 기준으로 갱신(코드가 진실원).
+          # compose·배포 스크립트를 레포 기준으로 갱신(코드가 진실원).
           echo "${{ steps.enc.outputs.compose_b64 }}" | base64 -d > docker-compose.yml
+          echo "${{ steps.enc.outputs.script_b64 }}" | base64 -d > remote-deploy.sh
+          chmod +x remote-deploy.sh
           # .env가 없으면 compose 파싱이 실패하므로 빈 파일로 생성(실행 전 값 채울 것).
           if [ ! -f .env ]; then
-            echo "WARN: .env 없음 → 빈 파일 생성. 실행 전 DATABASE_URL·AWS_ECR_REGISTRY 등을 채우세요."
+            echo "WARN: .env 없음 → 빈 파일 생성. 실행 전 DATABASE_URL 등을 채우세요."
             touch .env
           fi
           # 이전 배포가 설치한 호스트 cron 제거 — 이제 컨테이너 데몬이 주기를 관리한다.
-          # 남겨두면 cron과 데몬이 같은 인덱싱을 이중 실행한다.
           rm -f /etc/cron.d/insurance-chunker
-          # 작업 디렉터리는 ubuntu 소유로. data/에 PDF·docs.yaml을 둔다.
           # data/state는 실행 이력(runlog) — 컨테이너의 app 유저(uid 1000)가 써야 하므로
           # ubuntu(uid 1000) 소유로 두면 맞아떨어진다. 이미지의 useradd --uid 1000과 짝.
-          mkdir -p ${{ env.EC2_DIR }}/data/state
           chown -R ubuntu:ubuntu ${{ env.EC2_DIR }}
-          # compose 이미지 태그(:latest)와 레지스트리는 셸 env로 주입.
-          export AWS_ECR_REGISTRY="$REGISTRY"
-          export IMAGE_TAG=latest
-          aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-          docker compose pull ${{ env.COMPOSE_SERVICE }}
-          docker compose up -d --no-deps ${{ env.COMPOSE_SERVICE }}
-          docker image prune -f
-          docker ps --filter name=brbs-insurance-chunker
-          echo "배포 완료 — 데몬 기동(docker logs -f brbs-insurance-chunker)."
+          EC2_DIR=${{ env.EC2_DIR }} \
+          REGISTRY="$REGISTRY" \
+          REGION="$REGION" \
+          COMPOSE_SERVICE=${{ env.COMPOSE_SERVICE }} \
+          CONTAINER=${{ env.CONTAINER }} \
+          IMAGE_TAG="$DEPLOY_TAG" \
+            bash remote-deploy.sh
           EOF
           )
           # 스크립트 전체를 base64로 감싸 전달 → 특수문자로 --parameters 파싱이 깨지지 않게.
@@ -134,22 +159,26 @@ jobs:
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --comment "pull insurance-chunker ${{ github.sha }}" \
+            --comment "deploy insurance-chunker $DEPLOY_TAG" \
             --parameters file:///tmp/ssm-params.json \
             --query "Command.CommandId" --output text)
           echo "SSM CommandId=$CMD_ID"
-          # 상태를 최대 5분 폴링(이미지 pull이 기본 waiter보다 오래 걸릴 수 있음).
+          # 검증·롤백까지 하므로 이전보다 오래 걸린다 — 최대 10분 폴링.
           STATUS=Pending
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)
             case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
-            echo "SSM $STATUS ... ($i/60)"
+            echo "SSM $STATUS ... ($i/120)"
             sleep 5
           done
           echo "SSM Status=$STATUS"
+          # 성패와 무관하게 호스트 출력을 남긴다 — 검증 실패 시 롤백 로그가 여기 있다.
+          echo "----- SSM StandardOutput (host) -----"
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query StandardOutputContent --output text 2>/dev/null | tail -80
           if [ "$STATUS" != "Success" ]; then
             echo "----- SSM StandardError (host) -----"
             aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query StandardErrorContent --output text 2>/dev/null | tail -50
+            echo "::error::배포 검증 실패. 호스트 로그의 [deploy] 줄에서 롤백 여부를 확인하세요."
             exit 1
           fi
 
@@ -168,4 +197,4 @@ jobs:
           status: ${{ (needs.build-and-push.result == 'success' && needs.deploy.result == 'success') && 'success' || 'failure' }}
           service: insurance-chunker
           environment: dev
-          image_tag: ${{ needs.build-and-push.outputs.short_sha }}
+          image_tag: ${{ needs.build-and-push.outputs.deploy_tag }}
