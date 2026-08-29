@@ -1,8 +1,10 @@
 """Prometheus /metrics — runlog를 읽어 배치 잡 지표를 낸다.
 
-backend의 prometheus.yml에는 ocr-worker job이 "워커에 HTTP 서버가 없음"을 이유로 주석
-처리돼 있다. 우리는 그 제약이 없다 — 호스트 cron에서 컨테이너 상시 데몬으로 옮긴 덕에
-프로세스가 계속 떠 있으므로 pull 모델이 그대로 성립한다(Pushgateway·textfile collector 불필요).
+배치 잡은 보통 Prometheus의 pull 모델과 안 맞는다. 주기적으로 떴다 죽는 프로세스는
+스크랩 시점에 없을 수 있어서 Pushgateway나 node-exporter textfile collector를 끌어오게 된다.
+
+우리는 그 문제가 없다 — 호스트 cron에서 컨테이너 상시 데몬으로 옮긴 덕에(2c4577c)
+프로세스가 계속 떠 있으므로 pull이 그대로 성립한다. 그래서 추가 부품 없이 /metrics만 연다.
 
 ## 왜 커스텀 컬렉터인가
 
