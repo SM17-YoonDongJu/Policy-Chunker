@@ -354,6 +354,30 @@ docker exec brbs-insurance-chunker python /app/healthcheck.py
 주기 × `HEALTH_GRACE_FACTOR`를 넘기면 unhealthy. compose의 `restart` 정책은 unhealthy로
 재시작하지 않으므로(그건 Swarm 기능) 자가치유가 아니라 드러내기 위한 신호다.
 
+### 배포와 롤백
+
+`main`에 머지되면 `deploy.yml`이 이미지를 빌드해 ECR로 올리고, SSM으로 EC2에서
+`deploy/remote-deploy.sh`를 실행한다. 그 스크립트가 pull → `up -d` → **검증 → 실패 시 롤백**까지 한다.
+
+검증 항목(최대 90초 대기):
+
+| 확인 | 왜 |
+|---|---|
+| `RestartCount` 증가 | 크래시루프. `docker ps`만 보면 잠깐 떠 있는 걸 성공으로 착각한다 |
+| 컨테이너 `running` | 기본 |
+| 로그에 `인덱싱 데몬 시작` | 프로세스는 살아 있는데 `main`에 못 들어간 경우(`.env` 오류 등)를 잡는다 |
+
+실패하면 직전에 돌던 이미지 태그로 자동 롤백하고, **롤백이 성공해도 배포는 실패로 보고한다**
+(초록불이 뜨면 아무도 안 본다). 첫 배포이거나 같은 태그 재배포라 되돌릴 지점이 없으면
+`롤백 대상 없음`을 남기고 실패한다.
+
+배포 성공 시 그 태그를 호스트 `.env`의 `IMAGE_TAG`에 기록한다 — 사람이 호스트에서
+`docker compose up -d`를 쳐도 같은 이미지가 뜨게 하려는 것.
+
+**수동 롤백**은 Actions에서 `Deploy` 워크플로를 `workflow_dispatch`로 실행하고
+`image_tag`에 되돌릴 `sha7`을 넣으면 된다. 이때는 빌드도 CI도 건너뛴다 — `main`이 깨져서
+롤백하는 상황인데 CI가 막으면 복구를 못 하기 때문이다.
+
 ### 실패 문서 격리
 
 0청크 문서는 `policy_chunks`에 행이 안 생겨 `doc_already_ingested`가 영원히 `False`다 —
