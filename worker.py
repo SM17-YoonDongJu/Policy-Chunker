@@ -38,6 +38,7 @@ import exporter
 import logging_setup
 import notify
 import runlog
+import slo
 
 logging_setup.configure()
 logger = logging.getLogger("worker")
@@ -87,6 +88,20 @@ def _summary_fields(detail: str) -> dict[str, object]:
     return fields
 
 
+def _check_slo():
+    """적재 결과가 검색에 쓸 만한 상태인지 확인한다.
+
+    "사이클이 성공했다"와 "인덱스가 쓸 만하다"는 다르다 — 임베딩 차원이 어긋나거나
+    문서 하나에 임베딩이 통째로 없어도 적재 자체는 성공으로 끝난다. 실패해도 사이클을
+    실패로 만들지는 않는다(이미 적재는 됐다). 알림으로만 드러낸다.
+    """
+    try:
+        return slo.run(interval_s=_INTERVAL)
+    except Exception as e:  # noqa: BLE001 - 점검이 데몬을 죽이면 안 된다
+        logger.warning(f"SLO 점검 실패: {e}", extra={"event": "slo_error"})
+        return None
+
+
 def _cycle() -> None:
     """인덱싱 1회. 소스가 준비 안 됐으면 건너뛴다(데몬은 계속 떠 있는다).
 
@@ -116,14 +131,22 @@ def _cycle() -> None:
         return
 
     terms_ok = _run("rebuild_search_terms", [sys.executable, "rebuild_search_terms.py"])
+    slo_report = _check_slo()
     # 적재가 됐으면 사이클은 성공으로 본다. search_terms 실패는 BM25 용어가 잠시 낡을 뿐
     # 색인 자체는 갱신됐고, 여기서 실패로 처리하면 healthcheck가 과하게 운다.
     detail = "완료" if terms_ok else "적재 완료 · search_terms 재구성 실패"
+    if slo_report and slo_report.violations:
+        detail += f" · SLO 위반 {len(slo_report.violations)}건"
     logger.info(f"사이클 {detail}", extra={"event": "cycle_done", "ok": True,
                                           "search_terms_ok": terms_ok, "source": _SOURCE})
     runlog.record_cycle(True, detail)
-    notify.notify("success" if terms_ok else "warning", "insurance-chunker 인덱싱",
-                  _summary_fields(detail))
+    status = "success"
+    if not terms_ok or (slo_report and slo_report.violations):
+        status = "warning"
+    fields = _summary_fields(detail)
+    if slo_report and slo_report.violations:
+        fields["SLO 위반"] = "\n".join(f"{c.name}: {c.detail}" for c in slo_report.violations)
+    notify.notify(status, "insurance-chunker 인덱싱", fields)
 
 
 def main() -> None:

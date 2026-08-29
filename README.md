@@ -395,6 +395,33 @@ aws ssm put-parameter --type SecureString --overwrite \
 `image_tag`에 되돌릴 `sha7`을 넣으면 된다. 이때는 빌드도 CI도 건너뛴다 — `main`이 깨져서
 롤백하는 상황인데 CI가 막으면 복구를 못 하기 때문이다.
 
+### 인덱스 SLO 점검
+
+"적재됐다"와 "검색에 쓸 만하다"는 다르다. 임베딩 차원이 어긋나거나 문서 하나에 임베딩이
+통째로 없어도 적재 자체는 성공으로 끝난다. `slo.py`가 사이클 끝마다 DB 상태를 본다.
+
+| 점검 | 위반 시 |
+|---|---|
+| `embedding_dim` | `EMBED_DIM`과 다르면 **fail** — 모델 불일치, 재적재 필요 |
+| `search_contract` | `content_tsv` 없으면 **fail** — AI 레포 RAG 검색이 0건이 된다 |
+| `documents_embedded` | 임베딩이 0개인 문서가 있으면 **fail** — 벡터 검색에서 통째로 빠진다 |
+| `freshness` | `max(ingested_at)`이 오래되면 **warn** |
+| `catalog_coverage` | 카탈로그 대비 적재율이 하한 미만이면 **warn** — 격리·0청크 확인 |
+
+위반이 있으면 사이클 알림에 실려 나간다. 단 **사이클 자체를 실패로 만들지는 않는다** —
+적재는 이미 됐고, 여기서 실패로 처리하면 healthcheck까지 같이 울기 때문이다.
+
+전체 NULL 비율을 안 쓰는 이유가 있다. boilerplate 청크는 일부러 임베딩을 건너뛰는데
+(`embedder.embed_chunks`) `is_boilerplate`가 DB 컬럼이 아니라 **의도된 NULL과 실패한 NULL을
+구분할 수 없다.** 대신 "한 문서에 임베딩 0개"라는 명백한 신호를 본다.
+
+```bash
+docker exec brbs-insurance-chunker python /app/slo.py
+```
+
+큰 변경 전 사람이 한 번 돌리는 `deploy_check.py`와는 역할이 다르다 — 그쪽은 asyncpg를
+쓰는 배포 전 판정용이고, 이건 psycopg2로 컨테이너 안에서 상시 돈다.
+
 ### 실패 문서 격리
 
 0청크 문서는 `policy_chunks`에 행이 안 생겨 `doc_already_ingested`가 영원히 `False`다 —
@@ -427,6 +454,7 @@ Policy-Chunker/
 ├── notify.py               사이클 결과 Discord 알림
 ├── logging_setup.py        평문/JSON 로깅 설정
 ├── exporter.py             Prometheus /metrics (runlog를 읽는 커스텀 컬렉터)
+├── slo.py                  인덱스 SLO 점검 (사이클 끝마다)
 │
 ├── insurance_chunker/
 │   ├── models.py           InsuranceChunk, TableMeta, DocMeta dataclass 정의

@@ -31,7 +31,7 @@ jobs:
         # 배포 대상 코드에 한정(eval/는 실험 스크립트라 제외).
         # 규칙은 pyproject의 [tool.ruff.lint] select로 고정돼 있다 — ruff 버전이 올라도
         # 검사 범위가 저절로 넓어지지 않으므로 블로킹으로 둘 수 있다.
-        run: ruff check insurance_chunker db tests ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py runlog.py notify.py healthcheck.py metrics.py logging_setup.py exporter.py
+        run: ruff check insurance_chunker db tests ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py runlog.py notify.py healthcheck.py metrics.py logging_setup.py exporter.py slo.py deploy_check.py
 
       - name: Import smoke
         # 패키지 import + CLI 엔트리포인트가 실제로 로드되는지 확인(의존성 해상도 검증).
@@ -41,7 +41,7 @@ jobs:
           python ingest_many.py --help > /dev/null
           python ingest_catalog.py --help > /dev/null
           # 데몬 경로도 확인 — 이미지 CMD가 worker.py라 여기서 깨지면 배포 후 크래시루프가 된다.
-          python -c "import worker, runlog, notify, healthcheck, metrics, logging_setup, exporter; print('daemon modules import OK')"
+          python -c "import worker, runlog, notify, healthcheck, metrics, logging_setup, exporter, slo; print('daemon modules import OK')"
           python metrics.py --help > /dev/null
 
       - name: Pytest
