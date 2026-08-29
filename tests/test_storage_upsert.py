@@ -86,3 +86,32 @@ def test_row_passes_none_embedding_through():
     row = storage._row(_chunk("a"))
     assert row[0] == "a"
     assert row[3] is None
+
+
+# ── NUL 문자 (운영 실패) ──────────────────────────────────────────────────────
+
+def test_nul_is_stripped_from_text_columns():
+    """Postgres text는 NUL을 못 담고 psycopg2가 인용 단계에서 거절한다.
+
+    운영에서 삼성화재 약관 한 건이 이걸로 실패했다. 삽입 방식과 무관한 제약이라
+    (execute·executemany·execute_values가 같은 인용기를 쓴다) 값에서 지우는 게 답이다.
+    """
+    c = _chunk("a", "본문\x00에 널이 있다")
+    c.section = "특약\x00명"
+    c.article_title = "제목\x00"
+    row = storage._row(c)
+    assert all("\x00" not in v for v in row if isinstance(v, str))
+    assert row[1] == "본문에 널이 있다"
+
+
+def test_nul_free_text_is_untouched():
+    """멀쩡한 문자열까지 건드리면 안 된다 — 한자·전각 문자가 많은 약관이다."""
+    c = _chunk("a", "제3조(보험금) 甲은 １，０００만원")
+    assert storage._row(c)[1] == "제3조(보험금) 甲은 １，０００만원"
+
+
+def test_nul_check_is_cheap_for_normal_text():
+    """청크 수만 개를 도는 경로다 — 널이 없으면 원본 객체를 그대로 돌려준다."""
+    text = "널 없는 본문"
+    assert storage._clean(text) is text
+    assert storage._clean(None) is None

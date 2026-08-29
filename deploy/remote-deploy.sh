@@ -110,10 +110,18 @@ verify() {
       continue
     fi
     # 데몬이 실제로 main에 들어갔는지. 평문·JSON 로그 어느 쪽이든 이 문구가 있다.
-    if docker logs "$CONTAINER" 2>&1 | grep -q "인덱싱 데몬 시작"; then
-      log "데몬 기동 확인 (${waited}s)"
-      return 0
-    fi
+    #
+    # 파이프로 grep -q에 넘기지 않는다. grep -q는 첫 매치에서 바로 끝내며 파이프를 닫는데,
+    # 로그가 크면 아직 쓰고 있던 docker logs가 SIGPIPE로 죽고 set -o pipefail이 그걸
+    # 파이프라인 실패로 올린다 — 매치에 성공해도 종료코드 141이 된다. 실제로 이것 때문에
+    # 정상 배포가 "검증 시간 초과"로 롤백됐다.
+    local logs
+    logs=$(docker logs "$CONTAINER" 2>&1) || true
+    case "$logs" in
+      *"인덱싱 데몬 시작"*)
+        log "데몬 기동 확인 (${waited}s)"
+        return 0 ;;
+    esac
     log "기동 대기 중 (${waited}s)"
   done
 
