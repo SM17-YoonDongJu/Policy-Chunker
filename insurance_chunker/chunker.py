@@ -99,6 +99,7 @@ def chunk_document(
     pdf_path: Optional[str] = None,
     target: int = 500,
     hard_max: int = 1000,
+    report: Optional[dict] = None,
 ) -> tuple[list[InsuranceChunk], list[TableMeta]]:
     """PDF 페이지 목록 → InsuranceChunk 목록.
 
@@ -106,6 +107,9 @@ def chunk_document(
         pdf_path: policy_terms에서 폰트 기반 경계 감지에 사용. None이면 건너뜀.
         target: 목표 토큰 수 (병합 기준)
         hard_max: 강제 분할 상한 토큰 수
+        report: 넘기면 경계 검출 품질을 채워준다(boundary_confidence 등).
+            반환값이 아니라 out-param인 이유는 호출부가 13곳이라 튜플을 늘리면
+            전부 깨지기 때문. 관심 있는 쪽만 dict를 넘긴다.
 
     Note:
         product_summary(요약서)는 ingest 대상이 아님. ingest.py에서 진입 전 차단.
@@ -136,7 +140,7 @@ def _chunk_policy_terms(
     toc_titles: list[str] = []
     if pdf_path:
         try:
-            import fitz
+            import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
 
             from .boundaries import assess
             from .toc import extract_toc_titles_ordered
@@ -152,14 +156,25 @@ def _chunk_policy_terms(
                     logger.warning(f"목차 추출 실패(경계 검출만으로 진행): {e}")
             logger.info(f"폰트 경계 감지: {len(bounds)}개 "
                         f"(본문폰트={det.body_size}, 제목폰트={det.title_size})")
+            if report is not None:
+                report["boundary_confidence"] = level
+                report["boundary_reasons"] = list(reasons)
+                report["boundaries"] = len(bounds)
             if level == "weak":
                 for r in reasons:
                     logger.warning(f"[신뢰도 WEAK] {r}")
-                logger.warning("경계 신뢰도가 낮습니다 — 청킹 결과를 확인하세요")
+                # 여기서 멈추지 않는 건 의도적이다 — 경계를 못 잡아도 텍스트 청킹으로
+                # 폴백해 적재는 된다. 다만 섹션이 안 갈려 조번호가 어긋나므로 결과를
+                # '성공'으로만 세면 안 된다. report로 올려 지표·SLO가 보게 한다.
+                logger.warning("경계 신뢰도가 낮습니다 — 청킹 결과를 확인하세요",
+                               extra={"event": "boundary_weak", "reasons": reasons})
             else:
                 logger.info(f"[신뢰도 OK] {reasons[0]}")
         except Exception as e:
             logger.warning(f"폰트 경계 감지 실패, 경계 없이 진행: {e}")
+            if report is not None:
+                report["boundary_confidence"] = "error"
+                report["boundary_reasons"] = [f"{type(e).__name__}: {e}"]
 
     # 서식 페이지 스킵 (제1조 이전 표지·목차·안내문 페이지)
     if det and det.base_start_page:

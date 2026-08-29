@@ -81,3 +81,9 @@ def configure(service: str | None = None) -> None:
         root.removeHandler(h)
     root.addHandler(handler)
     root.setLevel(level)
+
+    # 서드파티 INFO 노이즈를 눌러둔다. 특히 botocore는 요청마다
+    # "Found credentials from IAM Role: ..."을 INFO로 찍는데, 문서 수백 건이면
+    # Loki에서 신호를 덮는다. 문제가 생기면 WARNING 이상은 그대로 올라온다.
+    for name in ("botocore", "boto3", "s3transfer", "urllib3"):
+        logging.getLogger(name).setLevel(logging.WARNING)

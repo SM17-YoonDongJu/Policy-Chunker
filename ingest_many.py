@@ -87,6 +87,9 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     doc_type = doc.get("doc_type") or auto_doc_type(pdf_path.name)
     t0 = time.time()
     timings: dict[str, float] = {}
+    # 경계 검출 품질 — 청킹은 성공해도 섹션이 안 갈리면 조번호가 어긋난다.
+    # 로그로만 흘려보내면 "성공한 문서"로 집계돼 아무도 모른다.
+    chunk_report: dict = {}
 
     with runlog.phase(timings, "hash"):
         doc_hash = compute_doc_hash(str(pdf_path))
@@ -125,6 +128,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
                 pdf_path=str(pdf_path) if doc_type == "policy_terms" else None,
                 target=args.target_tokens,
                 hard_max=args.hard_max_tokens,
+                report=chunk_report,
             )
             vr = validate_chunks(chunks)
             chunks = vr.valid_chunks
@@ -169,6 +173,8 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
         "chunks": len(chunks), "warnings": len(vr.warnings),
         "elapsed_s": round(time.time() - t0, 1),
         "phases": timings,
+        "boundary_confidence": chunk_report.get("boundary_confidence"),
+        "boundaries": chunk_report.get("boundaries"),
     }
 
 
@@ -212,7 +218,8 @@ def main() -> None:
                 sha256=result.get("doc_hash"), name=result.get("pdf", "?"),
                 status=result["status"], chunks=result.get("chunks", 0),
                 warnings=result.get("warnings", 0), elapsed_s=result.get("elapsed_s", 0.0),
-                phases=result.get("phases"), error=result.get("error"), source="manifest")
+                phases=result.get("phases"), error=result.get("error"), source="manifest",
+                boundary_confidence=result.get("boundary_confidence"))
 
     ok = sum(1 for r in results if r["status"] == "OK")
     err = sum(1 for r in results if r["status"] == "ERROR")

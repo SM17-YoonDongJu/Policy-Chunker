@@ -1,4 +1,4 @@
-"""표 추출: PyMuPDF + pdfplumber + camelot + Claude CLI(비전).
+"""표 추출: PyMuPDF + pdfplumber + camelot + VLM(비전).
 
 Policy-Chunker(main) extract.py와 동일한 전략:
   - PyMuPDF    : fitz.find_tables() (괘선 있는 표, 빠름)
@@ -139,7 +139,7 @@ def extract_camelot_tables(pdf_path: str, pages: list[int]) -> dict[int, str]:
     return out
 
 
-# ── Claude CLI Vision ─────────────────────────────────────────────────────────
+# ── VLM Vision (OpenAI 호환) ──────────────────────────────────────────────────
 
 def _strip_fences(s: str) -> str:
     s = s.strip()
@@ -375,7 +375,7 @@ def extract_tables_for_doc(
         {"pymupdf": {page: md}, "pdfplumber": {page: md}, "camelot": {page: md}, "vlm": {page: md}}
         설치된 도구만 포함. combine.py가 페이지별 best-of를 선택.
     """
-    import fitz
+    import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
 
     pymupdf_tables: dict[int, str] = {}
     reset_vision_counter()

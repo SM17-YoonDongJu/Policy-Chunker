@@ -132,14 +132,18 @@ def phase(timings: dict[str, float], name: str) -> Iterator[None]:
 def record_item(*, sha256: Optional[str], name: str, status: str,
                 chunks: int = 0, warnings: int = 0, elapsed_s: float = 0.0,
                 phases: Optional[dict[str, float]] = None,
-                error: Optional[str] = None, **extra: Any) -> None:
+                error: Optional[str] = None,
+                boundary_confidence: Optional[str] = None, **extra: Any) -> None:
     """문서 1건 처리 결과를 items.jsonl에 남기고 attempts.json을 갱신한다.
 
     status: OK | EMPTY(0청크) | SKIPPED | QUARANTINED | ERROR
     """
     rec = {"at": now_iso(), "sha256": sha256, "name": name, "status": status,
            "chunks": chunks, "warnings": warnings, "elapsed_s": elapsed_s,
-           "phases": phases or {}, "error": error, **extra}
+           "phases": phases or {}, "error": error,
+           # 'weak'이면 섹션이 안 갈려 조번호가 어긋난다 — 적재는 됐지만 검색 품질은
+           # 신뢰할 수 없다는 뜻이라 상태(status)와 따로 들고 간다.
+           "boundary_confidence": boundary_confidence, **extra}
     _append(_ITEMS, rec)
 
     # 생략은 시도가 아니다 — 카운터도 상태도 건드리지 않는다.

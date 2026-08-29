@@ -112,7 +112,7 @@ python ingest.py \
   --product "단체안심생활보험" \
   --no-embed --dry-run --dry-run-out out.json
 
-# VLM(Claude CLI)도 없는 환경
+# VLM(Ollama)도 없는 환경
 python ingest.py \
   --pdf 약관.pdf \
   --insurer 메리츠화재 \
@@ -452,6 +452,24 @@ fork-safe하지 않다.
 2가 현실적이고 3부터는 실측이 필요하다. `embed`는 GPU가 큐잉하므로 여기를 올린다고
 비례해서 빨라지지 않는다 — T4 실측에서 임베딩 부하가 이미 70W 캡을 넘겨 부스트 클럭이
 1590→1200MHz로 깎인다.
+
+### 경계 검출 신뢰도
+
+`boundaries.assess()`가 문서마다 `ok` / `weak`을 판정한다. `weak`이면 **특약 경계를 못 잡았다**는
+뜻이고, 그러면 이후 조번호가 전부 어긋난다(`eval/IMPROVEMENT_LOG.md` C-1).
+
+문제는 **그래도 적재는 성공한다**는 점이다 — 경계가 없으면 단순 텍스트 청킹으로 폴백하므로
+청크는 나오고 `status=OK`로 집계된다. 로그로만 흘려보내면 품질이 무너진 문서가 성공으로
+잡힌다. 그래서 신뢰도를 상태와 **따로** 들고 간다.
+
+```
+items.jsonl                                boundary_confidence: "ok" | "weak" | "error"
+/metrics   insurance_chunker_weak_boundary_documents
+로그        event=boundary_weak (사유 포함)
+```
+
+재시도 카운터는 건드리지 않는다 — 품질 저하지 실패가 아니고, 격리하면 그 보험사 문서가
+영영 안 들어온다. 특정 보험사에서 반복되면 경계 검출 로직을 봐야 한다는 신호다.
 
 ### 인덱스 SLO 점검
 

@@ -96,6 +96,13 @@ class RunlogCollector:
         yield gauge("quarantined_documents",
                     "재시도 상한에 걸려 격리된 문서 수(누적 현재값)", float(quarantined))
 
+        # 경계 검출이 약한 문서는 적재는 됐지만 섹션이 안 갈려 조번호가 어긋난다.
+        # status는 OK로 남으므로 이 지표가 없으면 품질 저하가 성공으로 집계된다.
+        weak = sum(1 for i in metrics_mod._read_jsonl("items.jsonl")
+                   if i.get("boundary_confidence") == "weak")
+        yield gauge("weak_boundary_documents",
+                    "경계 검출 신뢰도가 낮게 판정된 문서 수(누적)", float(weak))
+
         # ── 장기 추세용 누적 ──────────────────────────────────────────────────
         totals, phase_totals, chunks_total = _aggregate_items()
         processed = CounterMetricFamily(f"{_PREFIX}_documents_processed_total",
