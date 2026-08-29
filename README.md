@@ -18,7 +18,9 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
   │     ├ PyMuPDF     괘선 표 (빠름)
   │     ├ pdfplumber  설치 시 자동 사용
   │     ├ camelot     설치 시 자동 사용 (ghostscript 필요)
-  │     └ Claude CLI  VLM — PyMuPDF가 표를 감지한 페이지만
+  │     └ VLM         PyMuPDF가 표를 감지한 페이지만 (VLM_BACKEND)
+  │                   local=OpenAI 호환(Ollama qwen3-vl / llama-server)
+  │                   surya=Surya OCR, claude=Claude CLI
   │
   ├─ combine.py       페이지별 best-of 표 선택 (더블스페이스 기준)
   │
@@ -47,7 +49,19 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
 pip install -e ".[dev]"
 ```
 
-VLM 기능(표 추출)을 사용하려면 [Claude Code CLI](https://claude.ai/code) 설치·로그인 필요 (API 키 불필요).
+VLM 표 추출은 기본으로 꺼져 있는 것과 같다 — 코드 기본 백엔드가 `surya`인데 그 바이너리가
+없으면 경고만 남기고 넘어간다. 켜려면 백엔드를 하나 준비해야 한다:
+
+| 백엔드 | 준비물 |
+|---|---|
+| `local` (권장) | OpenAI 호환 서버. **Ollama에 VLM 모델**(`qwen3-vl:8b-instruct` 등) 또는 llama-server |
+| `surya` | `pip install ".[ocr]"` |
+| `claude` | [Claude Code CLI](https://claude.ai/code) 설치·로그인 (유료 API — 사용 자제) |
+
+```bash
+VLM_BACKEND=local VLM_URL=http://localhost:11434 VLM_MODEL=qwen3-vl:8b-instruct \
+  python ingest.py --pdf 약관.pdf --insurer ... --product ...
+```
 
 ### 단일 PDF — DB 저장
 
@@ -244,9 +258,13 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `EMBED_MAX_CHARS` | `1800` | 장문 절단 상한 — **eval과 같은 값이어야 수치가 재현된다** |
 | `EMBED_BACKEND` | `ollama` | `ollama` \| `sentence_transformers` (BGE-M3 전환) |
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
-| `CLAUDE_BIN` | `claude` | VLM 표 추출에 사용하는 Claude CLI 실행 경로 |
+| `VLM_BACKEND` | `surya` | `local` \| `surya` \| `claude` |
+| `VLM_URL` | `http://localhost:8090` | `local` 백엔드 서버. Ollama면 `:11434` |
+| `VLM_MODEL` | — | `local` 백엔드 모델명. **Ollama는 필수**, llama-server는 생략 |
+| `VLM_PROMPT` | (한국어 표 변환 지시) | PaddleOCR-VL이면 `Table Recognition:` 로 |
+| `CLAUDE_BIN` | `claude` | `claude` 백엔드 실행 경로 |
 | `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
-| `VLM_TIMEOUT` | `600` | Claude CLI 호출 타임아웃(초) |
+| `VLM_TIMEOUT` | `600` | VLM 호출 타임아웃(초) |
 | `VISION_MAX_PAGES` | `9999` | VLM 호출 상한 페이지 수 |
 | `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
 | `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
@@ -354,6 +372,22 @@ docker exec brbs-insurance-chunker python /app/healthcheck.py
 
 주기 × `HEALTH_GRACE_FACTOR`를 넘기면 unhealthy. compose의 `restart` 정책은 unhealthy로
 재시작하지 않으므로(그건 Swarm 기능) 자가치유가 아니라 드러내기 위한 신호다.
+
+### 배포 구성
+
+`brbs-etl`(g4dn.xlarge / T4 16GB / vCPU 4 / RAM 16GiB) 한 대에 컨테이너 셋이 함께 뜬다.
+
+| 컨테이너 | 레포 | 역할 | GPU |
+|---|---|---|---|
+| `brbs-insurance-chunker` | 이 레포 | S3 → pgvector 인덱싱 (7일 주기 데몬) | 임베딩·VLM을 **Ollama 경유**로 사용 |
+| `brbs-ollama` | — | 임베딩(`qwen3-embedding:0.6b`) · VLM(`qwen3-vl:8b-instruct`) | 직접 사용 |
+| `brbs-corpus-worker` | SM17-YoonDongJu/AI | Notion → S3 약관 스테이징 | 없음 |
+
+우리 컨테이너는 GPU를 직접 잡지 않는다 — HTTP로 `brbs-ollama`에 요청할 뿐이다. 그래서
+compose에 GPU 예약이 없고, 이미지에도 CUDA 의존이 없다. 양쪽 다 `network_mode: host`라
+`localhost:11434`로 닿는다.
+
+vCPU가 4개이고 셋이 나눠 쓰므로 `INGEST_CONCURRENCY` 상한이 낮다(아래 참고).
 
 ### 배포와 롤백
 

@@ -23,10 +23,25 @@ VISION_MAX_PAGES = int(os.environ.get("VISION_MAX_PAGES", "9999"))
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 VLM_DPI = int(os.environ.get("VLM_DPI", "150"))
 VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "600"))
-# 'surya' = Surya OCR(무료, 한국어 최고 품질) | 'local' = llama-server(PaddleOCR-VL, 무료·고속)
-# | 'claude' = claude CLI(유료 API — 사용 자제)
+# 'surya'  = Surya OCR (별도 바이너리 필요)
+# 'local'  = OpenAI 호환 /v1/chat/completions — Ollama(qwen3-vl 등) 또는 llama-server
+# 'claude' = claude CLI (유료 API — 사용 자제)
 VLM_BACKEND = os.environ.get("VLM_BACKEND", "surya")
 VLM_URL = os.environ.get("VLM_URL", "http://localhost:8090")
+# local 백엔드가 부르는 /v1/chat/completions는 OpenAI 호환 규격이라 Ollama도 그대로 받는다.
+# 다만 Ollama는 model 필드가 필수다(llama-server는 모델 하나만 서빙해 생략 가능).
+# 비워두면 페이로드에서 빼므로 llama-server 호환이 유지된다.
+VLM_MODEL = os.environ.get("VLM_MODEL", "")
+# PaddleOCR-VL은 "Table Recognition:"이 태스크 토큰이지만, 범용 instruct VLM(qwen3-vl 등)에는
+# 명시적 지시가 필요하다. 기본값은 후자에 맞추고, PaddleOCR-VL을 쓰면 이 값을 바꾼다.
+_DEFAULT_VLM_PROMPT = (
+    "이 페이지 이미지에서 표를 찾아 GitHub 마크다운 표로 변환하세요.\n"
+    "- 표가 없으면 아무것도 출력하지 마세요.\n"
+    "- 설명·머리말·코드펜스 없이 표만 출력하세요.\n"
+    "- 병합된 셀은 값을 반복해 채우세요.\n"
+    "- 원문 텍스트를 그대로 옮기고 요약하지 마세요."
+)
+VLM_PROMPT = os.environ.get("VLM_PROMPT", _DEFAULT_VLM_PROMPT)
 LLAMA_CPP_BINARY = os.environ.get(
     "LLAMA_CPP_BINARY",
     os.path.expanduser("~/.local/llama.cpp/llama-b10182/llama-server"),
@@ -222,7 +237,11 @@ def _otsl_to_markdown(otsl: str) -> Optional[str]:
 
 
 def extract_vision_local(fitz_page, pno: int) -> Optional[str]:
-    """fitz page → llama-server(PaddleOCR-VL) → markdown 표 문자열. 표 없으면 None."""
+    """fitz page → OpenAI 호환 VLM → markdown 표 문자열. 표 없으면 None.
+
+    Ollama와 llama-server 둘 다 /v1/chat/completions를 같은 규격으로 받는다.
+    구분은 VLM_MODEL 하나뿐이다 — Ollama는 필수, llama-server는 생략.
+    """
     import base64
 
     import requests
@@ -234,23 +253,24 @@ def extract_vision_local(fitz_page, pno: int) -> Optional[str]:
         logger.warning(f"p{pno}: 이미지 렌더링 실패: {e}")
         return None
 
+    payload: dict = {
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                {"type": "text", "text": VLM_PROMPT},
+            ],
+        }],
+        "temperature": 0,
+        "max_tokens": 4096,
+    }
+    if VLM_MODEL:
+        payload["model"] = VLM_MODEL
+
     try:
-        resp = requests.post(
-            f"{VLM_URL}/v1/chat/completions",
-            json={
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url",
-                         "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
-                        {"type": "text", "text": "Table Recognition:"},
-                    ],
-                }],
-                "temperature": 0,
-                "max_tokens": 4096,
-            },
-            timeout=VLM_TIMEOUT,
-        )
+        resp = requests.post(f"{VLM_URL}/v1/chat/completions", json=payload,
+                             timeout=VLM_TIMEOUT)
         resp.raise_for_status()
         out = resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
@@ -426,7 +446,8 @@ def extract_tables_for_doc(
         if use_vision:
             total = len(table_pages)
             logger.info(f"VLM 대상: {total}페이지 (전체 {len(page_numbers)}페이지 중 "
-                        f"PyMuPDF 표 탐지 페이지만, backend={VLM_BACKEND})")
+                        f"PyMuPDF 표 탐지 페이지만, backend={VLM_BACKEND}"
+                        f"{f', model={VLM_MODEL}' if VLM_MODEL else ''})")
             if VLM_BACKEND == "surya":
                 vlm_tables = extract_surya_tables(pdf_path, table_pages)
             else:
