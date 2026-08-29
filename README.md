@@ -18,7 +18,8 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
   │     ├ PyMuPDF     괘선 표 (빠름)
   │     ├ pdfplumber  설치 시 자동 사용
   │     ├ camelot     설치 시 자동 사용 (ghostscript 필요)
-  │     └ Claude CLI  VLM — PyMuPDF가 표를 감지한 페이지만
+  │     └ VLM         PyMuPDF가 표를 감지한 페이지만 (VLM_BACKEND)
+  │                   local=OpenAI 호환 — 기본은 Ollama qwen3-vl
   │
   ├─ combine.py       페이지별 best-of 표 선택 (더블스페이스 기준)
   │
@@ -47,7 +48,19 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
 pip install -e ".[dev]"
 ```
 
-VLM 기능(표 추출)을 사용하려면 [Claude Code CLI](https://claude.ai/code) 설치·로그인 필요 (API 키 불필요).
+VLM 표 추출은 기본으로 켜져 있고, 같은 호스트의 **Ollama**(`qwen3-vl:8b-instruct`)에
+OpenAI 호환 `/v1/chat/completions`로 붙는다. 이미지에 추가 의존이 없다.
+
+| 백엔드 | 준비물 |
+|---|---|
+| `local` (기본) | OpenAI 호환 서버 — Ollama에 VLM 모델, 또는 llama-server |
+| `surya` | `pip install ".[ocr]"` |
+| `off` | 없음 (VLM 단계를 건너뛴다) |
+
+```bash
+# 로컬에서 Ollama 없이 청킹만 볼 때
+VLM_BACKEND=off python ingest.py --pdf 약관.pdf --insurer ... --product ...
+```
 
 ### 단일 PDF — DB 저장
 
@@ -99,7 +112,7 @@ python ingest.py \
   --product "단체안심생활보험" \
   --no-embed --dry-run --dry-run-out out.json
 
-# VLM(Claude CLI)도 없는 환경
+# VLM(Ollama)도 없는 환경
 python ingest.py \
   --pdf 약관.pdf \
   --insurer 메리츠화재 \
@@ -244,9 +257,12 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `EMBED_MAX_CHARS` | `1800` | 장문 절단 상한 — **eval과 같은 값이어야 수치가 재현된다** |
 | `EMBED_BACKEND` | `ollama` | `ollama` \| `sentence_transformers` (BGE-M3 전환) |
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
-| `CLAUDE_BIN` | `claude` | VLM 표 추출에 사용하는 Claude CLI 실행 경로 |
+| `VLM_BACKEND` | `local` | `local` \| `surya` \| `off` |
+| `VLM_URL` | `http://localhost:11434` | `local` 백엔드 서버 (같은 호스트 Ollama) |
+| `VLM_MODEL` | `qwen3-vl:8b-instruct` | Ollama는 필수. llama-server면 비운다 |
+| `VLM_PROMPT` | (한국어 표 변환 지시) | PaddleOCR-VL이면 `Table Recognition:` 로 |
 | `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
-| `VLM_TIMEOUT` | `600` | Claude CLI 호출 타임아웃(초) |
+| `VLM_TIMEOUT` | `600` | VLM 호출 타임아웃(초) |
 | `VISION_MAX_PAGES` | `9999` | VLM 호출 상한 페이지 수 |
 | `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
 | `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
@@ -355,6 +371,22 @@ docker exec brbs-insurance-chunker python /app/healthcheck.py
 주기 × `HEALTH_GRACE_FACTOR`를 넘기면 unhealthy. compose의 `restart` 정책은 unhealthy로
 재시작하지 않으므로(그건 Swarm 기능) 자가치유가 아니라 드러내기 위한 신호다.
 
+### 배포 구성
+
+`brbs-etl`(g4dn.xlarge / T4 16GB / vCPU 4 / RAM 16GiB) 한 대에 컨테이너 셋이 함께 뜬다.
+
+| 컨테이너 | 레포 | 역할 | GPU |
+|---|---|---|---|
+| `brbs-insurance-chunker` | 이 레포 | S3 → pgvector 인덱싱 (7일 주기 데몬) | 임베딩·VLM을 **Ollama 경유**로 사용 |
+| `brbs-ollama` | — | 임베딩(`qwen3-embedding:0.6b`) · VLM(`qwen3-vl:8b-instruct`) | 직접 사용 |
+| `brbs-corpus-worker` | SM17-YoonDongJu/AI | Notion → S3 약관 스테이징 | 없음 |
+
+우리 컨테이너는 GPU를 직접 잡지 않는다 — HTTP로 `brbs-ollama`에 요청할 뿐이다. 그래서
+compose에 GPU 예약이 없고, 이미지에도 CUDA 의존이 없다. 양쪽 다 `network_mode: host`라
+`localhost:11434`로 닿는다.
+
+vCPU가 4개이고 셋이 나눠 쓰므로 `INGEST_CONCURRENCY` 상한이 낮다(아래 참고).
+
 ### 배포와 롤백
 
 `main`에 머지되면 `deploy.yml`이 이미지를 빌드해 ECR로 올리고, SSM으로 EC2에서
@@ -420,6 +452,24 @@ fork-safe하지 않다.
 2가 현실적이고 3부터는 실측이 필요하다. `embed`는 GPU가 큐잉하므로 여기를 올린다고
 비례해서 빨라지지 않는다 — T4 실측에서 임베딩 부하가 이미 70W 캡을 넘겨 부스트 클럭이
 1590→1200MHz로 깎인다.
+
+### 경계 검출 신뢰도
+
+`boundaries.assess()`가 문서마다 `ok` / `weak`을 판정한다. `weak`이면 **특약 경계를 못 잡았다**는
+뜻이고, 그러면 이후 조번호가 전부 어긋난다(`eval/IMPROVEMENT_LOG.md` C-1).
+
+문제는 **그래도 적재는 성공한다**는 점이다 — 경계가 없으면 단순 텍스트 청킹으로 폴백하므로
+청크는 나오고 `status=OK`로 집계된다. 로그로만 흘려보내면 품질이 무너진 문서가 성공으로
+잡힌다. 그래서 신뢰도를 상태와 **따로** 들고 간다.
+
+```
+items.jsonl                                boundary_confidence: "ok" | "weak" | "error"
+/metrics   insurance_chunker_weak_boundary_documents
+로그        event=boundary_weak (사유 포함)
+```
+
+재시도 카운터는 건드리지 않는다 — 품질 저하지 실패가 아니고, 격리하면 그 보험사 문서가
+영영 안 들어온다. 특정 보험사에서 반복되면 경계 검출 로직을 봐야 한다는 신호다.
 
 ### 인덱스 SLO 점검
 

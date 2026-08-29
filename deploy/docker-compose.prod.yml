@@ -17,7 +17,8 @@ services:
     image: ${AWS_ECR_REGISTRY}/soma/insurance_chunker:${IMAGE_TAG:-latest}
     container_name: brbs-insurance-chunker
     restart: unless-stopped
-    # 호스트에 뜬 ollama(127.0.0.1:11434)와 DB에 붙기 위해 호스트 네트워크를 쓴다.
+    # 같은 호스트(brbs-etl)의 ollama 컨테이너(brbs-ollama, 11434)와 RDS에 붙기 위해
+    # 호스트 네트워크를 쓴다. ollama도 호스트 네트워크를 쓰므로 localhost로 닿는다.
     # (컨테이너 기본 네트워크에선 host의 127.0.0.1에 닿지 못한다.)
     network_mode: host
     env_file:

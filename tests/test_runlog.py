@@ -197,3 +197,42 @@ def test_metrics_ranks_phases_by_total_time(rl, monkeypatch):
     m = _metrics(rl, monkeypatch).collect()
     assert list(m["phase_share"]) == ["embed", "parse"]
     assert m["phase_share"]["embed"]["share"] == 0.8
+
+
+# ── 경계 검출 신뢰도 (품질 신호) ──────────────────────────────────────────────
+
+def test_weak_boundary_is_recorded_alongside_success(rl):
+    """경계를 못 잡아도 적재는 성공한다 — status만 보면 품질 저하가 안 보인다.
+
+    섹션이 안 갈리면 조번호가 전부 어긋나는데(IMPROVEMENT_LOG C-1), 그 문서도
+    status=OK로 남는다. 그래서 신뢰도를 따로 들고 간다.
+    """
+    rl.record_item(sha256="a", name="KB약관.pdf", status="OK", chunks=300,
+                   boundary_confidence="weak")
+    rec = json.loads((rl.state_dir() / "items.jsonl").read_text(encoding="utf-8").strip())
+    assert rec["status"] == "OK"
+    assert rec["boundary_confidence"] == "weak"
+
+
+def test_weak_boundary_does_not_affect_retry_counter(rl):
+    """품질 저하지 실패가 아니다 — 격리하면 그 보험사 문서가 영영 안 들어온다."""
+    rl.record_item(sha256="a", name="x.pdf", status="OK", chunks=300,
+                   boundary_confidence="weak")
+    assert rl.attempt("a")["attempts"] == 0
+
+
+def test_weak_boundary_counter_in_metrics(rl, monkeypatch):
+    import metrics
+    importlib.reload(metrics)
+    import exporter
+    importlib.reload(exporter)
+    monkeypatch.setattr(exporter, "runlog", rl)
+    monkeypatch.setattr(exporter, "metrics_mod", metrics)
+
+    for name, conf in (("a.pdf", "weak"), ("b.pdf", "ok"), ("c.pdf", "weak")):
+        rl.record_item(sha256=name, name=name, status="OK", chunks=10,
+                       boundary_confidence=conf)
+
+    samples = {s.name: s.value for f in exporter.RunlogCollector().collect()
+               for s in f.samples}
+    assert samples["insurance_chunker_weak_boundary_documents"] == 2.0

@@ -4,8 +4,11 @@
 #   docker compose run --rm chunker \
 #     python ingest.py --pdf /data/약관.pdf --insurer 메리츠화재 --product "단체안심생활보험"
 #
-# base 의존만 설치한다: OCR(surya-ocr, GPU)·ST(sentence-transformers) extra는 무겁고
-# 선택적이라 제외. VLM(claude CLI)은 컨테이너에 없다 → 기본 --no-vision 전제로 운용.
+# base 의존만 설치한다: OCR(surya-ocr)·ST(sentence-transformers) extra는 무겁고 선택적이라 제외.
+#
+# VLM 표 추출은 이미지에 백엔드를 넣지 않고 같은 호스트의 ollama 컨테이너(brbs-ollama)를
+# 쓴다 — OpenAI 호환 /v1/chat/completions 한 번이라 추가 의존이 없다. 기본값이 그쪽을
+# 가리키므로(extractor.py) 설정 없이 동작한다. 끄려면 VLM_BACKEND=off.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
