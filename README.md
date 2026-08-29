@@ -374,6 +374,23 @@ docker exec brbs-insurance-chunker python /app/healthcheck.py
 배포 성공 시 그 태그를 호스트 `.env`의 `IMAGE_TAG`에 기록한다 — 사람이 호스트에서
 `docker compose up -d`를 쳐도 같은 이미지가 뜨게 하려는 것.
 
+#### 시크릿
+
+`DATABASE_URL` · `DISCORD_WEBHOOK_INGEST` · `S3_BUCKET`은 SSM Parameter Store(SecureString)에
+두고, 배포할 때 `remote-deploy.sh`가 내려받아 호스트 `.env`에 쓴다.
+
+```bash
+aws ssm put-parameter --type SecureString --overwrite \
+  --name /brbs/insurance-chunker/dev/DATABASE_URL --value 'postgresql://...'
+```
+
+디스크의 평문을 없애는 게 목적은 아니다 — compose가 `env_file`로 읽어야 하는 이상 기동
+시점에 평문이 필요하다. 노리는 건 그 앞단이다: 사람이 호스트에 비밀번호를 손으로 넣지 않고,
+로테이션이 "SSM 값 변경 + 재배포"로 끝나며, 열람이 CloudTrail에 남고, 호스트를 다시 만들어도
+자동 복구된다.
+
+파라미터가 없으면 기존 `.env` 값을 그대로 둔다 — 한 번에 이전하지 않아도 되게.
+
 **수동 롤백**은 Actions에서 `Deploy` 워크플로를 `workflow_dispatch`로 실행하고
 `image_tag`에 되돌릴 `sha7`을 넣으면 된다. 이때는 빌드도 CI도 건너뛴다 — `main`이 깨져서
 롤백하는 상황인데 CI가 막으면 복구를 못 하기 때문이다.

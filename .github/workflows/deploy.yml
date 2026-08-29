@@ -7,6 +7,8 @@
 # 필요 변수(vars):  CORPUS_EC2_INSTANCE_ID (대상 EC2 인스턴스 ID — AI 레포 corpus EC2와 동일)
 # 사전 준비:  ECR 레포 soma/insurance_chunker, EC2에 docker/compose + SSM 에이전트,
 #            ECR pull·SSM 가능한 IAM 인스턴스 프로파일, 호스트 ~/insurance-chunker/.env
+#            시크릿은 SSM Parameter Store(SecureString) — env.SSM_PREFIX 경로 참고.
+#            인스턴스 프로파일에 ssm:GetParameter + kms:Decrypt(해당 경로) 필요.
 name: Deploy
 
 on:
@@ -33,6 +35,8 @@ env:
   EC2_DIR: /home/ubuntu/insurance-chunker # 호스트의 compose/.env 위치
   COMPOSE_SERVICE: chunker
   CONTAINER: brbs-insurance-chunker
+  # 시크릿 파라미터 경로. 여기 값이 없으면 배포는 기존 호스트 .env를 그대로 쓴다.
+  SSM_PREFIX: /brbs/insurance-chunker/dev
 
 jobs:
   # 1) 검사 게이트 — ci.yml 재사용. 실패하면 아래 잡들은 시작되지 않는다.
@@ -150,6 +154,7 @@ jobs:
           COMPOSE_SERVICE=${{ env.COMPOSE_SERVICE }} \
           CONTAINER=${{ env.CONTAINER }} \
           IMAGE_TAG="$DEPLOY_TAG" \
+          SSM_PREFIX=${{ env.SSM_PREFIX }} \
             bash remote-deploy.sh
           EOF
           )
