@@ -24,6 +24,12 @@ services:
       - .env
     environment:
       TZ: Asia/Seoul
+      # 구조화 로그 — Alloy가 JSON을 파싱해 level을 Loki 라벨로 승격한다.
+      # 로컬 개발은 기본값(text)이라 사람이 읽기 좋은 형태로 남는다.
+      LOG_FORMAT: json
+      # Prometheus 스크랩 포트. network_mode: host라 ports 매핑 없이 호스트에 바로 뜬다
+      # — 접근 통제는 보안그룹이 한다(모니터링 인스턴스만 허용). 0이면 노출하지 않는다.
+      METRICS_PORT: 9101
     volumes:
       # 처리할 PDF·매니페스트(docs.yaml) 공유 디렉터리.
       - ./data:/data

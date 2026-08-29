@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -51,6 +52,41 @@ def test_skipped_is_not_an_attempt(rl):
     for _ in range(5):
         rl.record_item(sha256="abc", name="x.pdf", status="SKIPPED")
     assert rl.attempt("abc") is None
+
+
+def test_skipped_still_lands_in_the_item_log(rl):
+    """카운터에는 안 세더라도 이력에는 남아야 한다 — 멱등 스킵률의 유일한 근거다."""
+    rl.record_item(sha256="abc", name="x.pdf", status="SKIPPED", source="catalog")
+    lines = (rl.state_dir() / "items.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["status"] == "SKIPPED"
+
+
+def test_quarantined_does_not_touch_the_counter(rl):
+    """격리는 새 시도가 아니다.
+
+    여기서 카운터를 올리면 주기마다 늘어나기만 하고, status가 QUARANTINED로 덮여
+    원래 실패 사유(EMPTY인지 ERROR인지)를 잃는다.
+    """
+    for _ in range(3):
+        rl.record_item(sha256="abc", name="x.pdf", status="EMPTY")
+    before = rl.attempt("abc")
+
+    for _ in range(4):  # 이후 주기마다 격리로 건너뛴다
+        rl.record_item(sha256="abc", name="x.pdf", status="QUARANTINED")
+
+    after = rl.attempt("abc")
+    assert after["attempts"] == before["attempts"] == 3
+    assert after["status"] == "EMPTY"          # 원래 사유가 보존된다
+    assert after["last_at"] == before["last_at"]
+
+
+def test_quarantined_still_lands_in_the_item_log(rl):
+    """무엇을 건너뛰었는지는 남아야 지표·감사에서 보인다."""
+    rl.record_item(sha256="abc", name="x.pdf", status="QUARANTINED", error="EMPTY 3회 연속")
+    rec = json.loads((rl.state_dir() / "items.jsonl").read_text(encoding="utf-8").strip())
+    assert rec["status"] == "QUARANTINED"
+    assert rec["error"] == "EMPTY 3회 연속"
 
 
 def test_empty_and_error_accumulate_toward_quarantine(rl):

@@ -27,6 +27,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import logging_setup
 import runlog
 
 try:
@@ -35,8 +36,7 @@ try:
 except ImportError:
     pass
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
+logging_setup.configure()
 logger = logging.getLogger(__name__)
 
 # 우선순위 높은 문서부터. is_latest가 NULL인 행은 제외하지 않는다(미기입일 뿐 구판이 아니다).
@@ -208,6 +208,10 @@ def main() -> None:
                     and doc_already_ingested(conn, sha):
                 logger.info("  SKIPPED: 이미 적재됨(다운로드 생략)")
                 results.append({"status": "SKIPPED", "pdf": name})
+                # 이력에 남겨야 멱등 스킵률(중복 제거로 아낀 양)을 잴 수 있다.
+                runlog.record_item(sha256=sha, name=name, status="SKIPPED",
+                                   source="catalog", insurer=row["company"],
+                                   product=row["product_name"])
                 continue
 
             # 격리 — 0청크/오류가 연속 _MAX_RETRY회면 더는 받지도, 파싱하지도 않는다.
@@ -218,6 +222,10 @@ def main() -> None:
                     f"(마지막 {hist['last_at']}) — 다운로드·파싱 생략. "
                     f"다시 시도하려면 --retry-quarantined")
                 results.append({"status": "QUARANTINED", "pdf": name})
+                runlog.record_item(sha256=sha, name=name, status="QUARANTINED",
+                                   source="catalog", insurer=row["company"],
+                                   product=row["product_name"],
+                                   error=f"{hist['status']} {hist['attempts']}회 연속")
                 continue
 
             # auto_doc_type이 파일명을 보므로 원래 이름을 유지한다.
@@ -258,6 +266,14 @@ def main() -> None:
             else:
                 logger.error(f"  ERROR: {result.get('error')}")
 
+            # Loki에서 집계·알림이 가능하도록 결과를 구조화 필드로도 남긴다
+            # (/metrics 없이도 로그만으로 1차 알림을 걸 수 있게 — ocr-worker 선례와 같은 방식).
+            logger.info("문서 처리 완료", extra={
+                "event": "document_done", "status": result["status"],
+                "document": name, "insurer": row["company"],
+                "chunks": result.get("chunks", 0), "warnings": result.get("warnings", 0),
+                "elapsed_s": result.get("elapsed_s", 0.0), "phases": result.get("phases") or {},
+            })
             if not args.dry_run:
                 runlog.record_item(
                     sha256=sha, name=name, status=result["status"],
@@ -278,7 +294,10 @@ def main() -> None:
     total_chunks = sum(r.get("chunks", 0) for r in results if r["status"] == "OK")
     elapsed = round(time.time() - t_run, 1)
     logger.info(f"\nOK={ok} 0청크={empty} SKIPPED={skipped} 격리={quarantined} ERROR={err} "
-                f"| 총 청크={total_chunks}개 | {elapsed}s")
+                f"| 총 청크={total_chunks}개 | {elapsed}s",
+                extra={"event": "ingest_done", "ok": ok, "empty": empty, "skipped": skipped,
+                       "quarantined": quarantined, "error": err,
+                       "total_chunks": total_chunks, "elapsed_s": elapsed})
     if empty:
         logger.warning(f"0청크 {empty}건 — {_MAX_RETRY}회 연속이면 격리된다. "
                        "반복되면 대상 선정(category/파일형식)을 재검토할 것")

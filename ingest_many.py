@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 
+import logging_setup
 import runlog
 
 try:
@@ -22,8 +23,7 @@ try:
 except ImportError:
     pass
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
+logging_setup.configure()
 logger = logging.getLogger(__name__)
 
 

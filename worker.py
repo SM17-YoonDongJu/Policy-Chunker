@@ -17,6 +17,7 @@ CLI를 subprocess로 부른다 — 한 사이클이 죽어도 데몬은 살아 �
   RUN_ON_START             기동 즉시 1회 실행 여부. 기본 1.
   DISCORD_WEBHOOK_INGEST   사이클 결과 알림 웹훅. 없으면 알림만 건너뛴다.
   INGEST_NOTIFY            always | failure. 기본 always.
+  METRICS_PORT             Prometheus /metrics 포트. 기본 9101, 0이면 노출 안 함.
 
 사이클 결과는 runlog가 /data/state에 남긴다 — 로그(json-file 링버퍼)와 달리 지워지지 않아
 성공률·처리시간·마지막 성공 시각 같은 지표를 나중에 뽑을 수 있고, healthcheck.py가 그
@@ -33,14 +34,12 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import exporter
+import logging_setup
 import notify
 import runlog
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+logging_setup.configure()
 logger = logging.getLogger("worker")
 
 _INTERVAL = int(os.environ.get("INGEST_INTERVAL_SECONDS", "604800"))  # 기본 7일
@@ -108,7 +107,9 @@ def _cycle() -> None:
         label, argv = "ingest_catalog", [sys.executable, "ingest_catalog.py"]
 
     if not _run(label, argv):
-        logger.error("적재 실패 — search_terms 재구성은 건너뛴다(부분 상태로 덮지 않기 위해)")
+        logger.error("적재 실패 — search_terms 재구성은 건너뛴다(부분 상태로 덮지 않기 위해)",
+                     extra={"event": "cycle_done", "ok": False, "failed_step": label,
+                            "source": _SOURCE})
         runlog.record_cycle(False, f"{label} 실패")
         notify.notify("failure", "insurance-chunker 인덱싱",
                       _summary_fields(f"{label} 실패 — search_terms 재구성 생략"))
@@ -118,6 +119,8 @@ def _cycle() -> None:
     # 적재가 됐으면 사이클은 성공으로 본다. search_terms 실패는 BM25 용어가 잠시 낡을 뿐
     # 색인 자체는 갱신됐고, 여기서 실패로 처리하면 healthcheck가 과하게 운다.
     detail = "완료" if terms_ok else "적재 완료 · search_terms 재구성 실패"
+    logger.info(f"사이클 {detail}", extra={"event": "cycle_done", "ok": True,
+                                          "search_terms_ok": terms_ok, "source": _SOURCE})
     runlog.record_cycle(True, detail)
     notify.notify("success" if terms_ok else "warning", "insurance-chunker 인덱싱",
                   _summary_fields(detail))
@@ -132,6 +135,9 @@ def main() -> None:
     # healthcheck가 첫 사이클 유예를 계산하는 기준점.
     runlog.record_start()
     logger.info(f"상태 디렉터리: {runlog.state_dir()}")
+    # 스크랩은 데몬이 떠 있는 내내 받는다 — 사이클이 안 도는 6일 23시간에도 신선도를
+    # 답해야 하므로 사이클과 무관하게 상시 열어둔다.
+    exporter.start()
 
     if _RUN_ON_START and not _stop.is_set():
         _cycle()

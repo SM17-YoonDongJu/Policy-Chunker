@@ -27,7 +27,9 @@ COPY insurance_chunker ./insurance_chunker
 COPY db ./db
 COPY ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py ./
 # 운영 계측: 실행 이력(runlog) · 사이클 알림(notify) · 좀비 판정(healthcheck) · 지표(metrics).
-COPY runlog.py notify.py healthcheck.py metrics.py ./
+COPY runlog.py notify.py healthcheck.py metrics.py logging_setup.py exporter.py ./
+# Prometheus 스크랩 포트(METRICS_PORT). 접근은 보안그룹이 통제한다.
+EXPOSE 9101
 
 # base 의존 + 패키지 설치. setuptools packages.find가 insurance_chunker/db를 포함한다.
 RUN pip install .

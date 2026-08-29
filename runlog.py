@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 _DEFAULT_DIR = "/data/state"
 _FALLBACK_DIR = ".state"
 
+# 시도가 아니라 '생략'인 상태들 — attempts.json 갱신 대상에서 제외한다.
+_NON_ATTEMPT = frozenset({"SKIPPED", "QUARANTINED"})
+
 _RUNS = "runs.jsonl"
 _ITEMS = "items.jsonl"
 _ATTEMPTS = "attempts.json"
@@ -139,8 +142,12 @@ def record_item(*, sha256: Optional[str], name: str, status: str,
            "phases": phases or {}, "error": error, **extra}
     _append(_ITEMS, rec)
 
-    # SKIPPED(이미 적재됨)는 시도가 아니라 생략이므로 카운트하지 않는다.
-    if not sha256 or status == "SKIPPED":
+    # 생략은 시도가 아니다 — 카운터도 상태도 건드리지 않는다.
+    #   SKIPPED     이미 적재돼 다운로드조차 안 했다
+    #   QUARANTINED 재시도 상한에 걸려 이번 주기엔 손대지 않았다. 여기서 카운터를 올리면
+    #               주기마다 늘어나기만 하고, status가 QUARANTINED로 덮여 원래 실패 사유
+    #               (EMPTY인지 ERROR인지)를 잃는다.
+    if not sha256 or status in _NON_ATTEMPT:
         return
     attempts = _read_json(_ATTEMPTS, {})
     prev = attempts.get(sha256, {})
