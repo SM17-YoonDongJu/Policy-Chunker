@@ -15,6 +15,8 @@
 #   CONTAINER        컨테이너명
 #   IMAGE_TAG        배포할 태그
 #   VERIFY_TIMEOUT   검증 대기 상한(초). 기본 90
+#   SSM_PREFIX       시크릿 파라미터 경로 접두사. 비면 SSM 동기화를 건너뛴다
+#                    (예: /brbs/insurance-chunker/dev)
 set -euo pipefail
 
 : "${EC2_DIR:?}" "${REGISTRY:?}" "${REGION:?}" "${COMPOSE_SERVICE:?}" "${CONTAINER:?}" "${IMAGE_TAG:?}"
@@ -27,6 +29,57 @@ log() { echo "[deploy] $*"; }
 current_tag() {
   # 지금 돌고 있는 컨테이너의 이미지 태그. 없으면 빈 문자열(첫 배포).
   docker inspect --format '{{.Config.Image}}' "$CONTAINER" 2>/dev/null | sed 's/.*://' || true
+}
+
+upsert_env() {
+  # .env의 키 하나를 덮거나 추가한다.
+  #
+  # sed로 치환하지 않는다 — 값에 |나 &가 있으면(DB 비밀번호에 충분히 있을 수 있다)
+  # 치환식이 깨지거나 엉뚱한 값이 들어간다. 해당 줄을 지우고 다시 붙이는 게 안전하다.
+  # 그 대가로 키가 파일 끝으로 밀려 주석과 떨어지지만, 호스트 .env는 배포가 관리하는
+  # 파생물이므로 감수한다(원본 주석은 deploy/.env.example에 있다).
+  local k="$1" v="$2" tmp
+  tmp=$(mktemp)
+  grep -v "^${k}=" .env > "$tmp" 2>/dev/null || true
+  printf '%s=%s\n' "$k" "$v" >> "$tmp"
+  cat "$tmp" > .env
+  rm -f "$tmp"
+}
+
+sync_secrets() {
+  # SSM Parameter Store(SecureString)의 값을 .env로 내려받는다.
+  #
+  # 여기서 노리는 건 "디스크에서 평문을 없애는 것"이 아니다 — compose가 env_file로 읽어야
+  # 하는 이상 컨테이너 기동 시점에 평문이 필요하다. 노리는 건 그 앞단이다.
+  #   · 사람이 호스트에 비밀번호를 손으로 넣지 않는다
+  #   · 로테이션이 "SSM 값 변경 + 재배포"로 끝난다
+  #   · 누가 언제 읽었는지 CloudTrail에 남는다
+  #   · 호스트를 다시 만들어도 시크릿이 자동으로 복구된다
+  #
+  # 파라미터가 없으면 기존 .env 값을 그대로 둔다. 아직 SSM에 안 넣은 환경에서 배포가
+  # 깨지지 않게 하려는 것 — 마이그레이션을 한 번에 안 해도 된다.
+  [ -z "${SSM_PREFIX:-}" ] && { log "SSM_PREFIX 미설정 — 시크릿 동기화 건너뜀"; return 0; }
+
+  local keys=(DATABASE_URL DISCORD_WEBHOOK_INGEST S3_BUCKET)
+  local names=() k
+  for k in "${keys[@]}"; do names+=("${SSM_PREFIX}/${k}"); done
+
+  local found=0 missing=0
+  # 값은 절대 로그로 내보내지 않는다 — SSM 커맨드 출력은 Actions 로그로 올라간다.
+  for k in "${keys[@]}"; do
+    local v
+    v=$(aws ssm get-parameter --name "${SSM_PREFIX}/${k}" --with-decryption \
+          --region "$REGION" --query 'Parameter.Value' --output text 2>/dev/null) || v=""
+    if [ -n "$v" ] && [ "$v" != "None" ]; then
+      upsert_env "$k" "$v"
+      found=$((found + 1))
+    else
+      missing=$((missing + 1))
+      log "SSM에 ${k} 없음 — 기존 .env 값 유지"
+    fi
+  done
+  chmod 600 .env
+  log "시크릿 동기화: ${found}건 갱신, ${missing}건 유지 (경로 ${SSM_PREFIX})"
 }
 
 roll() {
@@ -85,6 +138,8 @@ report() {
 PREV_TAG=$(current_tag)
 log "현재 태그: ${PREV_TAG:-(없음)} → 배포 태그: ${IMAGE_TAG}"
 
+sync_secrets
+
 aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "$REGISTRY"
 
@@ -93,16 +148,7 @@ roll "$IMAGE_TAG"
 if verify; then
   # 배포된 태그를 .env에 남긴다 — 호스트에서 사람이 `docker compose up -d`를 쳐도 같은
   # 이미지가 뜨게 하려는 것. 이게 없으면 수동 실행이 :latest로 되돌아가 드리프트가 생긴다.
-  if grep -q '^IMAGE_TAG=' .env 2>/dev/null; then
-    # sed -i는 GNU와 BSD 문법이 달라 이식성이 없다. 그리고 .env에는 DB 비밀번호가 있어
-    # 제자리 편집 중에 죽으면 곤란하다 — 임시 파일에 쓰고 내용만 덮는다(mv가 아니라
-    # cat > 인 이유는 원본의 소유자·권한을 그대로 두기 위해서다).
-    tmp=$(mktemp)
-    sed "s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|" .env > "$tmp" && cat "$tmp" > .env
-    rm -f "$tmp"
-  else
-    echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
-  fi
+  upsert_env IMAGE_TAG "$IMAGE_TAG"
   docker image prune -f >/dev/null 2>&1 || true
   report
   log "배포 완료 — ${IMAGE_TAG}"
