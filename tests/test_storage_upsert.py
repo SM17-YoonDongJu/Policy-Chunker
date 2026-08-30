@@ -115,3 +115,77 @@ def test_nul_check_is_cheap_for_normal_text():
     text = "널 없는 본문"
     assert storage._clean(text) is text
     assert storage._clean(None) is None
+
+
+# ── 재적재 트랜잭션 (배포 중 강제 종료) ──────────────────────────────────────
+
+class _RecordingCursor:
+    """실행 순서만 기록한다 — 여기서도 DB는 띄우지 않는다."""
+
+    def __init__(self, ops: list):
+        self.ops = ops
+        self.rowcount = 3
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.ops.append((sql.strip().split()[0].upper(), params))
+
+
+class _RecordingConn:
+    def __init__(self):
+        self.ops: list = []
+
+    def cursor(self):
+        return _RecordingCursor(self.ops)
+
+    def commit(self):
+        self.ops.append(("COMMIT", None))
+
+
+@pytest.fixture
+def rec(monkeypatch):
+    conn = _RecordingConn()
+
+    def _values(cur, sql, rows, page_size=None):
+        conn.ops.append(("INSERT", len(rows)))
+
+    monkeypatch.setattr(storage, "execute_values", _values)
+    return conn
+
+
+def test_replace_deletes_before_inserting(rec):
+    """삭제가 삽입보다 뒤로 가면 방금 넣은 청크를 도로 지운다."""
+    storage.upsert_chunks(rec, [_chunk("a"), _chunk("b")], replace_doc_hash="deadbeef")
+    verbs = [op for op, _ in rec.ops]
+    assert verbs.index("DELETE") < verbs.index("INSERT")
+
+
+def test_replace_commits_once_at_the_end(rec):
+    """삭제를 따로 커밋하면 삭제~삽입 사이에 죽었을 때 문서가 인덱스에서 사라진 채 남는다.
+
+    그 구간은 파싱·청킹·임베딩 전체(문서당 수십 초~분)다. 배포는 컨테이너에 SIGTERM을 주고
+    10초 뒤 SIGKILL하므로 그 창과 충분히 겹친다. 커밋이 마지막 한 번뿐이어야 삭제와 삽입이
+    둘 다 되거나 둘 다 안 된다.
+    """
+    storage.upsert_chunks(rec, [_chunk("a")], replace_doc_hash="deadbeef")
+    verbs = [op for op, _ in rec.ops]
+    assert verbs.count("COMMIT") == 1
+    assert verbs[-1] == "COMMIT"
+
+
+def test_replace_passes_the_hash_as_a_parameter(rec):
+    """doc_hash를 SQL 문자열에 끼워 넣지 않는다."""
+    storage.upsert_chunks(rec, [_chunk("a")], replace_doc_hash="deadbeef")
+    _, params = next(op for op in rec.ops if op[0] == "DELETE")
+    assert params == ("deadbeef",)
+
+
+def test_normal_path_issues_no_delete(rec):
+    """재적재가 아니면 지우지 않는다 — 평상시 적재가 남의 청크를 건드리면 안 된다."""
+    storage.upsert_chunks(rec, [_chunk("a")])
+    assert [op for op, _ in rec.ops] == ["INSERT", "COMMIT"]

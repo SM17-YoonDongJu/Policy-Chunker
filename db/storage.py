@@ -51,15 +51,6 @@ def doc_already_ingested(conn: psycopg2.extensions.connection, doc_hash: str) ->
         return cur.fetchone() is not None
 
 
-def delete_by_doc_hash(conn: psycopg2.extensions.connection, doc_hash: str) -> int:
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM policy_chunks WHERE doc_hash = %s", (doc_hash,))
-        deleted = cur.rowcount
-    conn.commit()
-    logger.info(f"기존 청크 {deleted}개 삭제")
-    return deleted
-
-
 def _clean(text: Optional[str]) -> Optional[str]:
     """NUL(0x00)을 제거한다.
 
@@ -123,12 +114,19 @@ def upsert_chunks(
     conn: psycopg2.extensions.connection,
     chunks: list[InsuranceChunk],
     batch_size: int = 200,
+    replace_doc_hash: Optional[str] = None,
 ) -> None:
     """청크를 배치 INSERT한다.
 
     execute_values를 쓴다. psycopg2의 executemany는 배치로 잘라도 파라미터 세트마다 statement를
     개별 실행해 청크 수만큼 왕복하는데, RDS가 원격이라 RTT가 그대로 곱해졌다(21,791청크 = 21,791회).
     execute_values는 배치를 한 문장으로 묶어 배치당 1회 왕복이 된다.
+
+    Args:
+        replace_doc_hash: 재적재(--overwrite)에서 이 문서의 기존 청크를 먼저 지운다.
+            삭제를 따로 커밋하면 삭제와 삽입 사이(파싱·청킹·임베딩 전체, 문서당 수십 초~분)에
+            프로세스가 죽었을 때 문서가 인덱스에서 사라진 채 남는다 — 배포가 컨테이너를
+            재생성하는 순간이 그렇다. 한 트랜잭션에 묶어 둘 다 되거나 둘 다 안 되게 한다.
     """
     sql = """
         INSERT INTO policy_chunks (
@@ -173,6 +171,9 @@ def upsert_chunks(
     chunks = _dedupe(chunks)
     total = len(chunks)
     with conn.cursor() as cur:
+        if replace_doc_hash:
+            cur.execute("DELETE FROM policy_chunks WHERE doc_hash = %s", (replace_doc_hash,))
+            logger.info(f"  재적재 — 기존 청크 {cur.rowcount}개 삭제(같은 트랜잭션에서 재삽입)")
         for i in range(0, total, batch_size):
             batch = chunks[i:i + batch_size]
             # page_size를 배치 크기로 맞춰 배치 하나가 정확히 왕복 1회가 되게 한다
