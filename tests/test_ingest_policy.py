@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -53,7 +55,10 @@ def wk(tmp_path, monkeypatch):
     monkeypatch.setattr(worker.notify, "notify",
                         lambda status, title, fields: sent.append(status) or True)
     worker._sent = sent
-    return worker
+    # 정지 플래그는 프로세스 전역이라 테스트끼리 샌다.
+    worker.shutdown.reset()
+    yield worker
+    worker.shutdown.reset()
 
 
 def test_failed_ingest_does_not_mark_success(wk, monkeypatch):
@@ -188,3 +193,62 @@ def test_process_one_is_importable_by_name():
     """spawn 방식은 워커에서 함수를 이름으로 다시 찾는다 — 모듈 최상위여야 한다."""
     import pickle
     assert pickle.loads(pickle.dumps(ingest_catalog._process_one)) is ingest_catalog._process_one
+
+
+# ── 정지 신호(배포가 사이클을 자를 때) ───────────────────────────────────────
+
+def test_interrupted_cycle_is_not_counted_as_success(wk, monkeypatch):
+    """정지로 잘린 사이클은 부분 적재다 — 성공으로 세면 last_success_at이 거짓말하고
+    healthcheck가 그 값으로 좀비를 판정한다."""
+    monkeypatch.setattr(wk, "_run", lambda label, argv: True)
+    wk.shutdown.request_stop()
+    wk._cycle()
+    assert "last_success_at" not in wk.runlog.daemon_state()
+
+
+def test_interrupted_cycle_does_not_cry_failure(wk, monkeypatch):
+    """배포할 때마다 실패 알림이 울리면 아무도 안 보게 된다 — 원인이 다르니 warning으로 가른다."""
+    monkeypatch.setattr(wk, "_run", lambda label, argv: True)
+    wk.shutdown.request_stop()
+    wk._cycle()
+    assert wk._sent == ["warning"]
+
+
+def test_interrupted_cycle_skips_search_terms(wk, monkeypatch):
+    """적재가 잘렸으면 BM25 용어를 다시 만들 이유가 없다 — 부분 상태로 덮지 않는다."""
+    calls: list[str] = []
+    monkeypatch.setattr(wk, "_run", lambda label, argv: calls.append(label) or True)
+    wk.shutdown.request_stop()
+    wk._cycle()
+    assert calls == ["ingest_catalog"]
+
+
+def test_stop_is_forwarded_to_the_running_cli(wk):
+    """SIGTERM은 PID 1(worker)에만 온다.
+
+    전달하지 않으면 적재 CLI는 아무것도 모른 채 일하다 유예가 끝나면 SIGKILL로 끊긴다 —
+    문서 경계에서 접을 기회 자체가 없다.
+    """
+    argv = [sys.executable, "-c", "import time; time.sleep(30)"]
+    out: list[bool] = []
+    t = threading.Thread(target=lambda: out.append(wk._run("sleep", argv)))
+    t.start()
+    try:
+        for _ in range(200):
+            if wk._proc is not None:
+                break
+            time.sleep(0.02)
+        assert wk._proc is not None, "자식이 뜨지 않았다"
+        wk._forward_stop()
+        t.join(timeout=10)
+    finally:
+        if wk._proc is not None:
+            wk._proc.kill()
+        t.join(timeout=5)
+    assert out == [False], "SIGTERM으로 끝난 실행은 성공이 아니다"
+
+
+def test_nothing_starts_after_the_stop_signal(wk):
+    """정지 예약 뒤에는 새 CLI를 띄우지 않는다 — 띄워봐야 곧 SIGKILL이다."""
+    wk.shutdown.request_stop()
+    assert wk._run("ingest_catalog", [sys.executable, "-c", "pass"]) is False
