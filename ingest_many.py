@@ -16,6 +16,7 @@ from pathlib import Path
 
 import logging_setup
 import runlog
+import shutdown
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -198,6 +199,8 @@ def run_one_safe(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict
 
 def main() -> None:
     args = _parse_args()
+    # 배포가 컨테이너를 재생성할 때 문서 경계에서 접기 위한 것(worker.py가 SIGTERM을 전달한다).
+    shutdown.install()
     docs = _load_manifest(args.manifest)
     dry_run_dir = Path(args.dry_run_dir)
     if args.dry_run:
@@ -207,6 +210,9 @@ def main() -> None:
     t_run = time.time()
     results = []
     for i, doc in enumerate(docs, 1):
+        # 시작한 문서는 끝까지 간다 — 저장 트랜잭션의 단위가 문서다.
+        if shutdown.stopping():
+            break
         logger.info(f"\n[{i}/{len(docs)}] {doc.get('pdf', '?')}")
         result = run_one_safe(doc, args, dry_run_dir)
         results.append(result)
@@ -229,10 +235,16 @@ def main() -> None:
     err = sum(1 for r in results if r["status"] == "ERROR")
     total_chunks = sum(r.get("chunks", 0) for r in results if r["status"] == "OK")
     logger.info(f"\nOK={ok} ERROR={err} | 총 청크={total_chunks}개")
+    stopped = shutdown.stopping()
+    left = len(docs) - len(results)
+    if stopped:
+        logger.warning(f"정지 신호로 중단 — 처리 {len(results)}건, 남은 {left}건은 다음 주기로",
+                       extra={"event": "ingest_interrupted", "done": len(results), "left": left})
     if not args.dry_run:
         runlog.record_run({"source": "manifest", "total": len(docs), "ok": ok, "error": err,
                            "total_chunks": total_chunks,
-                           "elapsed_s": round(time.time() - t_run, 1)})
+                           "elapsed_s": round(time.time() - t_run, 1),
+                           "stopped": stopped, "left": left if stopped else 0})
     if err:
         sys.exit(1)
 

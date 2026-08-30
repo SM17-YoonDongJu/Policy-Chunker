@@ -33,11 +33,13 @@ import sys
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import exporter
 import logging_setup
 import notify
 import runlog
+import shutdown
 import slo
 
 logging_setup.configure()
@@ -48,23 +50,50 @@ _SOURCE = os.environ.get("INGEST_SOURCE", "catalog").strip().lower()
 _MANIFEST = os.environ.get("MANIFEST_PATH", "/data/docs.yaml")
 _RUN_ON_START = os.environ.get("RUN_ON_START", "1").strip().lower() in ("1", "true", "yes")
 
-_stop = threading.Event()
+# 진행 중인 CLI. 시그널 핸들러가 여기로 SIGTERM을 전달한다.
+# RLock인 이유: 핸들러는 메인 스레드에서 실행되므로, 이 락을 잡은 채 신호를 받으면
+# 일반 Lock에서는 자기 자신을 기다리며 굳는다(Popen 호출 구간이 실제로 그 창이다).
+_proc_lock = threading.RLock()
+_proc: Optional[subprocess.Popen] = None
 
 
-def _handle_signal(signum: int, _frame: object) -> None:
-    logger.info(f"시그널 {signal.Signals(signum).name} 수신 — "
-                "정지 예약(진행 중 작업은 마저 끝낸다)")
-    _stop.set()
+def _forward_stop() -> None:
+    """정지 신호를 진행 중인 CLI에 넘긴다.
+
+    SIGTERM은 PID 1(이 프로세스)에만 온다 — 자식은 아무것도 못 받은 채 일하다 유예가
+    끝나면 SIGKILL로 끊긴다. 전달해야 자식이 문서 경계에서 접고 이력을 남길 수 있다.
+    """
+    with _proc_lock:
+        if _proc is None or _proc.poll() is not None:
+            return
+        logger.info(f"진행 중인 작업(pid={_proc.pid})에 SIGTERM 전달")
+        try:
+            _proc.send_signal(signal.SIGTERM)
+        except OSError as e:  # 그 사이에 끝났으면 그만이다
+            logger.warning(f"신호 전달 실패: {e}")
 
 
 def _run(label: str, argv: list[str]) -> bool:
     """CLI를 subprocess로 실행. 성공 여부만 반환하고 예외는 삼킨다(데몬 생존 우선)."""
+    global _proc
     logger.info(f"{label} 시작: {' '.join(argv)}")
     try:
-        rc = subprocess.run(argv, cwd=Path(__file__).parent, check=False).returncode
+        with _proc_lock:
+            if shutdown.stopping():
+                logger.info(f"{label} 시작 전에 정지 신호 — 실행하지 않는다")
+                return False
+            _proc = subprocess.Popen(argv, cwd=Path(__file__).parent)
+        # Popen이 도는 동안 신호가 왔다면 핸들러는 아직 비어 있는 _proc을 보고 지나갔다.
+        # 그 창을 여기서 메운다 — 안 그러면 자식이 신호를 영영 못 받는다.
+        if shutdown.stopping():
+            _forward_stop()
+        rc = _proc.wait()
     except Exception as e:  # noqa: BLE001 - 어떤 실패든 데몬은 계속 살아야 한다
         logger.error(f"{label} 실행 실패: {e}")
         return False
+    finally:
+        with _proc_lock:
+            _proc = None
     if rc != 0:
         logger.error(f"{label} 실패 (exit={rc})")
         return False
@@ -121,7 +150,19 @@ def _cycle() -> None:
     else:
         label, argv = "ingest_catalog", [sys.executable, "ingest_catalog.py"]
 
-    if not _run(label, argv):
+    ok = _run(label, argv)
+    if shutdown.stopping():
+        # 정지로 잘린 사이클이다. 성공으로 세면 부분 적재로 last_success_at이 갱신돼
+        # healthcheck가 "최근에 성공했다"고 거짓말한다. 그렇다고 실패로만 두면 배포할
+        # 때마다 실패 알림이 울린다 — 원인을 적어 warning으로 구분한다.
+        detail = f"{label} 중단 — 정지 신호(배포·재시작). 남은 문서는 다음 주기로"
+        logger.warning(detail, extra={"event": "cycle_interrupted", "step": label,
+                                      "source": _SOURCE})
+        runlog.record_cycle(False, detail)
+        notify.notify("warning", "insurance-chunker 인덱싱", _summary_fields(detail))
+        return
+
+    if not ok:
         logger.error("적재 실패 — search_terms 재구성은 건너뛴다(부분 상태로 덮지 않기 위해)",
                      extra={"event": "cycle_done", "ok": False, "failed_step": label,
                             "source": _SOURCE})
@@ -150,8 +191,7 @@ def _cycle() -> None:
 
 
 def main() -> None:
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
+    shutdown.install(on_stop=_forward_stop)
 
     src = f"매니페스트 {_MANIFEST}" if _SOURCE == "manifest" else "카탈로그(ai.corpus_file + S3)"
     logger.info(f"인덱싱 데몬 시작 — 주기 {_INTERVAL}s ({_INTERVAL / 3600:.1f}h), 소스: {src}")
@@ -162,15 +202,15 @@ def main() -> None:
     # 답해야 하므로 사이클과 무관하게 상시 열어둔다.
     exporter.start()
 
-    if _RUN_ON_START and not _stop.is_set():
+    if _RUN_ON_START and not shutdown.stopping():
         _cycle()
 
-    while not _stop.is_set():
+    while not shutdown.stopping():
         # TZ(compose에서 Asia/Seoul)를 반영한 로컬 시각으로 표시한다.
         nxt = datetime.now(UTC).astimezone() + timedelta(seconds=_INTERVAL)
         logger.info(f"다음 실행 예정: {nxt:%Y-%m-%d %H:%M:%S} (대기 {_INTERVAL}s)")
         # wait()는 시그널로 즉시 깨어난다 — sleep과 달리 종료가 지연되지 않는다.
-        if _stop.wait(_INTERVAL):
+        if shutdown.event().wait(_INTERVAL):
             break
         _cycle()
 

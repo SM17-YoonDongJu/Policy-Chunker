@@ -17,6 +17,10 @@ services:
     image: ${AWS_ECR_REGISTRY}/soma/insurance_chunker:${IMAGE_TAG:-latest}
     container_name: brbs-insurance-chunker
     restart: unless-stopped
+    # 정지 유예. 기본 10초로는 worker가 SIGTERM을 CLI에 넘기자마자 SIGKILL이 떨어져
+    # 진행 중이던 문서가 통째로 버려진다. 문서 하나가 수십 초~분이라 그만큼 준다.
+    # 최댓값이지 고정 대기가 아니다 — 문서 경계에서 접고 바로 빠지면 그 즉시 넘어간다.
+    stop_grace_period: 120s
     # 같은 호스트(brbs-etl)의 ollama 컨테이너(brbs-ollama, 11434)와 RDS에 붙기 위해
     # 호스트 네트워크를 쓴다. ollama도 호스트 네트워크를 쓰므로 localhost로 닿는다.
     # (컨테이너 기본 네트워크에선 host의 127.0.0.1에 닿지 못한다.)

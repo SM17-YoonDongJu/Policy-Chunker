@@ -29,6 +29,7 @@ from pathlib import Path
 
 import logging_setup
 import runlog
+import shutdown
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -220,9 +221,15 @@ def _process_one(task: dict) -> dict:
 
 
 def _run_tasks(tasks: list[dict], concurrency: int):
-    """작업 목록을 순서대로(또는 동시에) 실행하며 (task, result)를 하나씩 내놓는다."""
+    """작업 목록을 순서대로(또는 동시에) 실행하며 (task, result)를 하나씩 내놓는다.
+
+    정지 신호(배포·재시작)가 오면 문서와 문서 사이에서 멈춘다. 시작한 문서는 끝까지 간다 —
+    저장 트랜잭션의 단위가 문서라 중간에 끊어도 다음 주기에 처음부터 다시 해야 한다.
+    """
     if concurrency <= 1 or len(tasks) <= 1:
         for t in tasks:
+            if shutdown.stopping():
+                return
             yield t, _process_one(t)
         return
 
@@ -232,7 +239,8 @@ def _run_tasks(tasks: list[dict], concurrency: int):
     # spawn을 명시한다. fork면 부모의 psycopg2 커넥션과 boto3 상태를 그대로 물려받는데
     # 둘 다 fork-safe하지 않다. 재import 비용(1~2초)은 문서 처리 시간에 비하면 무시할 만하다.
     ctx = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=concurrency, mp_context=ctx) as ex:
+    ex = ProcessPoolExecutor(max_workers=concurrency, mp_context=ctx)
+    try:
         futures = {ex.submit(_process_one, t): t for t in tasks}
         for fut in as_completed(futures):
             t = futures[fut]
@@ -242,10 +250,19 @@ def _run_tasks(tasks: list[dict], concurrency: int):
                 logger.exception(f"워커 실패: {t['name']}")
                 yield t, {"pdf": t["name"], "status": "ERROR",
                           "error": f"{type(e).__name__}: {e}", "phases": {}}
+            if shutdown.stopping():
+                return
+    finally:
+        # 아직 시작 안 한 작업만 취소한다(cancel_futures). 돌고 있는 문서는 기다린다 —
+        # with 블록의 기본 shutdown은 대기 중인 것까지 전부 실행해 버려서 쓸 수 없다.
+        ex.shutdown(wait=True, cancel_futures=True)
 
 
 def main() -> None:
     args = _parse_args()
+    # 배포가 컨테이너를 재생성할 때 문서 경계에서 접기 위한 것. worker.py가 SIGTERM을
+    # 여기까지 전달한다.
+    shutdown.install()
 
     bucket = args.bucket or os.environ.get("S3_BUCKET")
     if not bucket:
@@ -382,13 +399,23 @@ def main() -> None:
         logger.warning(f"격리 {quarantined}건은 이번 주기에 손대지 않았다 — "
                        "state/attempts.json에서 목록 확인")
 
+    # 정지로 잘렸으면 남은 문서는 손도 안 댄 것이다. 이 사실을 이력에 남기지 않으면
+    # 나중에 "그 주기엔 왜 이것밖에 안 했나"에 답할 수 없다(attempts는 안 올라간다 —
+    # 시도한 적이 없으므로 다음 주기에 정상적으로 다시 잡힌다).
+    # results에는 1단계의 SKIPPED·QUARANTINED도 들어 있으므로 처리 건수는 done으로 센다.
+    stopped = shutdown.stopping()
+    left = len(tasks) - done
+    if stopped:
+        logger.warning(f"정지 신호로 중단 — 처리 {done}건, 남은 {left}건은 다음 주기로",
+                       extra={"event": "ingest_interrupted", "done": done, "left": left})
+
     if not args.dry_run:
         runlog.record_run({
             "source": "catalog", "category": args.category, "total": len(rows),
             "ok": ok, "empty": empty, "skipped": skipped, "quarantined": quarantined,
             "error": err, "total_chunks": total_chunks,
             "skipped_non_pdf": sum(skipped_ext.values()), "elapsed_s": elapsed,
-            "concurrency": concurrency,
+            "concurrency": concurrency, "stopped": stopped, "left": left if stopped else 0,
         })
     if err:
         sys.exit(1)
