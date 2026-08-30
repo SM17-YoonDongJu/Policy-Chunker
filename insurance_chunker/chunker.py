@@ -115,7 +115,7 @@ def chunk_document(
         product_summary(요약서)는 ingest 대상이 아님. ingest.py에서 진입 전 차단.
     """
     if meta.doc_type == "policy_terms":
-        return _chunk_policy_terms(pages, meta, pdf_path, target, hard_max)
+        return _chunk_policy_terms(pages, meta, pdf_path, target, hard_max, report)
     elif meta.doc_type == "schedule":
         return _chunk_schedule(pages, meta), []
     else:
@@ -130,9 +130,14 @@ def _chunk_policy_terms(
     pdf_path: Optional[str],
     target: int,
     hard_max: int,
+    report: Optional[dict] = None,
 ) -> tuple[list[InsuranceChunk], list[TableMeta]]:
     from .boundaries import find as find_bounds
-    from .rechunk import clean, finalize, mark_boilerplate, merge, report
+
+    # rechunk.report는 청킹 통계 함수다. out-param `report`(dict)와 이름이 겹치면
+    # dict인 줄 알고 대입하다 TypeError로 문서 전체가 죽는다 — 별칭으로 갈라 둔다.
+    from .rechunk import clean, finalize, mark_boilerplate, merge
+    from .rechunk import report as rechunk_stats
 
     # 폰트 기반 경계 감지
     bounds = None
@@ -195,7 +200,7 @@ def _chunk_policy_terms(
     merged = merge(cleaned, meta, target=target, hard_max=hard_max)
     chunks, table_metas = finalize(merged, meta)
     chunks = mark_boilerplate(chunks)
-    stats = report(chunks, bounds)
+    stats = rechunk_stats(chunks, bounds)
     logger.info(
         f"[policy_terms] {stats['n_chunks']}청크 | "
         f"tok_mean={stats['tok_mean']} | over_600={stats['over_600']} | "
