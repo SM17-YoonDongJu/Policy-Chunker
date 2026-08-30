@@ -106,17 +106,21 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     )
 
     conn = None
+    replace_hash = None  # 재적재면 저장 단계에서 삽입과 같은 트랜잭션으로 지운다
     if not args.dry_run:
-        from db.storage import delete_by_doc_hash, doc_already_ingested, get_connection, init_schema
+        from db.storage import doc_already_ingested, get_connection, init_schema
         conn = get_connection(args.db_url)
         init_schema(conn, skip=args.no_init_schema)
         if doc_already_ingested(conn, meta.doc_hash):
             if args.overwrite:
-                delete_by_doc_hash(conn, meta.doc_hash)
+                replace_hash = meta.doc_hash
             else:
                 conn.close()
                 return {"pdf": pdf_path.name, "status": "SKIPPED", "reason": "already ingested",
                         "doc_hash": meta.doc_hash, "phases": timings}
+        # 조회로 열린 트랜잭션을 닫는다 — 아래 파싱·임베딩이 문서당 수십 초~분이라
+        # 그대로 두면 그동안 커넥션이 idle in transaction으로 남는다(동시 처리 수만큼).
+        conn.rollback()
 
     try:
         with runlog.phase(timings, "parse"):
@@ -159,7 +163,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
             with runlog.phase(timings, "store"):
                 if table_metas:
                     _upload_tables_to_s3(table_metas)
-                upsert_chunks(conn, chunks)
+                upsert_chunks(conn, chunks, replace_doc_hash=replace_hash)
                 verify_upsert(conn, meta.doc_hash)
     finally:
         # 예외로 빠져나가도 커넥션은 돌려준다 — 사이클이 문서 수만큼 커넥션을 새로 여므로

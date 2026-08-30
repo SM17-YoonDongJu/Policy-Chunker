@@ -119,17 +119,22 @@ def main() -> None:
     )
 
     conn = None
+    replace_hash = None  # 재적재면 저장 단계에서 삽입과 같은 트랜잭션으로 지운다
     if not args.dry_run:
-        from db.storage import delete_by_doc_hash, doc_already_ingested, get_connection, init_schema
+        from db.storage import doc_already_ingested, get_connection, init_schema
         conn = get_connection(args.db_url)
         init_schema(conn, skip=args.no_init_schema)
         if doc_already_ingested(conn, doc_hash):
             if args.overwrite:
-                delete_by_doc_hash(conn, doc_hash)
+                logger.info("이미 ingestion된 파일 — 재적재(--overwrite)")
+                replace_hash = doc_hash
             else:
                 logger.info("이미 ingestion된 파일. 건너뜀 (재처리: --overwrite)")
                 conn.close()
                 return
+        # 조회로 열린 트랜잭션을 닫는다 — 아래 파싱·임베딩이 수 분이라 그대로 두면
+        # 그동안 커넥션이 idle in transaction으로 남는다.
+        conn.rollback()
 
     # Phase 1: 파싱
     logger.info("Phase 1: PDF 파싱")
@@ -202,7 +207,7 @@ def main() -> None:
             logger.info(f"  표 S3 업로드: {len(table_metas)}건")
             _upload_tables_to_s3(table_metas)
 
-        upsert_chunks(conn, chunks)
+        upsert_chunks(conn, chunks, replace_doc_hash=replace_hash)
         verify_upsert(conn, doc_hash)
         conn.close()
 
