@@ -9,6 +9,10 @@
 #            ECR pull·SSM 가능한 IAM 인스턴스 프로파일, 호스트 ~/insurance-chunker/.env
 #            시크릿은 SSM Parameter Store(SecureString) — env.SSM_PREFIX 경로 참고.
 #            인스턴스 프로파일에 ssm:GetParameter + kms:Decrypt(해당 경로) 필요.
+# 관측 연결:  이 워크플로가 하지 않는다. 로그 수집(호스트의 Alloy)·메트릭 스크랩(Prometheus
+#            잡)·보안그룹은 호스트 레벨이라 사람이 적용한다 — deploy/observability/README.md.
+#            연결이 끊겨 있어도 배포는 초록불로 끝나므로(검증의 /metrics curl은 비블로킹)
+#            배포 성공을 관측이 붙어 있다는 근거로 쓰면 안 된다.
 name: Deploy
 
 on:

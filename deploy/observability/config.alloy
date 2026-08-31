@@ -1,0 +1,69 @@
+// insurance-chunker 컨테이너 로그 → Loki(brbs-monitoring).
+//
+// 앱은 JSON 한 줄 = 로그 하나로 찍는다(LOG_FORMAT=json, chunker compose가 지정).
+// 여기서 그 JSON을 풀어 level을 라벨로 올린다 — 평문이면 이 단계가 통째로 안 먹어서
+// Loki에서 레벨 필터가 안 된다(logging_setup.py 참고).
+
+discovery.docker "local" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "15s"
+}
+
+discovery.relabel "chunker" {
+  targets = discovery.docker.local.targets
+
+  // 이 호스트에는 brbs-corpus-worker·brbs-ollama도 떠 있다. 그쪽 로그가 JSON이 아니면
+  // 아래 stage.json이 줄마다 실패 경고를 내므로, 우선 우리 컨테이너만 받는다.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/brbs-insurance-chunker"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "chunker" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.chunker.output
+  labels     = { job = "brbs/insurance-chunker" }
+  forward_to = [loki.process.chunker.receiver]
+}
+
+loki.process "chunker" {
+  stage.json {
+    expressions = {
+      level     = "level",
+      service   = "service",
+      event     = "event",
+      timestamp = "timestamp",
+    }
+  }
+
+  // 앱이 찍은 UTC ISO8601을 쓴다 — 도커가 수집한 시각이 아니라. 컨테이너 TZ가
+  // Asia/Seoul이어도 로그 타임스탬프는 UTC 한 가지로 고정돼 있다(logging_setup.py).
+  stage.timestamp {
+    source = "timestamp"
+    format = "RFC3339Nano"
+  }
+
+  // 라벨로 올리는 건 값이 유한한 것만이다. document·sha256·product는 본문에만 둔다 —
+  // 라벨로 올리면 스트림 카디널리티가 문서 수만큼 폭발한다(README의 라벨 정책).
+  // event는 코드가 extra로 싣는 고정 어휘다(document_done, cycle_done, boundary_weak,
+  // ingest_interrupted, stop_requested 등).
+  stage.labels {
+    values = { level = "", service = "", event = "" }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://10.0.11.48:3100/loki/api/v1/push"
+  }
+}
