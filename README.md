@@ -358,6 +358,10 @@ curl -s localhost:9101/metrics | grep insurance_chunker
 
 라벨 카디널리티 정책상 `document`·`sha256` 같은 값은 **본문에만** 둔다(라벨로 올리지 않는다).
 
+수집 쪽(brbs-etl의 Alloy, Prometheus 스크랩 잡, 필요한 보안그룹)은
+[`deploy/observability/`](deploy/observability/)에 있다. **CD가 배포하지 않는다** — 호스트
+레벨 설정이라 사람이 적용한다.
+
 ### 헬스체크
 
 `docker ps`의 STATUS 열에 뜬다. 판정 기준은 **마지막 인덱싱 성공 시각** —
@@ -373,13 +377,14 @@ docker exec brbs-insurance-chunker python /app/healthcheck.py
 
 ### 배포 구성
 
-`brbs-etl`(g4dn.xlarge / T4 16GB / vCPU 4 / RAM 16GiB) 한 대에 컨테이너 셋이 함께 뜬다.
+`brbs-etl`(g4dn.xlarge / T4 16GB / vCPU 4 / RAM 16GiB) 한 대에 컨테이너 넷이 함께 뜬다.
 
 | 컨테이너 | 레포 | 역할 | GPU |
 |---|---|---|---|
 | `brbs-insurance-chunker` | 이 레포 | S3 → pgvector 인덱싱 (7일 주기 데몬) | 임베딩·VLM을 **Ollama 경유**로 사용 |
 | `brbs-ollama` | — | 임베딩(`qwen3-embedding:0.6b`) · VLM(`qwen3-vl:8b-instruct`) | 직접 사용 |
 | `brbs-corpus-worker` | SM17-YoonDongJu/AI | Notion → S3 약관 스테이징 | 없음 |
+| `brbs-alloy` | 이 레포 (`deploy/observability/`) | 컨테이너 로그 → Loki. CD 대상 아님 | 없음 |
 
 우리 컨테이너는 GPU를 직접 잡지 않는다 — HTTP로 `brbs-ollama`에 요청할 뿐이다. 그래서
 compose에 GPU 예약이 없고, 이미지에도 CUDA 의존이 없다. 양쪽 다 `network_mode: host`라
