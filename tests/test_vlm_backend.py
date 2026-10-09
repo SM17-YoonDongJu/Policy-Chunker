@@ -165,7 +165,7 @@ def test_server_error_returns_none_not_raise(ex, monkeypatch):
 
 def test_page_budget_is_respected(ex, monkeypatch):
     """VISION_MAX_PAGES는 비용·시간 상한이다."""
-    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2")
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2", VLM_TARGET="tables")
     _capture(monkeypatch)
     for _ in range(3):
         extractor.extract_vision(_FakePage(), 1)
@@ -341,7 +341,7 @@ def test_document_loop_stops_calling_after_the_circuit_opens(ex, monkeypatch, ta
     없을 때 214페이지짜리 문서가 페이지마다 600초를 기다려 35.6시간을 태웠다.
     6페이지 문서에서 VLM_FAIL_STREAK=2면 호출은 2번에서 멈춰야 한다.
     """
-    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2")
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2", VLM_TARGET="tables")
     calls = _always_fail(monkeypatch)
     sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
     assert len(sources["pymupdf"]) == 6, "표 6페이지가 잡혀야 의미 있는 검증이다"
@@ -351,7 +351,7 @@ def test_document_loop_stops_calling_after_the_circuit_opens(ex, monkeypatch, ta
 
 def test_document_loop_runs_every_page_when_healthy(ex, monkeypatch, table_pdf):
     """차단기가 멀쩡한 문서를 일찍 끊으면 안 된다."""
-    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2")
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2", VLM_TARGET="tables")
     seen = _capture(monkeypatch, "| a | b |\n|---|---|\n| 1 | 2 |")
     sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
     assert len(sources["vlm"]) == 6
@@ -369,7 +369,7 @@ def test_budget_default_is_a_real_limit(ex, monkeypatch):
 
 def test_budget_stops_the_document_loop(ex, monkeypatch, table_pdf):
     """상한에 닿으면 남은 페이지는 호출하지 않는다 — 6페이지 문서에 상한 2면 2회."""
-    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2")
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2", VLM_TARGET="tables")
     seen = _capture(monkeypatch)
     calls = {"n": 0}
     import requests
@@ -388,16 +388,126 @@ def test_budget_stops_the_document_loop(ex, monkeypatch, table_pdf):
 
 def test_budget_does_not_drop_the_other_sources(ex, monkeypatch, table_pdf):
     """상한은 VLM만 끊는다. 남은 페이지도 PyMuPDF 표는 그대로 있어야 한다."""
-    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2")
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2", VLM_TARGET="tables")
     _capture(monkeypatch)
     sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
     assert len(sources["pymupdf"]) == 6, "VLM 상한이 다른 소스까지 끊으면 안 된다"
 
 
 def test_budget_resets_between_documents(ex, monkeypatch, table_pdf):
-    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2")
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2", VLM_TARGET="tables")
     _capture(monkeypatch)
     extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
     assert extractor.vision_budget_exhausted()
     extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
     assert extractor._vision_call_count == 2, "문서마다 예산이 새로 주어져야 한다"
+
+
+# ── VLM 투입 대상 선정 ────────────────────────────────────────────────────────
+# 예전 기본값은 "PyMuPDF가 표를 찾은 페이지"였다. 그게 거꾸로였다 — VLM은 이미 잘 되던
+# 추출을 덮어쓸 기회만 가졌고(실측에서 ICD-10 코드표가 그렇게 망가졌다), 괘선 없는 표와
+# 이미지로 박힌 표는 어느 소스도 보지 않았다.
+
+@pytest.fixture
+def mixed_pdf(tmp_path):
+    """세 종류가 섞인 PDF.
+
+    p1 괘선 표         → PyMuPDF가 잡는다
+    p2 텍스트만         → 표 없음
+    p3 이미지만(텍스트 X) → 스캔본 같은 페이지. VLM만이 닿는다
+    p4 괘선 다수 + 텍스트 → 표 신호는 있는데 PyMuPDF가 표로 인식하진 않는다
+    """
+    import pymupdf
+    doc = pymupdf.open()
+
+    p = doc.new_page()
+    for r in range(4):
+        for c in range(3):
+            rect = pymupdf.Rect(60 + c * 140, 80 + r * 28, 60 + (c + 1) * 140, 80 + (r + 1) * 28)
+            p.draw_rect(rect, color=(0, 0, 0), width=0.8)
+            p.insert_text((rect.x0 + 5, rect.y0 + 18), f"r{r}c{c}", fontsize=9)
+
+    p = doc.new_page()
+    p.insert_text((70, 100), "본문만 있는 페이지입니다.", fontsize=11)
+
+    img = doc.new_page()
+    pix = doc[0].get_pixmap(dpi=72)
+    img.insert_image(img.rect, stream=pix.tobytes("png"))
+
+    p = doc.new_page()
+    p.insert_text((70, 90), "괘선은 많지만 표로는 안 잡히는 페이지", fontsize=11)
+    for i in range(8):
+        p.draw_line(pymupdf.Point(60, 120 + i * 20), pymupdf.Point(520, 120 + i * 20))
+
+    path = tmp_path / "mixed.pdf"
+    doc.save(path)
+    doc.close()
+    return str(path)
+
+
+def _targets(extractor, pdf):
+    import pymupdf
+    doc = pymupdf.open(pdf)
+    pages = list(range(1, len(doc) + 1))
+    pm = {}
+    for pno in pages:
+        md = extractor.extract_pymupdf(doc[pno - 1])
+        if md:
+            pm[pno] = md
+    gaps = extractor.gap_pages(doc, pages, pm)
+    out = extractor.vlm_target_pages(sorted(pm), gaps)
+    doc.close()
+    return sorted(pm), gaps, out
+
+
+def test_default_target_is_the_gap_not_the_tables(ex, mixed_pdf):
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    assert extractor.VLM_TARGET == "gap"
+    pm, gaps, targets = _targets(extractor, mixed_pdf)
+    assert 1 in pm, "괘선 표 페이지는 PyMuPDF가 잡아야 한다"
+    assert 1 not in targets, "PyMuPDF가 성공한 페이지에 VLM을 넣지 않는다"
+    assert set(targets) == set(gaps)
+
+
+def test_pages_without_a_text_layer_come_first(ex, mixed_pdf):
+    """텍스트 레이어가 없으면 PyMuPDF도 pdfplumber도 못 한다 — 예산을 여기부터 쓴다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    _, gaps, targets = _targets(extractor, mixed_pdf)
+    assert 3 in gaps, "이미지만 있는 페이지는 gap이어야 한다"
+    assert targets[0] == 3, "텍스트 레이어 없는 페이지가 1순위다"
+
+
+def test_plain_text_pages_are_not_targeted(ex, mixed_pdf):
+    """표 신호가 없는 본문 페이지까지 넣으면 호출만 늘고 얻는 게 없다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    _, gaps, _ = _targets(extractor, mixed_pdf)
+    assert 2 not in gaps
+
+
+def test_tables_mode_restores_the_old_behaviour(ex, mixed_pdf):
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_TARGET="tables")
+    pm, _, targets = _targets(extractor, mixed_pdf)
+    assert targets == pm
+
+
+def test_both_mode_spends_the_gap_first(ex, mixed_pdf):
+    """예산(VISION_MAX_PAGES)이 순서대로 깎이므로 순서가 곧 우선순위다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_TARGET="both")
+    pm, gaps, targets = _targets(extractor, mixed_pdf)
+    assert targets[:len(gaps)] == gaps
+    assert set(targets) == set(gaps) | set(pm)
+
+
+def test_cpu_sources_also_cover_the_gap(ex, monkeypatch, mixed_pdf):
+    """pdfplumber는 CPU만 쓴다. GPU를 쓰기 전에 넓은 후보에서 먼저 건져야 한다."""
+    extractor = ex(VLM_BACKEND="off", VLM_MODEL="m")
+    seen = {}
+    orig = extractor.extract_pdfplumber_tables
+
+    def _spy(path, pages):
+        seen["pages"] = list(pages)
+        return orig(path, pages)
+
+    monkeypatch.setattr(extractor, "extract_pdfplumber_tables", _spy)
+    extractor.extract_tables_for_doc(mixed_pdf, [1, 2, 3, 4], use_vision=False)
+    assert 4 in seen["pages"], "PyMuPDF가 놓친 괘선 페이지도 pdfplumber에 넘겨야 한다"
