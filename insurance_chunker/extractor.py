@@ -20,7 +20,15 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-VISION_MAX_PAGES = int(os.environ.get("VISION_MAX_PAGES", "9999"))
+# 문서당 VLM 호출 상한. 9999는 사실상 상한이 없다는 뜻이었고, 그게 처리 시간의 꼬리를
+# 만들었다 — 실측에서 문서 20건(6.4%)이 전체 parse 시간의 53.4%를 먹었고, parse p50은
+# 131초인데 p90이 2,879초로 22배다. 표 403페이지 중 214페이지가 표인 문서가 실재하는데,
+# VLM이 완전히 건강해도 페이지당 11~25초라 그것만 40~90분이다.
+#
+# 50은 시간 예산에서 나온 값이다: 50 x 25초 = 약 20분이 문서당 VLM 상한이 된다.
+# 상한을 넘는 페이지는 VLM을 안 거칠 뿐 표가 사라지지는 않는다 — PyMuPDF/pdfplumber
+# 결과가 남고 combine.py가 페이지별 best-of를 고른다. 전부 잃는 게 아니라 일부가 열화된다.
+VISION_MAX_PAGES = int(os.environ.get("VISION_MAX_PAGES", "50"))
 VLM_DPI = int(os.environ.get("VLM_DPI", "150"))
 # 읽기 타임아웃. GPU 경로 실측이 페이지당 21~36초이고, max_tokens가 4096이라 최악의
 # 페이지(토큰을 끝까지 쓰는 경우)도 200초 안쪽이다. 300초를 넘기면 느린 게 아니라
@@ -84,6 +92,11 @@ def reset_vision_counter() -> None:
 def vision_circuit_open() -> bool:
     """차단기가 열렸는가. 문서 루프가 남은 페이지를 건너뛰는 데 쓴다."""
     return _vision_fail_streak >= VLM_FAIL_STREAK
+
+
+def vision_budget_exhausted() -> bool:
+    """문서당 VLM 호출 상한에 닿았는가."""
+    return _vision_call_count >= VISION_MAX_PAGES
 
 
 # ── PyMuPDF ───────────────────────────────────────────────────────────────────
@@ -388,9 +401,8 @@ def extract_vision(fitz_page, pno: int) -> Optional[str]:
         return None
     if vision_circuit_open():
         return None  # 이미 접었다. 로그는 접는 순간 한 번만 남긴다
-    if _vision_call_count >= VISION_MAX_PAGES:
-        logger.warning(f"Vision 상한({VISION_MAX_PAGES}회) 도달 — p{pno} 건너뜀")
-        return None
+    if vision_budget_exhausted():
+        return None  # 상한 로그도 문서 루프가 한 번만 남긴다 (페이지마다 찍으면 수백 줄)
     _vision_call_count += 1
     try:
         md = extract_vision_local(fitz_page, pno, raise_on_error=True)
@@ -467,6 +479,16 @@ def extract_tables_for_doc(
                         logger.warning(
                             f"VLM 차단 — 남은 {total - i + 1}페이지 건너뜀",
                             extra={"event": "vlm_pages_skipped",
+                                   "skipped": total - i + 1, "total": total})
+                        break
+                    if vision_budget_exhausted():
+                        # 품질이 아니라 시간을 위해 접는 것이라 level이 다르다 —
+                        # 남은 페이지도 PyMuPDF/pdfplumber 결과는 그대로 쓴다.
+                        logger.info(
+                            f"VLM 상한 {VISION_MAX_PAGES}페이지 도달 — 남은 "
+                            f"{total - i + 1}페이지는 PyMuPDF/pdfplumber 결과만 쓴다",
+                            extra={"event": "vlm_budget_exhausted",
+                                   "limit": VISION_MAX_PAGES,
                                    "skipped": total - i + 1, "total": total})
                         break
                     logger.info(f"VLM [{i}/{total}] p{pno} 처리 중...")
