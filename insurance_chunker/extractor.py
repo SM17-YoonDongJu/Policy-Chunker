@@ -22,7 +22,17 @@ logger = logging.getLogger(__name__)
 
 VISION_MAX_PAGES = int(os.environ.get("VISION_MAX_PAGES", "9999"))
 VLM_DPI = int(os.environ.get("VLM_DPI", "150"))
-VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "600"))
+# 읽기 타임아웃. GPU 경로 실측이 페이지당 21~36초이고, max_tokens가 4096이라 최악의
+# 페이지(토큰을 끝까지 쓰는 경우)도 200초 안쪽이다. 300초를 넘기면 느린 게 아니라
+# 고장난 것이다 — 실제로 Ollama가 CPU로 떨어졌을 때 600초로도 한 장을 못 끝냈다.
+VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "300"))
+# 접속 타임아웃은 따로 짧게 둔다. 같은 호스트의 Ollama라 붙는 건 즉시여야 하고,
+# 서버가 아예 없으면 밀리초 안에 알아야지 읽기 타임아웃까지 기다릴 이유가 없다.
+VLM_CONNECT_TIMEOUT = float(os.environ.get("VLM_CONNECT_TIMEOUT", "5"))
+# 차단기: 연속 N회 실패하면 이 문서의 남은 페이지는 VLM을 건너뛴다.
+# 없을 때 무슨 일이 생기는지 겪었다 — 표 214페이지짜리 문서가 페이지마다 600초를
+# 기다리며 35.6시간을 태웠다. 서버가 죽었으면 215번째 시도도 죽는다.
+VLM_FAIL_STREAK = int(os.environ.get("VLM_FAIL_STREAK", "3"))
 # 'local' = OpenAI 호환 /v1/chat/completions — 같은 호스트의 Ollama(기본) 또는 llama-server
 # 'surya' = Surya OCR (별도 바이너리 필요 — [ocr] extra)
 # 'off'   = VLM 표 추출 안 함
@@ -53,12 +63,27 @@ LLAMA_CPP_BINARY = os.environ.get(
 )
 
 _vision_call_count = 0
+_vision_fail_streak = 0
 
+
+class _VLMCallFailed(Exception):
+    """VLM 호출 자체가 실패했다 — '표가 없다'(정상 응답)와 구분하기 위한 신호."""
 
 
 def reset_vision_counter() -> None:
-    global _vision_call_count
+    """문서 경계에서 호출 상한과 차단기를 함께 되돌린다.
+
+    차단기를 문서 단위로 두는 이유: 서버가 잠깐 죽었다 살아난 경우 다음 문서까지
+    포기할 이유가 없다. 반대로 한 문서 안에서는 한 번 접었으면 끝까지 접는다.
+    """
+    global _vision_call_count, _vision_fail_streak
     _vision_call_count = 0
+    _vision_fail_streak = 0
+
+
+def vision_circuit_open() -> bool:
+    """차단기가 열렸는가. 문서 루프가 남은 페이지를 건너뛰는 데 쓴다."""
+    return _vision_fail_streak >= VLM_FAIL_STREAK
 
 
 # ── PyMuPDF ───────────────────────────────────────────────────────────────────
@@ -231,11 +256,16 @@ def _otsl_to_markdown(otsl: str) -> Optional[str]:
     return "\n".join(lines)
 
 
-def extract_vision_local(fitz_page, pno: int) -> Optional[str]:
+def extract_vision_local(fitz_page, pno: int, *,
+                         raise_on_error: bool = False) -> Optional[str]:
     """fitz page → OpenAI 호환 VLM → markdown 표 문자열. 표 없으면 None.
 
     Ollama와 llama-server 둘 다 /v1/chat/completions를 같은 규격으로 받는다.
     구분은 VLM_MODEL 하나뿐이다 — Ollama는 필수, llama-server는 생략.
+
+    raise_on_error=True면 호출 실패를 _VLMCallFailed로 올린다. 기본값은 None 반환이라
+    기존 계약(실패가 문서 전체를 죽이지 않는다)이 그대로 유지된다. 차단기만 이 구분이
+    필요하다 — 표 없는 페이지가 연속된 걸 서버 장애로 오인하면 멀쩡한 표를 버린다.
     """
     import base64
 
@@ -265,11 +295,15 @@ def extract_vision_local(fitz_page, pno: int) -> Optional[str]:
 
     try:
         resp = requests.post(f"{VLM_URL}/v1/chat/completions", json=payload,
-                             timeout=VLM_TIMEOUT)
+                             timeout=(VLM_CONNECT_TIMEOUT, VLM_TIMEOUT))
         resp.raise_for_status()
         out = resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        logger.warning(f"p{pno}: 로컬 VLM 실패: {e}")
+        logger.warning(f"p{pno}: 로컬 VLM 실패: {e}",
+                       extra={"event": "vlm_call_failed", "page": pno,
+                              "error": f"{type(e).__name__}: {e}"})
+        if raise_on_error:
+            raise _VLMCallFailed(str(e)) from e
         return None
 
     if not out:
@@ -348,15 +382,31 @@ def extract_surya_tables(pdf_path: str, pages: list[int]) -> dict[int, str]:
 
 
 def extract_vision(fitz_page, pno: int) -> Optional[str]:
-    """페이지 → VLM → markdown 표. 백엔드가 off거나 상한을 넘겼으면 None."""
-    global _vision_call_count
+    """페이지 → VLM → markdown 표. 백엔드가 off거나 상한·차단기에 걸리면 None."""
+    global _vision_call_count, _vision_fail_streak
     if VLM_BACKEND == "off":
         return None
+    if vision_circuit_open():
+        return None  # 이미 접었다. 로그는 접는 순간 한 번만 남긴다
     if _vision_call_count >= VISION_MAX_PAGES:
         logger.warning(f"Vision 상한({VISION_MAX_PAGES}회) 도달 — p{pno} 건너뜀")
         return None
     _vision_call_count += 1
-    return extract_vision_local(fitz_page, pno)
+    try:
+        md = extract_vision_local(fitz_page, pno, raise_on_error=True)
+    except _VLMCallFailed:
+        _vision_fail_streak += 1
+        if vision_circuit_open():
+            # 조용히 접으면 "표가 원래 없는 문서"와 구분이 안 된다. 반드시 소리를 낸다.
+            logger.error(
+                f"VLM이 연속 {VLM_FAIL_STREAK}회 실패했다 — 이 문서의 남은 페이지는 "
+                f"VLM을 건너뛴다 (p{pno}에서 차단)",
+                extra={"event": "vlm_circuit_open", "page": pno,
+                       "streak": _vision_fail_streak})
+        return None
+    # 호출이 성공했으면 표가 있든 없든 서버는 살아 있다 — 연속 카운터를 푼다.
+    _vision_fail_streak = 0
+    return md
 
 
 # ── 문서 단위 추출 ────────────────────────────────────────────────────────────
@@ -411,6 +461,14 @@ def extract_tables_for_doc(
             else:
                 vlm_tables = {}
                 for i, pno in enumerate(table_pages, 1):
+                    # 차단기가 열렸으면 남은 페이지는 호출도 로그도 하지 않는다.
+                    # 안 끊으면 "처리 중" 줄만 수백 개 쌓여 로그가 사실과 어긋난다.
+                    if vision_circuit_open():
+                        logger.warning(
+                            f"VLM 차단 — 남은 {total - i + 1}페이지 건너뜀",
+                            extra={"event": "vlm_pages_skipped",
+                                   "skipped": total - i + 1, "total": total})
+                        break
                     logger.info(f"VLM [{i}/{total}] p{pno} 처리 중...")
                     fitz_page = doc[pno - 1]
                     md_vision = extract_vision(fitz_page, pno)
