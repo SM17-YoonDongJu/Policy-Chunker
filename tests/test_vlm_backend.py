@@ -211,3 +211,148 @@ def test_claude_backend_is_gone(ex, monkeypatch):
     seen = _capture(monkeypatch)
     extractor.extract_vision(_FakePage(), 1)
     assert seen["url"].endswith("/v1/chat/completions")
+
+
+# ── 차단기 · 타임아웃 (2층: 떨어지더라도 피해를 제한) ──────────────────────────
+# 표 214페이지짜리 문서가 페이지마다 600초를 기다리며 35.6시간을 태운 적이 있다.
+# 서버가 죽었으면 215번째 시도도 죽는다 — 연속 실패를 세서 문서 단위로 접는다.
+
+def _always_fail(monkeypatch, exc=None):
+    import requests
+    calls = {"n": 0}
+
+    def _boom(*a, **k):
+        calls["n"] += 1
+        raise (exc or ConnectionError("refused"))
+
+    monkeypatch.setattr(requests, "post", _boom)
+    return calls
+
+
+def test_connect_and_read_timeouts_are_separate(ex, monkeypatch):
+    """접속은 즉시 돼야 하고(같은 호스트), 읽기만 오래 기다린다.
+
+    하나로 묶어두면 Ollama가 아예 없을 때도 읽기 타임아웃만큼 기다린다.
+    """
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    seen = _capture(monkeypatch)
+    extractor.extract_vision_local(_FakePage(), 1)
+    connect, read = seen["timeout"]
+    assert connect < read
+    assert connect == extractor.VLM_CONNECT_TIMEOUT
+    assert read == extractor.VLM_TIMEOUT
+
+
+def test_circuit_opens_after_consecutive_failures(ex, monkeypatch):
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="3")
+    calls = _always_fail(monkeypatch)
+    for pno in range(1, 11):
+        assert extractor.extract_vision(_FakePage(), pno) is None
+    assert calls["n"] == 3, "차단 후에는 호출 자체가 나가면 안 된다"
+    assert extractor.vision_circuit_open()
+
+
+def test_no_table_pages_do_not_open_the_circuit(ex, monkeypatch):
+    """표가 없는 페이지도 None이다. 이걸 실패로 세면 멀쩡한 문서에서 VLM이 꺼진다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="3")
+    _capture(monkeypatch, "이 페이지에는 표가 없습니다.")
+    for pno in range(1, 11):
+        extractor.extract_vision(_FakePage(), pno)
+    assert not extractor.vision_circuit_open()
+    assert extractor._vision_call_count == 10
+
+
+def test_success_resets_the_streak(ex, monkeypatch):
+    """간헐 실패로는 접지 않는다 — 성공 한 번이면 서버는 살아 있는 것이다."""
+    import requests
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="3")
+    script = ["fail", "fail", "ok", "fail", "fail"]
+    state = {"i": 0}
+
+    def _post(*a, **k):
+        step = script[state["i"]]
+        state["i"] += 1
+        if step == "fail":
+            raise ConnectionError("refused")
+        return _Resp("| a |\n|---|\n| 1 |")
+
+    monkeypatch.setattr(requests, "post", _post)
+    for pno in range(1, 6):
+        extractor.extract_vision(_FakePage(), pno)
+    assert not extractor.vision_circuit_open()
+
+
+def test_circuit_resets_between_documents(ex, monkeypatch):
+    """서버가 잠깐 죽었다 살아난 경우 다음 문서까지 포기할 이유가 없다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2")
+    _always_fail(monkeypatch)
+    for pno in range(1, 5):
+        extractor.extract_vision(_FakePage(), pno)
+    assert extractor.vision_circuit_open()
+
+    extractor.reset_vision_counter()
+    assert not extractor.vision_circuit_open()
+    assert extractor._vision_call_count == 0
+
+
+def test_circuit_open_is_logged_loudly(ex, monkeypatch, caplog):
+    """조용히 접으면 '표가 원래 없는 문서'와 구분이 안 된다."""
+    import logging
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2")
+    _always_fail(monkeypatch)
+    with caplog.at_level(logging.ERROR, logger="insurance_chunker.extractor"):
+        for pno in range(1, 6):
+            extractor.extract_vision(_FakePage(), pno)
+    opened = [r for r in caplog.records if getattr(r, "event", "") == "vlm_circuit_open"]
+    assert len(opened) == 1, "접는 순간 한 번만 남겨야 한다"
+
+
+def test_failure_is_still_swallowed_by_the_public_entry(ex, monkeypatch):
+    """차단기가 예외를 쓰더라도 바깥으로 새면 안 된다 — 문서 적재는 계속돼야 한다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    _always_fail(monkeypatch, RuntimeError("HTTP 500"))
+    assert extractor.extract_vision(_FakePage(), 1) is None
+
+
+# ── 문서 루프까지 (차단이 실제로 호출을 멈추는가) ─────────────────────────────
+
+@pytest.fixture
+def table_pdf(tmp_path):
+    """괘선 표가 있는 6페이지 PDF. PyMuPDF가 6페이지 모두 표로 잡는다."""
+    import pymupdf
+    doc = pymupdf.open()
+    for p in range(6):
+        page = doc.new_page()
+        for r in range(4):
+            for c in range(3):
+                rect = pymupdf.Rect(60 + c * 140, 80 + r * 28,
+                                    60 + (c + 1) * 140, 80 + (r + 1) * 28)
+                page.draw_rect(rect, color=(0, 0, 0), width=0.8)
+                page.insert_text((rect.x0 + 5, rect.y0 + 18), f"p{p+1}r{r}c{c}", fontsize=9)
+    path = tmp_path / "tbl.pdf"
+    doc.save(path)
+    doc.close()
+    return str(path)
+
+
+def test_document_loop_stops_calling_after_the_circuit_opens(ex, monkeypatch, table_pdf):
+    """차단기의 값어치는 여기서 나온다.
+
+    없을 때 214페이지짜리 문서가 페이지마다 600초를 기다려 35.6시간을 태웠다.
+    6페이지 문서에서 VLM_FAIL_STREAK=2면 호출은 2번에서 멈춰야 한다.
+    """
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2")
+    calls = _always_fail(monkeypatch)
+    sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
+    assert len(sources["pymupdf"]) == 6, "표 6페이지가 잡혀야 의미 있는 검증이다"
+    assert calls["n"] == 2, f"차단 후에도 호출이 나갔다 ({calls['n']}회)"
+    assert "vlm" not in sources
+
+
+def test_document_loop_runs_every_page_when_healthy(ex, monkeypatch, table_pdf):
+    """차단기가 멀쩡한 문서를 일찍 끊으면 안 된다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2")
+    seen = _capture(monkeypatch, "| a | b |\n|---|---|\n| 1 | 2 |")
+    sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
+    assert len(sources["vlm"]) == 6
+    assert seen["payload"]["model"] == "m"
