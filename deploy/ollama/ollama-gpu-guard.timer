@@ -1,0 +1,12 @@
+[Unit]
+Description=ollama GPU 가드 주기 실행
+
+[Timer]
+# 부팅 직후가 가장 위험한 구간(드라이버 준비 전 기동)이라 일찍 한 번 보고, 그 뒤 1분 주기.
+# CPU 모드로 떨어진 Ollama는 호출이 들어오는 순간부터 RAM을 먹기 시작하므로 주기를 짧게 둔다.
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
