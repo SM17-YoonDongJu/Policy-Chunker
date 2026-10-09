@@ -415,7 +415,7 @@ def mixed_pdf(tmp_path):
     p1 괘선 표         → PyMuPDF가 잡는다
     p2 텍스트만         → 표 없음
     p3 이미지만(텍스트 X) → 스캔본 같은 페이지. VLM만이 닿는다
-    p4 괘선 다수 + 텍스트 → 표 신호는 있는데 PyMuPDF가 표로 인식하진 않는다
+    p4 괘선 30개 + 텍스트 → 표 신호는 있는데 PyMuPDF가 표로 인식하진 않는다
     """
     import pymupdf
     doc = pymupdf.open()
@@ -436,8 +436,8 @@ def mixed_pdf(tmp_path):
 
     p = doc.new_page()
     p.insert_text((70, 90), "괘선은 많지만 표로는 안 잡히는 페이지", fontsize=11)
-    for i in range(8):
-        p.draw_line(pymupdf.Point(60, 120 + i * 20), pymupdf.Point(520, 120 + i * 20))
+    for i in range(30):
+        p.draw_line(pymupdf.Point(60, 110 + i * 20), pymupdf.Point(520, 110 + i * 20))
 
     path = tmp_path / "mixed.pdf"
     doc.save(path)
@@ -511,3 +511,57 @@ def test_cpu_sources_also_cover_the_gap(ex, monkeypatch, mixed_pdf):
     monkeypatch.setattr(extractor, "extract_pdfplumber_tables", _spy)
     extractor.extract_tables_for_doc(mixed_pdf, [1, 2, 3, 4], use_vision=False)
     assert 4 in seen["pages"], "PyMuPDF가 놓친 괘선 페이지도 pdfplumber에 넘겨야 한다"
+
+
+def test_a_mere_logo_is_not_a_table_signal(ex, tmp_path):
+    """이미지 '있음'을 신호로 쓰면 전부 통과한다.
+
+    운영 약관 한 건(279쪽)에서 비표 페이지 181쪽이 전부 gap으로 분류됐다. 그 문서는
+    모든 페이지에 페이지를 덮는 이미지가 있는 OCR 스캔본이었고, 괘선 수 중앙값은 0이었다.
+    표지 로고 한 장만 있어도 같은 일이 난다.
+    """
+    import pymupdf
+    doc = pymupdf.open()
+    logo = pymupdf.open()
+    lp = logo.new_page(width=40, height=40)
+    lp.draw_rect(pymupdf.Rect(0, 0, 40, 40), color=(0, 0, 0), fill=(0.5, 0.5, 0.5))
+    stamp = logo[0].get_pixmap(dpi=72).tobytes("png")
+    logo.close()
+
+    for _ in range(3):
+        p = doc.new_page()
+        p.insert_image(pymupdf.Rect(20, 20, 60, 60), stream=stamp)   # 구석의 작은 로고
+        p.insert_text((70, 200), "본문이 충분히 있는 평범한 페이지입니다. " * 12, fontsize=10)
+    path = tmp_path / "logo.pdf"
+    doc.save(path)
+    doc.close()
+
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    d = pymupdf.open(path)
+    gaps = extractor.gap_pages(d, [1, 2, 3], {})
+    d.close()
+    assert gaps == [], f"로고만 있는 본문 페이지가 gap으로 들어왔다: {gaps}"
+
+
+def test_page_covering_image_with_sparse_text_is_first(ex, tmp_path):
+    """OCR이 비어 있는 스캔 페이지 — 텍스트 레이어가 내용을 안 담고 있다. VLM만이 닿는다."""
+    import pymupdf
+    src = pymupdf.open()
+    sp = src.new_page()
+    sp.insert_text((70, 100), "스캔된 내용", fontsize=20)
+    full = src[0].get_pixmap(dpi=72).tobytes("png")
+    src.close()
+
+    doc = pymupdf.open()
+    p = doc.new_page()
+    p.insert_image(p.rect, stream=full)          # 페이지 전체를 덮는 이미지
+    p.insert_text((70, 60), "표지", fontsize=9)   # 텍스트는 희박
+    path = tmp_path / "scanlike.pdf"
+    doc.save(path)
+    doc.close()
+
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    d = pymupdf.open(path)
+    gaps = extractor.gap_pages(d, [1], {})
+    d.close()
+    assert gaps == [1]
