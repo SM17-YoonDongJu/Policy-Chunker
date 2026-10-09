@@ -1,0 +1,38 @@
+# Grafana Alloy — 이 호스트(brbs-etl)의 컨테이너 로그를 Loki로 보낸다.
+#
+# chunker와 별도 compose 프로젝트로 두는 이유는 배포가 덮어쓰기 때문이다. deploy.yml이
+# SSM으로 ~/insurance-chunker/docker-compose.yml을 레포 내용으로 매번 다시 쓰므로, 거기에
+# alloy 서비스를 넣으면 다음 배포에 사라진다. 수명주기도 다르다 — alloy는 chunker만이 아니라
+# 이 호스트의 다른 컨테이너(brbs-corpus-worker 등) 로그도 맡는 호스트 레벨 에이전트다.
+#
+# 이 파일은 CD가 배포하지 않는다. 적용은 사람이 한다 — README.md 참고.
+name: brbs-observability
+
+services:
+  alloy:
+    # TODO: 버전 고정. 현재 호스트에서 도는 것은 :latest로 받은 것이라,
+    #       `docker exec brbs-alloy alloy --version`으로 확인해 여기에 박을 것.
+    #       (다른 컨테이너들 — grafana:11.4.0, loki:3.3.2, prometheus:v3.1.0 — 은 전부 핀 되어 있다)
+    image: grafana/alloy:latest
+    container_name: brbs-alloy
+    restart: unless-stopped
+    # chunker가 network_mode: host라 /metrics가 호스트 포트 9101에 뜬다. 나중에 alloy가
+    # 그걸 직접 긁게 할 수도 있어 같은 모드로 맞춘다(현재는 로그만 담당).
+    network_mode: host
+    # docker.sock은 root:docker 0660이라 이미지 기본 사용자로는 못 읽는다.
+    user: root
+    volumes:
+      # 컨테이너 발견 + 로그 수집. 읽기 전용이면 충분하다.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      # 어디까지 읽었는지(positions). 재시작에 로그를 다시 보내지 않으려면 있어야 한다.
+      - alloy-data:/var/lib/alloy/data
+    command:
+      - run
+      # UI·자체 지표는 호스트 루프백에만 연다 — 외부 노출 이유가 없다.
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+
+volumes:
+  alloy-data:
