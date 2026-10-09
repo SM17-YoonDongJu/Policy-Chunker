@@ -356,3 +356,48 @@ def test_document_loop_runs_every_page_when_healthy(ex, monkeypatch, table_pdf):
     sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
     assert len(sources["vlm"]) == 6
     assert seen["payload"]["model"] == "m"
+
+
+# ── 문서당 호출 상한 (처리 시간 꼬리 방어) ────────────────────────────────────
+
+def test_budget_default_is_a_real_limit(ex, monkeypatch):
+    """9999는 '상한 없음'이었다. 그게 parse p90을 p50의 22배로 만든 꼬리의 원인이다."""
+    monkeypatch.delenv("VISION_MAX_PAGES", raising=False)
+    extractor = ex()
+    assert extractor.VISION_MAX_PAGES == 50
+
+
+def test_budget_stops_the_document_loop(ex, monkeypatch, table_pdf):
+    """상한에 닿으면 남은 페이지는 호출하지 않는다 — 6페이지 문서에 상한 2면 2회."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2")
+    seen = _capture(monkeypatch)
+    calls = {"n": 0}
+    import requests
+    orig = requests.post
+
+    def _counting(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(requests, "post", _counting)
+    sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
+    assert calls["n"] == 2
+    assert len(sources["vlm"]) == 2
+    assert seen["url"].endswith("/v1/chat/completions")
+
+
+def test_budget_does_not_drop_the_other_sources(ex, monkeypatch, table_pdf):
+    """상한은 VLM만 끊는다. 남은 페이지도 PyMuPDF 표는 그대로 있어야 한다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2")
+    _capture(monkeypatch)
+    sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
+    assert len(sources["pymupdf"]) == 6, "VLM 상한이 다른 소스까지 끊으면 안 된다"
+
+
+def test_budget_resets_between_documents(ex, monkeypatch, table_pdf):
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VISION_MAX_PAGES="2")
+    _capture(monkeypatch)
+    extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
+    assert extractor.vision_budget_exhausted()
+    extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
+    assert extractor._vision_call_count == 2, "문서마다 예산이 새로 주어져야 한다"

@@ -265,7 +265,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VLM_TIMEOUT` | `300` | VLM **읽기** 타임아웃(초). GPU 경로 실측 21~36초 |
 | `VLM_CONNECT_TIMEOUT` | `5` | 접속 타임아웃(초). 서버가 없으면 즉시 실패해야 한다 |
 | `VLM_FAIL_STREAK` | `3` | 연속 실패 N회면 그 문서의 남은 페이지는 VLM 건너뜀 |
-| `VISION_MAX_PAGES` | `9999` | VLM 호출 상한 페이지 수 |
+| `VISION_MAX_PAGES` | `50` | 문서당 VLM 호출 상한. 넘는 페이지는 PyMuPDF/pdfplumber 결과만 쓴다 |
 | `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
 | `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
 | `INGEST_CONCURRENCY` | `1` | 동시 처리 문서 수 (프로세스). 호스트 vCPU 4 기준 2가 현실적 |
