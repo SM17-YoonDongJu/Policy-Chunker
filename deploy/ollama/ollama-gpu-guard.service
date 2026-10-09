@@ -1,0 +1,10 @@
+[Unit]
+Description=brbs-ollama가 CPU 모드로 떠 있으면 재시작한다
+Documentation=https://github.com/SM17-YoonDongJu/insurance-chunker/blob/main/deploy/ollama/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ollama-gpu-guard.sh
+# 실패(= 재시작 상한 초과)는 systemd에 남는다. `systemctl list-units --failed`로 드러난다.
