@@ -53,9 +53,19 @@ VLM_FAIL_STREAK = int(os.environ.get("VLM_FAIL_STREAK", "3"))
 # 들어왔고, 그 페이지의 텍스트 레이어는 멀쩡해서 PyMuPDF는 100% 맞히고 있었다.
 # 반대로 괘선 없는 표와 이미지로 박힌 표는 어느 소스도 보지 않고 있었다(실측 문서에서 70쪽).
 VLM_TARGET = os.environ.get("VLM_TARGET", "gap")
-# 단순 테두리 박스(1~2개)와 표를 가르는 선. 실측 근거가 있는 값은 아니고 보수적으로
-# 잡았다 — 넘쳐서 표가 아닌 페이지가 들어와도 VLM이 빈 응답을 돌려줄 뿐이다.
-_TABLE_HINT_DRAWINGS = 4
+# gap 페이지 판정 기준.
+#
+# 처음엔 "괘선 4개 이상 또는 이미지가 있으면 표 신호"로 뒀는데 그게 거의 전부를 통과시켰다.
+# 운영 약관 한 건(279쪽)에서 비표 페이지 181쪽이 전부 gap으로 분류됐다 — 원인은 이미지
+# 조건이었다. 그 문서는 모든 페이지에 페이지 전체를 덮는 이미지가 있는 OCR 스캔본이라
+# get_images()가 항상 참이었고, 정작 괘선 수 중앙값은 0이었다. 표지 로고 한 장만 있어도
+# 같은 일이 난다. 이미지는 '있다/없다'가 아니라 '페이지를 덮는가'로 봐야 한다.
+#
+# 수치는 그 문서의 분포에서 왔다(괘선 p90=25). 문서 한 건으로 정한 값이라 환경변수로
+# 열어둔다 — 표본이 넓어지면 기본값을 다시 잡아야 한다.
+_HINT_DRAWINGS = int(os.environ.get("VLM_HINT_DRAWINGS", "25"))
+_HINT_MIN_TEXT = int(os.environ.get("VLM_HINT_MIN_TEXT", "200"))
+_HINT_IMG_FRAC = float(os.environ.get("VLM_HINT_IMG_FRAC", "0.25"))
 # 'local' = OpenAI 호환 /v1/chat/completions — 같은 호스트의 Ollama(기본) 또는 llama-server
 # 'surya' = Surya OCR (별도 바이너리 필요 — [ocr] extra)
 # 'off'   = VLM 표 추출 안 함
@@ -438,28 +448,47 @@ def extract_vision(fitz_page, pno: int) -> Optional[str]:
 
 # ── VLM 투입 대상 선정 ────────────────────────────────────────────────────────
 
+def _page_signals(page) -> tuple[int, int, float]:
+    """(괘선 수, 텍스트 길이, 이미지가 덮는 면적비). get_text는 한 번만 호출한다."""
+    area = abs(page.rect.width * page.rect.height) or 1.0
+    text_len = 0
+    img_frac = 0.0
+    for blk in page.get_text("dict")["blocks"]:
+        if blk.get("type") == 1:  # 이미지 블록
+            x0, y0, x1, y1 = blk["bbox"]
+            img_frac += abs((x1 - x0) * (y1 - y0)) / area
+        else:
+            for ln in blk.get("lines", []):
+                for sp in ln["spans"]:
+                    text_len += len(sp["text"].strip())
+    return len(page.get_drawings()), text_len, img_frac
+
+
 def gap_pages(doc, page_numbers: list[int], pymupdf_tables: dict[int, str]) -> list[int]:
     """PyMuPDF가 닿지 못한 페이지를 우선순위 순으로 돌려준다.
 
-    1순위 텍스트 레이어가 없는 페이지 — PyMuPDF도 pdfplumber도 아무것도 못 한다.
-          VLM만이 유일한 수단이라 예산을 여기부터 쓴다.
-    2순위 표를 못 찾았지만 괘선이나 이미지가 있는 페이지 — 괘선 없는 표, 이미지로
-          박힌 표가 여기 있다. 지금까지 어느 소스도 보지 않던 구간이다.
+    1순위 텍스트 레이어가 내용을 담고 있지 않은 페이지 — 아예 비었거나, 페이지를 덮는
+          이미지가 있는데 텍스트가 희박하다(OCR이 못 읽은 스캔 페이지). PyMuPDF도
+          pdfplumber도 손댈 게 없으므로 VLM만이 유일한 수단이다. 예산을 여기부터 쓴다.
+    2순위 괘선이 많은데 표로 인식되지 않은 페이지 — 괘선이 끊겼거나 PyMuPDF가 놓친 표.
+
+    '이미지가 있다'를 신호로 쓰지 않는 이유는 _HINT_IMG_FRAC 주석 참고.
     """
-    no_text: list[int] = []
-    hinted: list[int] = []
+    blind: list[int] = []
+    ruled: list[int] = []
     for pno in page_numbers:
         if pno in pymupdf_tables:
             continue
-        page = doc[pno - 1]
         try:
-            if not page.get_text().strip():
-                no_text.append(pno)
-            elif len(page.get_drawings()) >= _TABLE_HINT_DRAWINGS or page.get_images():
-                hinted.append(pno)
+            n_draw, n_text, img_frac = _page_signals(doc[pno - 1])
         except Exception as e:  # 한 페이지의 판정 실패가 문서를 막으면 안 된다
             logger.debug(f"p{pno}: 페이지 판정 실패: {e}")
-    return no_text + hinted
+            continue
+        if n_text == 0 or (n_text < _HINT_MIN_TEXT and img_frac >= _HINT_IMG_FRAC):
+            blind.append(pno)
+        elif n_draw >= _HINT_DRAWINGS:
+            ruled.append(pno)
+    return blind + ruled
 
 
 def vlm_target_pages(pymupdf_pages: list[int], gaps: list[int]) -> list[int]:
