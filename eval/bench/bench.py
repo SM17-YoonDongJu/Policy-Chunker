@@ -8,17 +8,19 @@ chunker 내부는 import하지 않는다. `python -m insurance_chunker.stage_run
 subprocess로 부르고 그 리포트(contract 2)만 읽는다. 변형이 다른 git ref를 가리키면 그 ref의
 워크트리에서 부른다 — 비교하는 두 코드가 서로를 import하지 않게 하기 위해서다.
 
-  python eval/bench/bench.py fetch   --docset core            # 카탈로그 sha256 → PDF 내려받기
+  python eval/bench/bench.py fetch   --docset core            # sha256 → S3에서 PDF 받기
   python eval/bench/bench.py run     --docset core --variant baseline [--from vlm] [--to chunk]
   python eval/bench/bench.py compare --docset core --base baseline --variant vlm-c2 [--out r.md]
 
 배치:
-  eval/bench/docsets/<이름>.yaml   문서 목록 (PDF는 커밋하지 않는다 — sha256으로 지정)
-  eval/bench/variants/<slug>.yaml  변형 정의 (ref·env·expect_identical_to·status·applied_at)
-  eval/bench/results/<slug>/<docset>/<id>.json   문서별 리포트 (본문 없음, 수치·해시만)
-  eval/bench/.artifacts/  단계 산출물 캐시(변형끼리 공유 — 키에 코드 지문·설정이 들어간다)
-  eval/bench/.pdfs/       fetch로 받은 PDF
-  eval/bench/.worktrees/  ref별 워크트리
+  정의 (코드와 함께)
+    eval/bench/docsets/<이름>.yaml   문서 목록 (PDF는 커밋하지 않는다 — sha256으로 지정)
+    eval/bench/variants/<slug>.yaml  변형 정의 (ref·env·expect_identical_to·status·applied_at)
+  데이터 (BENCH_DATA, 기본은 eval/bench — 클러스터에서는 팀 공유 PVC)
+    results/<slug>/<docset>/<id>.json   문서별 리포트 (본문 없음, 수치·해시만)
+    .artifacts/  단계 산출물 캐시(변형끼리 공유 — 키에 코드 지문·설정이 들어간다)
+    .pdfs/       fetch로 받은 PDF
+    .worktrees/  ref별 워크트리
 """
 from __future__ import annotations
 
@@ -35,8 +37,11 @@ from typing import Any, Optional
 import yaml
 
 REPO = Path(__file__).resolve().parent.parent.parent
-# 정의·결과·캐시가 놓이는 곳. 테스트나 별도 실험은 BENCH_HOME으로 옮긴다.
-BENCH = Path(os.environ.get("BENCH_HOME") or Path(__file__).resolve().parent)
+# 정의(docsets·variants)는 코드와 함께 다니고, 데이터(캐시·PDF·결과)는 팀이 공유하는 볼륨에 둔다.
+#   BENCH_DATA  데이터 위치. 클러스터에서는 공유 PVC 마운트 경로(예: /bench)
+#   BENCH_HOME  정의와 데이터를 한꺼번에 옮긴다(테스트·별도 실험용)
+DEFS = Path(os.environ.get("BENCH_HOME") or Path(__file__).resolve().parent)
+BENCH = Path(os.environ.get("BENCH_DATA") or DEFS)
 WORKTREE = "WORKTREE"  # ref 자리에 쓰면 커밋 안 된 변경까지 포함한 현재 작업 트리
 
 sys.path.insert(0, str(REPO))
@@ -45,7 +50,7 @@ sys.path.insert(0, str(REPO))
 # ── 정의 읽기 ────────────────────────────────────────────────────────────────
 
 def load_docset(name: str) -> dict[str, Any]:
-    data = yaml.safe_load((BENCH / "docsets" / f"{name}.yaml").read_text(encoding="utf-8"))
+    data = yaml.safe_load((DEFS / "docsets" / f"{name}.yaml").read_text(encoding="utf-8"))
     data.setdefault("name", name)
     for d in data["documents"]:
         d.setdefault("type", "plain")
@@ -55,7 +60,7 @@ def load_docset(name: str) -> dict[str, Any]:
 
 
 def load_variant(slug: str) -> dict[str, Any]:
-    data = yaml.safe_load((BENCH / "variants" / f"{slug}.yaml").read_text(encoding="utf-8"))
+    data = yaml.safe_load((DEFS / "variants" / f"{slug}.yaml").read_text(encoding="utf-8"))
     data.setdefault("slug", slug)
     data.setdefault("ref", WORKTREE)
     data.setdefault("env", {})
@@ -78,19 +83,44 @@ def resolve_pdf(doc: dict[str, Any]) -> Path:
 
 # ── fetch ────────────────────────────────────────────────────────────────────
 
+# corpus_worker는 S3 키를 파일 바이트 sha256으로 짓는다(corpus/terms/<sha256>.pdf). 그래서
+# 대개 카탈로그 조회 없이 sha256만으로 받을 수 있다. 다른 키 규칙이면 docset에 s3_key를 쓴다.
+_S3_PREFIX = os.environ.get("BENCH_S3_PREFIX", "corpus/terms/")
+
 _PART_SQL = """
 SELECT s3_key FROM ai.corpus_file_part
 WHERE sha256 = %s AND status = 'uploaded' AND s3_key IS NOT NULL LIMIT 1
 """
 
 
-def cmd_fetch(args: argparse.Namespace) -> None:
-    """카탈로그(ai.corpus_file_part)에서 sha256으로 S3 키를 찾아 내려받는다.
-
-    DATABASE_URL·S3_BUCKET·AWS 자격증명이 필요하다(ingest_catalog와 같은 변수).
-    """
-    import boto3
+def _catalog_key(sha256: str) -> Optional[str]:
+    """키 규칙으로 못 찾을 때만 카탈로그를 본다(DATABASE_URL 필요)."""
+    if not os.environ.get("DATABASE_URL"):
+        return None
     import psycopg2
+    with psycopg2.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+        cur.execute(_PART_SQL, (sha256,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _download(s3, bucket: str, key: str, dest: Path) -> Optional[str]:
+    try:
+        s3.download_file(bucket, key, str(dest))
+    except Exception as e:  # noqa: BLE001 - 사유를 돌려주고 호출부가 다음 후보를 고른다
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def cmd_fetch(args: argparse.Namespace) -> None:
+    """문서셋의 sha256(또는 s3_key)으로 S3에서 PDF를 받는다. S3_BUCKET·AWS 자격증명이 필요하다.
+
+    받은 파일의 sha256을 다시 계산해 문서셋 값과 대조한다 — 키 규칙이 어긋나 다른 파일을
+    받았다면 그 문서의 비교는 전부 무의미해진다.
+    """
+    import hashlib
+
+    import boto3
 
     docset = load_docset(args.docset)
     todo = [d for d in docset["documents"] if d.get("sha256")
@@ -98,20 +128,26 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     if not todo:
         print("받을 문서 없음")
         return
-    (BENCH / ".pdfs").mkdir(exist_ok=True)
+    (BENCH / ".pdfs").mkdir(parents=True, exist_ok=True)
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     s3 = boto3.client("s3", region_name=region) if region else boto3.client("s3")
     bucket = os.environ["S3_BUCKET"]
-    with psycopg2.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
-        for d in todo:
-            cur.execute(_PART_SQL, (d["sha256"],))
-            row = cur.fetchone()
-            if not row:
-                print(f"  {d['id']}: 카탈로그에 없음 ({d['sha256'][:12]})")
-                continue
-            dest = BENCH / ".pdfs" / f"{d['sha256']}.pdf"
-            s3.download_file(bucket, row[0], str(dest))
-            print(f"  {d['id']}: 받음 ({dest.stat().st_size // 1024}KB)")
+    for d in todo:
+        dest = BENCH / ".pdfs" / f"{d['sha256']}.pdf"
+        primary = d.get("s3_key") or f"{_S3_PREFIX}{d['sha256']}.pdf"
+        error = _download(s3, bucket, primary, dest)
+        if error:  # 키 규칙이 어긋났을 수 있다 — 카탈로그에서 실제 키를 찾아 한 번 더
+            key = _catalog_key(d["sha256"])
+            error = _download(s3, bucket, key, dest) if key else error
+        if error:
+            print(f"  {d['id']}: 못 받음 ({d['sha256'][:12]}) {error}")
+            continue
+        got = hashlib.sha256(dest.read_bytes()).hexdigest()
+        if got != d["sha256"]:
+            dest.unlink()
+            print(f"  {d['id']}: sha256 불일치 — 받은 파일 {got[:12]}, 버림")
+            continue
+        print(f"  {d['id']}: 받음 ({dest.stat().st_size // 1024}KB)")
 
 
 # ── run ──────────────────────────────────────────────────────────────────────
@@ -121,8 +157,22 @@ def _git(*argv: str, cwd: Path = REPO) -> str:
                           text=True).stdout.strip()
 
 
+def _in_git() -> bool:
+    return (REPO / ".git").exists()
+
+
 def checkout(ref: str) -> tuple[Path, str]:
-    """ref를 실행할 디렉터리와 기록용 버전 문자열. WORKTREE면 현재 트리(+dirty 표시)."""
+    """ref를 실행할 디렉터리와 기록용 버전 문자열. WORKTREE면 현재 트리(+dirty 표시).
+
+    컨테이너 이미지에는 .git이 없다. 거기서는 이미지에 든 코드가 곧 변형의 코드이고, 버전은
+    BENCH_VERSION(배포가 넣는 이미지 태그)으로 남긴다. 다른 ref를 비교하려면 그 태그의
+    이미지로 따로 돌린다.
+    """
+    if not _in_git():
+        if ref != WORKTREE:
+            raise SystemExit(f"git이 없는 환경(이미지)에서는 ref={ref}를 돌릴 수 없다 — "
+                             "그 ref의 이미지로 돌리고 변형의 ref는 WORKTREE로 둔다")
+        return REPO, os.environ.get("BENCH_VERSION", "image")
     if ref == WORKTREE:
         sha = _git("rev-parse", "--short", "HEAD")
         dirty = bool(_git("status", "--porcelain", "--untracked-files=no"))
