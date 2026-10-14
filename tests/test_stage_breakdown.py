@@ -66,3 +66,9 @@ def test_history_before_stage_split_is_left_out():
 def test_empty_input_does_not_crash():
     sb = metrics.stage_breakdown([])
     assert sb["n"] == 0 and sb["vlm"]["calls"] == 0
+
+
+def test_truncated_rate():
+    d = _doc(10.0, outcomes={"table": 4})
+    d["stages"]["vlm"]["truncated"] = 1
+    assert metrics.stage_breakdown([d])["vlm"]["truncated_rate"] == 0.25

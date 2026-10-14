@@ -80,6 +80,9 @@ def stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
         return {"backend": extractor.VLM_BACKEND, "model": extractor.VLM_MODEL,
                 "dpi": extractor.VLM_DPI, "max_pages": extractor.VISION_MAX_PAGES,
                 "fail_streak": extractor.VLM_FAIL_STREAK, "timeout": extractor.VLM_TIMEOUT,
+                # 결과는 바꾸지 않지만 시간을 바꾼다. 키에서 빼면 동시도만 바꾼 변형이 기준선의
+                # VLM 산출물(과 그때 잰 시간)을 재사용해 '개선 없음'으로 보인다.
+                "concurrency": extractor.VLM_CONCURRENCY,
                 "prompt": hashlib.sha256(extractor.VLM_PROMPT.encode()).hexdigest()[:12]}
     if name == "chunk":
         return {"meta": asdict(opts["meta"]), "target": opts["target"],

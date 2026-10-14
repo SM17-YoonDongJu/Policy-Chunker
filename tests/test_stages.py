@@ -319,3 +319,27 @@ def test_dry_run_file_carries_the_bench_contract(ex, fake_vlm, mixed_pdf, tmp_pa
     assert {"doc_hash", "summary", "stages", "tables_by_page", "chunks"} <= out.keys()
     assert "latencies" in out["stages"]["vlm"]
     assert out["tables_by_page"]
+
+
+def test_truncated_responses_are_counted(ex, monkeypatch, mixed_pdf):
+    """max_tokens에서 잘린 응답(finish_reason=length)은 시간을 상한까지 쓰고 표 끝을 잃는다."""
+    ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_TARGET="both")
+    import requests
+
+    from insurance_chunker import stages
+
+    n = {"i": 0}
+
+    class _Cut(_Resp):
+        def json(self):
+            body = super().json()
+            body["choices"][0]["finish_reason"] = "length" if n["i"] == 1 else "stop"
+            return body
+
+    def _post(url, json=None, timeout=None):
+        n["i"] += 1
+        return _Cut("| a |\n|---|\n| 1 |")
+
+    monkeypatch.setattr(requests, "post", _post)
+    _, results = stages.parse(mixed_pdf)
+    assert results[2].metrics["truncated"] == 1

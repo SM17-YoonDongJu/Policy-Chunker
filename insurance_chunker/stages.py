@@ -104,6 +104,7 @@ def vlm(pdf_path: str, cpu: TablesCpu, use_vision: bool = True) -> StageResult:
                          pdf_path, cpu.targets, len(cpu.page_numbers), cpu.info)
     return StageResult("vlm", tables, sec, GPU, {
         "targets": len(cpu.targets),
+        "concurrency": extractor.VLM_CONCURRENCY,
         "calls": extractor._vision_call_count,
         "tables": len(tables),
         "circuit_open": extractor.vision_circuit_open(),
@@ -135,6 +136,7 @@ def vlm_call_summary(calls: list[dict]) -> dict[str, Any]:
     px = [c["image_px"] for c in calls if c.get("image_px")]
     return {
         "outcomes": outcomes,
+        "truncated": sum(1 for c in calls if c.get("finish_reason") == "length"),
         "latencies": lat,
         "latency_p50": _pct(lat, 0.5),
         "latency_p95": _pct(lat, 0.95),
