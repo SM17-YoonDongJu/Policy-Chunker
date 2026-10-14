@@ -292,13 +292,14 @@ def compare(docset: dict[str, Any], base: dict[str, Any], variant: dict[str, Any
         groups[docs[i]["type"]].append(i)
 
     expect = variant.get("expect_identical_to") == base["slug"]
+    sa = metrics.stage_breakdown([ra[i] for i in paired])
+    sb = metrics.stage_breakdown([rb[i] for i in paired])
     return {
         "base": base["slug"], "variant": variant["slug"], "docset": docset["name"],
         "n": len(paired), "missing": sorted(set(docs) - set(paired)),
-        "bound": (metrics.stage_breakdown([ra[i] for i in paired])["bound"],
-                  metrics.stage_breakdown([rb[i] for i in paired])["bound"]),
-        "vlm": (metrics.stage_breakdown([ra[i] for i in paired])["vlm"],
-                metrics.stage_breakdown([rb[i] for i in paired])["vlm"]),
+        "bound": (sa["bound"], sb["bound"]),
+        "vlm": (sa["vlm"], sb["vlm"]),
+        "stages": (sa["stages"], sb["stages"]),
         "groups": {g: {"n": len(ids),
                        "elapsed": (round(sum(diffs[i]["elapsed"][0] for i in ids), 1),
                                    round(sum(diffs[i]["elapsed"][1] for i in ids), 1)),
@@ -344,6 +345,20 @@ def render(c: dict[str, Any]) -> str:
               f"| VLM p50 / p95 | {_lat(va)} | {_lat(vb)} | |",
               f"| VLM 타임아웃 | {_rate(va['timeout_rate'])} | {_rate(vb['timeout_rate'])} | |",
               ""]
+    st_a, st_b = c["stages"]
+    lines += [f"단계별 — ★는 variant에서 전체 하한을 결정하는 단계(병목 {bb['bottleneck']} → "
+              f"{bb['limiting_stage']})", "",
+              "| 단계 | 자원 | base 합 | variant 합 | 변화 | variant 단계 하한 | 하한 몫 |",
+              "|---|---|---|---|---|---|---|"]
+    for k in sorted(set(st_a) | set(st_b), key=lambda k: -(st_b.get(k) or st_a[k])["total_s"]):
+        a, b = st_a.get(k) or {}, st_b.get(k) or {}
+        mark = "★ " if b.get("critical") else ""
+        share = f"{b['bound_share']:.1%}" if b.get("critical") else "-"
+        lines.append(f"| {mark}{k} | {(b or a).get('resource')} | {a.get('total_s', 0)}s | "
+                     f"{b.get('total_s', 0)}s | "
+                     f"{_pct_change(a.get('total_s', 0), b.get('total_s', 0))} | "
+                     f"{b.get('bound_s', 0)}s | {share} |")
+    lines += [""]
     lines += ["| 유형 | n | 시간 base → variant | 표 해시 일치 |", "|---|---|---|---|"]
     for g, s in c["groups"].items():
         lines.append(f"| {g} | {s['n']} | {s['elapsed'][0]}s → {s['elapsed'][1]}s | "
