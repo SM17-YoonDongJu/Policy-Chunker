@@ -5,17 +5,21 @@
 # `python eval/bench/bench.py fetch --docset core`로 받는다. 로컬 파일이면 pdf: 경로를 쓴다.
 #
 # type은 결과를 나눠 보는 축이다 — 문서 구성이 바뀐 것이 개선 효과처럼 보이지 않게.
-#   scan   페이지를 덮는 이미지(OCR 스캔본). VLM gap 대상이 많다
-#   table  표가 많은 약관. VLM·CPU 표 추출 비중이 크다
-#   plain  일반 약관
+#   table   표가 많은 약관. VLM·CPU 표 추출 비중이 크다
+#   plain   일반 약관
+#   random  corpus 무작위 표본(100~400쪽에서 seed 고정 추출). 대표성 보강용
 #
 # 운영에서 타임아웃·격리·0청크가 난 문서는 여기로 옮겨 회귀 셋으로 쓴다(note에 사유).
-# 구성: 유형별 2건씩 6건. VLM 상한(문서당 50쪽, T4에서 쪽당 21~36초)이면 문서당 VLM이 최대
-# 약 20~30분이라 6건 전체가 2~3시간 안에 끝난다 — 마일스톤마다 돌릴 수 있는 크기다. 유형별 n=2는
-# 문서 단위 결론엔 작지만, 짝지은 비교라 문서 간 편차가 상쇄되고 VLM 지연 분포는 호출 단위
-# (최대 300건)로 본다. PR마다의 빠른 확인은 smoke(1건)로 한다.
+# 구성: 6건 — table 2, plain 2, random 2. VLM 상한(문서당 50쪽)이면 문서당 VLM이 최대 약 20~30분
+# (동시도 1)이라 6건 전체가 2~3시간 안에 끝난다 — 마일스톤마다 돌릴 수 있는 크기다. 유형별 n=2는
+# 문서 단위 결론엔 작지만, 짝지은 비교라 문서 간 편차가 상쇄되고 VLM 지연 분포는 호출 단위로 본다.
+# PR마다의 빠른 확인은 smoke(1건)로 한다.
 #
-# scan 2건은 아직 고르지 못했다(아래 TODO). corpus를 표본 추출해 blind 페이지 비율이 높은 문서를 찾는다.
+# scan 유형은 두지 않는다. corpus에서 무작위 248건을 봤는데 OCR 스캔본(앞 10쪽 대부분이 페이지
+# 전체 이미지)이 한 건도 없었다(2026-10-14) — 많아야 1% 안팎이라 6자리 중 2자리를 줄 유형이 아니다.
+# 그 두 자리는 무작위 표본(random)으로 채워, 의도적으로 고른 문서만으로 생기는 편향을 줄인다.
+# 운영에서 문제가 됐던 279쪽 OCR 스캔본(커밋 0534905)을 찾으면 회귀용으로 따로 더한다.
+
 name: core
 documents:
   - id: kb-yes365-235p
@@ -42,4 +46,15 @@ documents:
     doc_type: policy_terms
     insurer: 미상
     note: 238쪽, 표 110쪽 — 표지에 텍스트 레이어 없음
-  # TODO scan 2건 — blind(텍스트 없음 + 페이지 덮는 이미지) 비율이 높은 문서
+  - id: random-common-117p
+    sha256: 342914663eb37be5e17c77b275cb09c89c717839650e065d7542b2fe916f7f94
+    type: random
+    doc_type: policy_terms
+    insurer: 미상
+    note: 무작위 표본 — 공통사항·보통약관, 117쪽
+  - id: random-kb-child-198p
+    sha256: ac5ec6c99d27a76cfe5f7fdff85048808789897cf9820173151529a2c178622d
+    type: random
+    doc_type: policy_terms
+    insurer: KB손해보험
+    note: 무작위 표본 — KB 금쪽같은 자녀보험Plus(26.04), 198쪽
