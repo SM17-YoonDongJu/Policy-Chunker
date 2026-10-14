@@ -104,6 +104,7 @@ def vlm(pdf_path: str, cpu: TablesCpu, use_vision: bool = True) -> StageResult:
                          pdf_path, cpu.targets, len(cpu.page_numbers), cpu.info)
     return StageResult("vlm", tables, sec, GPU, {
         "targets": len(cpu.targets),
+        "concurrency": extractor.VLM_CONCURRENCY,
         "calls": extractor._vision_call_count,
         "tables": len(tables),
         "circuit_open": extractor.vision_circuit_open(),

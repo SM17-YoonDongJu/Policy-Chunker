@@ -17,7 +17,7 @@ import re
 import subprocess
 import tempfile
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,13 @@ VLM_CONNECT_TIMEOUT = float(os.environ.get("VLM_CONNECT_TIMEOUT", "5"))
 # 없을 때 무슨 일이 생기는지 겪었다 — 표 214페이지짜리 문서가 페이지마다 600초를
 # 기다리며 35.6시간을 태웠다. 서버가 죽었으면 215번째 시도도 죽는다.
 VLM_FAIL_STREAK = int(os.environ.get("VLM_FAIL_STREAK", "3"))
+# 문서 하나 안에서 VLM을 동시에 몇 건까지 부를지. 기본 1 = 예전 순차 동작.
+# 페이지끼리 의존이 없고 서버(vLLM)는 continuous batching으로 여러 요청을 한 번에 디코딩한다.
+# 운영 VLM은 생성 속도가 병목이라(18.7토큰/초, 페이지당 p50 88.6초) 동시 요청이 곧 처리량이다.
+# 상한은 서버의 KV 캐시 여유다 — 운영 설정에서 6,144토큰 요청 기준 3.17배. 넘기면 서버가
+# 대기시키고 그 대기도 VLM_TIMEOUT에 들어가 타임아웃만 는다. 문서 병렬(INGEST_CONCURRENCY)과
+# 곱해진다는 점도 주의.
+VLM_CONCURRENCY = int(os.environ.get("VLM_CONCURRENCY", "1"))
 # VLM을 어느 페이지에 투입할 것인가.
 #
 #   gap    (기본) PyMuPDF가 닿지 못한 페이지 — 텍스트 레이어가 없거나 표를 못 찾은 곳
@@ -311,20 +318,13 @@ def _otsl_to_markdown(otsl: str) -> Optional[str]:
     return "\n".join(lines)
 
 
-def extract_vision_local(fitz_page, pno: int, *,
-                         raise_on_error: bool = False) -> Optional[str]:
-    """fitz page → OpenAI 호환 VLM → markdown 표 문자열. 표 없으면 None.
+def render_page(fitz_page, pno: int) -> Optional[tuple[str, int]]:
+    """페이지 → (PNG base64, 픽셀 수). 렌더링 실패면 None.
 
-    Ollama와 llama-server 둘 다 /v1/chat/completions를 같은 규격으로 받는다.
-    구분은 VLM_MODEL 하나뿐이다 — Ollama는 필수, llama-server는 생략.
-
-    raise_on_error=True면 호출 실패를 _VLMCallFailed로 올린다. 기본값은 None 반환이라
-    기존 계약(실패가 문서 전체를 죽이지 않는다)이 그대로 유지된다. 차단기만 이 구분이
-    필요하다 — 표 없는 페이지가 연속된 걸 서버 장애로 오인하면 멀쩡한 표를 버린다.
+    PyMuPDF 객체는 스레드 간에 안전하지 않다. VLM 호출을 병렬로 보내더라도 렌더링은 문서를 연
+    스레드에서 해서 바이트로 넘긴다 — 그래서 호출(call_vlm)과 나눠 둔다.
     """
     import base64
-
-    import requests
 
     try:
         pix = fitz_page.get_pixmap(dpi=VLM_DPI)
@@ -334,7 +334,20 @@ def extract_vision_local(fitz_page, pno: int, *,
         return None
     # 비전 토큰 수는 입력 픽셀 수에 비례한다(Qwen 계열은 28px 패치). 가짜 페이지엔 크기가 없다.
     image_px = (getattr(pix, "width", 0) or 0) * (getattr(pix, "height", 0) or 0)
+    return img_b64, image_px
 
+
+def call_vlm(img_b64: str, pno: int, image_px: int = 0,
+             record: Optional[Callable[[dict], None]] = None) -> Optional[str]:
+    """렌더된 이미지 → VLM → markdown 표. 표 없으면 None, 호출 실패면 _VLMCallFailed.
+
+    record는 호출 기록(소요·결과·토큰·잘림)을 받는다. 없으면 모듈 기록(_vision_page_stats)에
+    쌓는다. 병렬 호출에서는 호출부(VlmStage)가 자기 기록으로 받는다. 스레드에서 불려도 되도록
+    모듈 상태는 record 밖에서는 건드리지 않는다.
+    """
+    import requests
+
+    record = record or _record_vlm_call
     payload: dict = {
         "messages": [{
             "role": "user",
@@ -361,13 +374,11 @@ def extract_vision_local(fitz_page, pno: int, *,
         out = choice["message"]["content"].strip()
     except Exception as e:
         stat.update(seconds=round(time.perf_counter() - t0, 2), outcome=_vlm_outcome(e))
-        _record_vlm_call(stat)
+        record(stat)
         logger.warning(f"p{pno}: 로컬 VLM 실패: {e}",
                        extra={"event": "vlm_call_failed", "page": pno,
                               "error": f"{type(e).__name__}: {e}"})
-        if raise_on_error:
-            raise _VLMCallFailed(str(e)) from e
-        return None
+        raise _VLMCallFailed(str(e)) from e
 
     usage = body.get("usage") or {}
     stat.update(seconds=round(time.perf_counter() - t0, 2),
@@ -379,8 +390,31 @@ def extract_vision_local(fitz_page, pno: int, *,
                 finish_reason=choice.get("finish_reason"))
     md = _parse_vlm_output(out)
     stat["outcome"] = "table" if md else "empty"
-    _record_vlm_call(stat)
+    record(stat)
     return md
+
+
+def extract_vision_local(fitz_page, pno: int, *,
+                         raise_on_error: bool = False) -> Optional[str]:
+    """fitz page → OpenAI 호환 VLM → markdown 표 문자열. 표 없으면 None.
+
+    Ollama·llama-server·vLLM 모두 /v1/chat/completions를 같은 규격으로 받는다.
+    구분은 VLM_MODEL 하나뿐이다 — Ollama·vLLM은 필수(vLLM은 served-model-name), llama-server는 생략.
+
+    raise_on_error=True면 호출 실패를 _VLMCallFailed로 올린다. 기본값은 None 반환이라
+    기존 계약(실패가 문서 전체를 죽이지 않는다)이 그대로 유지된다. 차단기만 이 구분이
+    필요하다 — 표 없는 페이지가 연속된 걸 서버 장애로 오인하면 멀쩡한 표를 버린다.
+    """
+    rendered = render_page(fitz_page, pno)
+    if rendered is None:
+        return None
+    img_b64, image_px = rendered
+    try:
+        return call_vlm(img_b64, pno, image_px)
+    except _VLMCallFailed:
+        if raise_on_error:
+            raise
+        return None
 
 
 def _record_vlm_call(stat: dict) -> None:
@@ -634,33 +668,26 @@ def extract_vlm_tables(
 
     import pymupdf as fitz
 
-    vlm_tables: dict[int, str] = {}
+    from .vlm_stage import VlmStage
+
+    stage = VlmStage()
     with fitz.open(pdf_path) as doc:
-        for i, pno in enumerate(targets, 1):
-            # 차단기가 열렸으면 남은 페이지는 호출도 로그도 하지 않는다.
-            # 안 끊으면 "처리 중" 줄만 수백 개 쌓여 로그가 사실과 어긋난다.
-            if vision_circuit_open():
-                logger.warning(
-                    f"VLM 차단 — 남은 {total - i + 1}페이지 건너뜀",
-                    extra={"event": "vlm_pages_skipped",
-                           "skipped": total - i + 1, "total": total})
-                break
-            if vision_budget_exhausted():
-                # 품질이 아니라 시간을 위해 접는 것이라 level이 다르다 —
-                # 남은 페이지도 PyMuPDF/pdfplumber 결과는 그대로 쓴다.
-                logger.info(
-                    f"VLM 상한 {VISION_MAX_PAGES}페이지 도달 — 남은 "
-                    f"{total - i + 1}페이지는 PyMuPDF/pdfplumber 결과만 쓴다",
-                    extra={"event": "vlm_budget_exhausted",
-                           "limit": VISION_MAX_PAGES,
-                           "skipped": total - i + 1, "total": total})
-                break
-            logger.info(f"VLM [{i}/{total}] p{pno} 처리 중...")
-            md_vision = extract_vision(doc[pno - 1], pno)
-            if md_vision:
-                vlm_tables[pno] = md_vision
-                logger.info(f"VLM [{i}/{total}] p{pno} 완료 (표 추출됨)")
+        vlm_tables = stage.run(doc, targets)
+    _publish(stage)
     return vlm_tables
+
+
+def _publish(stage) -> None:
+    """VlmStage가 들고 있던 문서 단위 상태를 모듈 상태로 옮긴다.
+
+    vision_circuit_open()·vision_page_stats()·_vision_call_count를 읽는 호출부(stages.vlm,
+    extract_vision 경로, 테스트)가 예전 계약 그대로 동작하게 하려는 것이다. 단계가 끝난 뒤
+    한 번 옮기므로 병렬 호출 중에는 모듈 상태를 아무도 건드리지 않는다.
+    """
+    global _vision_call_count, _vision_fail_streak, _vision_page_stats
+    _vision_call_count = stage.calls
+    _vision_fail_streak = VLM_FAIL_STREAK if stage.circuit_open else stage.streak
+    _vision_page_stats = list(stage.stats)
 
 
 def extract_tables_for_doc(
