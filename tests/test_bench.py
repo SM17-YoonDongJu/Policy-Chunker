@@ -79,14 +79,65 @@ def test_lost_article_fails_even_if_tables_match(bench):
     assert c["verdict"] == "FAIL" and c["docs"]["a"]["articles_lost"] == ["제2조"]
 
 
-def test_quality_changing_variant_gets_no_verdict(bench):
-    """DPI처럼 결과를 바꾸는 변형은 통과/실패가 아니라 변화량을 본다."""
+def test_vlm_overwriting_a_cpu_page_fails_the_guardrail(bench):
+    """결과가 바뀌는 변형도 가드레일은 본다.
+
+    PyMuPDF가 읽던 페이지를 VLM이 덮어쓴 건 ICD 코드 사고(I00 → 100)와 같은 경우다.
+    """
     ra = {"a": _report({"1": ("pymupdf", "h1")})}
     rb = {"a": _report({"1": ("vlm", "h2"), "2": ("vlm", "h3")})}
     c = bench.compare(DOCSET, {"slug": "base"}, {"slug": "v"}, ra, rb)
     t = c["docs"]["a"]["tables"]
-    assert c["verdict"] is None
     assert t["changed"] == ["1"] and t["only_variant"] == ["2"] and t["source_moves"] == 1
+    assert c["verdict"] == "FAIL"
+    assert "CPU 소스가 읽던 페이지" in c["violations"]["a"][0]
+    assert "품질 가드레일: FAIL" in bench.render(c)
+
+
+def test_guardrail_can_be_turned_off(bench):
+    ra = {"a": _report({"1": ("pymupdf", "h1")})}
+    rb = {"a": _report({"1": ("vlm", "h2")})}
+    c = bench.compare(DOCSET, {"slug": "base"}, {"slug": "v", "guardrail": False}, ra, rb)
+    assert c["verdict"] is None and c["violations"] == {}
+
+
+def test_changes_inside_vlm_pages_pass_the_guardrail(bench):
+    """VLM이 맡은 페이지의 표가 바뀌는 건 허용한다 — DPI·모델을 바꾸면 당연히 바뀐다."""
+    ra = {"a": _report({"1": ("pymupdf", "h1"), "5": ("vlm", "v5")})}
+    rb = {"a": _report({"1": ("pymupdf", "h1"), "5": ("vlm", "v5-new")})}
+    c = bench.compare(DOCSET, {"slug": "base"}, {"slug": "v"}, ra, rb)
+    assert c["verdict"] == "PASS"
+
+
+@pytest.mark.parametrize("case,expect", [
+    ("articles", "조번호"), ("boundary", "경계 신뢰도"), ("tables", "표 페이지"),
+    ("unknown", "[?] 셀")])
+def test_each_guardrail_rule(bench, case, expect):
+    base_tables = {str(p): ("vlm", f"v{p}") for p in range(1, 21)}
+    ra = {"a": _report(base_tables)}
+    rb = {"a": _report(dict(base_tables))}
+    if case == "articles":
+        rb["a"]["summary"]["articles"] = ["제1조"]
+    elif case == "boundary":
+        ra["a"]["summary"]["boundary_confidence"] = "ok"
+        rb["a"]["summary"]["boundary_confidence"] = "weak"
+    elif case == "tables":  # 20 → 18쪽 = -10% (허용 -5%)
+        rb["a"]["tables_by_page"].pop("19")
+        rb["a"]["tables_by_page"].pop("20")
+    else:
+        rb["a"]["tables_by_page"]["3"]["unknown_cells"] = 2
+    c = bench.compare(DOCSET, {"slug": "base"}, {"slug": "v"}, ra, rb)
+    assert c["verdict"] == "FAIL"
+    assert any(expect in v for v in c["violations"]["a"])
+
+
+def test_guardrail_thresholds_can_be_overridden(bench):
+    """허용 기준은 초안이다. 변형마다 덮어쓸 수 있어야 합의 전에도 실험할 수 있다."""
+    base_tables = {str(p): ("vlm", f"v{p}") for p in range(1, 21)}
+    ra = {"a": _report(base_tables)}
+    rb = {"a": _report({k: v for k, v in base_tables.items() if k not in ("19", "20")})}
+    loose = {"slug": "v", "guardrail": {"min_table_pages_ratio": 0.85}}
+    assert bench.compare(DOCSET, {"slug": "base"}, loose, ra, rb)["verdict"] == "PASS"
 
 
 def test_only_paired_documents_are_compared(bench):

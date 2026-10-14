@@ -272,6 +272,45 @@ def doc_diff(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 결과가 바뀌는 변형(DPI·탐지 기준·엔진)의 품질 가드레일 — 목표는 시간 단축이고 품질은
+# 기준선 대비 크게 나빠지지 않았는지만 본다. 값은 초안이다(설계 문서 2.4). 변형 정의의
+# guardrail:로 항목별로 덮어쓰고, guardrail: false면 판정하지 않는다.
+DEFAULT_GUARDRAIL: dict[str, Any] = {
+    "max_articles_lost": 0,            # 빠진 조는 검색되지 않는다
+    "boundary_no_downgrade": True,     # weak면 섹션이 안 갈려 조번호가 어긋난다
+    "min_table_pages_ratio": 0.95,     # 호출 수를 줄이는 변경이 잃는 표의 폭
+    "unknown_cells_no_increase": True,  # VLM이 읽지 못한 셀([?])
+    "cpu_pages_unchanged": True,       # CPU 소스가 읽던 페이지를 VLM이 덮어쓰면 안 된다(ICD 사고)
+}
+_CPU_SOURCES = {"pymupdf", "pdfplumber", "camelot"}
+_BOUNDARY_RANK = {"error": 0, "weak": 1, "ok": 2}
+
+
+def guardrail_violations(a: dict[str, Any], b: dict[str, Any], d: dict[str, Any],
+                         rules: dict[str, Any]) -> list[str]:
+    """문서 하나의 가드레일 위반 목록. a=base 리포트, b=variant 리포트, d=doc_diff 결과."""
+    out: list[str] = []
+    if len(d["articles_lost"]) > rules["max_articles_lost"]:
+        out.append(f"조번호 {len(d['articles_lost'])}개 손실({', '.join(d['articles_lost'][:5])})")
+    ra, rb = (_BOUNDARY_RANK.get(x) for x in d["boundary"])
+    if rules["boundary_no_downgrade"] and ra is not None and rb is not None and rb < ra:
+        out.append(f"경계 신뢰도 하락({d['boundary'][0]}→{d['boundary'][1]})")
+    na, nb = len(a.get("tables_by_page") or {}), len(b.get("tables_by_page") or {})
+    if na and nb < na * rules["min_table_pages_ratio"]:
+        out.append(f"표 페이지 {na}→{nb}({(nb - na) / na:+.1%}, 허용 "
+                   f"{rules['min_table_pages_ratio'] - 1:+.0%})")
+    ua, ub = d["tables"]["unknown_cells"]
+    if rules["unknown_cells_no_increase"] and ub > ua:
+        out.append(f"[?] 셀 {ua}→{ub}")
+    if rules["cpu_pages_unchanged"]:
+        ta, tb = a.get("tables_by_page") or {}, b.get("tables_by_page") or {}
+        hit = sorted((p for p, v in ta.items() if v["source"] in _CPU_SOURCES
+                      and (p not in tb or tb[p]["sha256"] != v["sha256"])), key=int)
+        if hit:
+            out.append(f"CPU 소스가 읽던 페이지의 표가 바뀜/사라짐: {', '.join(hit[:8])}")
+    return out
+
+
 def identical(d: dict[str, Any]) -> bool:
     """결과가 바뀌면 안 되는 변경(병렬화·단계 겹치기)의 판정 — 표·청크·조번호가 전부 같아야 한다."""
     t = d["tables"]
@@ -292,6 +331,18 @@ def compare(docset: dict[str, Any], base: dict[str, Any], variant: dict[str, Any
         groups[docs[i]["type"]].append(i)
 
     expect = variant.get("expect_identical_to") == base["slug"]
+    rules = variant.get("guardrail", True)
+    rules = None if rules is False or expect else {
+        **DEFAULT_GUARDRAIL, **(rules if isinstance(rules, dict) else {})}
+    violations = ({i: v for i in paired
+                   if (v := guardrail_violations(ra[i], rb[i], diffs[i], rules))}
+                  if rules else {})
+    if expect:
+        verdict = "PASS" if all(identical(d) for d in diffs.values()) else "FAIL"
+    elif rules:
+        verdict = "FAIL" if violations else "PASS"
+    else:
+        verdict = None
     sa = metrics.stage_breakdown([ra[i] for i in paired])
     sb = metrics.stage_breakdown([rb[i] for i in paired])
     return {
@@ -309,8 +360,9 @@ def compare(docset: dict[str, Any], base: dict[str, Any], variant: dict[str, Any
                    for g, ids in sorted(groups.items())},
         "docs": diffs,
         "expect_identical": expect,
-        "verdict": (("PASS" if all(identical(d) for d in diffs.values()) else "FAIL")
-                    if expect else None),
+        "guardrail": rules,
+        "violations": violations,
+        "verdict": verdict,
     }
 
 
@@ -330,8 +382,14 @@ def render(c: dict[str, Any]) -> str:
     ba, bb = c["bound"]
     va, vb = c["vlm"]
     lines = [f"## {c['variant']} vs {c['base']} — {c['docset']} (n={c['n']})", ""]
-    if c["verdict"]:
+    if c["verdict"] and c["expect_identical"]:
         lines += [f"**결과 동일성: {c['verdict']}** (expect_identical_to={c['base']})", ""]
+    elif c["verdict"]:
+        lines += [f"**품질 가드레일: {c['verdict']}**", ""]
+        for i, vs in c["violations"].items():
+            lines += [f"- {i}: " + "; ".join(vs)]
+        if c["violations"]:
+            lines += [""]
     if c["missing"]:
         lines += [f"짝이 없어 뺀 문서: {', '.join(c['missing'])}", ""]
     lines += ["| | base | variant | 변화 |", "|---|---|---|---|",
