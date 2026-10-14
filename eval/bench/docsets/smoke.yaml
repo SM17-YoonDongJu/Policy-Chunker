@@ -1,0 +1,12 @@
+# 스모크 문서셋 — PR마다 돌리는 빠른 확인용(1건). 변형이 결과를 깨지 않는지, 단계별 시간이
+# 어떻게 움직이는지를 십수 분 안에 본다. 개선 효과의 결론은 core로 낸다.
+#
+# 296쪽, PyMuPDF 표 67쪽 — 표가 섞인 전형적인 약관. 중간 크기(3.3MB, corpus p50 근처).
+name: smoke
+documents:
+  - id: promy-life-296p
+    sha256: 30ccf341b2ca3d2f89d337f8426eda34610bf73facd1d753abb6d028281866ec
+    type: plain
+    doc_type: policy_terms
+    insurer: DB손해보험
+    note: 무배당 프로미라이프 내생애 든든 종합보험1401

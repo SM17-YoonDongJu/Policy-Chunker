@@ -33,6 +33,11 @@ COPY ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.p
 COPY runlog.py notify.py healthcheck.py metrics.py logging_setup.py exporter.py slo.py ./
 # 정지 신호를 문서 경계까지 전달하는 공용 스위치 — worker와 두 CLI가 함께 쓴다.
 COPY shutdown.py ./
+# 벤치마크 정의와 러너. 클러스터에서 같은 이미지로 고정 문서셋을 돌린다
+# (BENCH_DATA=공유 PVC 경로, BENCH_VERSION=이미지 태그). 데이터는 이미지에 넣지 않는다.
+COPY eval/bench/bench.py eval/bench/README.md ./eval/bench/
+COPY eval/bench/docsets ./eval/bench/docsets
+COPY eval/bench/variants ./eval/bench/variants
 # Prometheus 스크랩 포트(METRICS_PORT). 접근은 보안그룹이 통제한다.
 EXPOSE 9101
 

@@ -15,7 +15,11 @@ __pycache__/
 dry_run_out/
 deploy/data/
 # 실험·평가·문서 — 배치 실행 이미지에 불필요
+# 단, 벤치마크는 GPU·Ollama가 있는 클러스터에서 같은 이미지로 돈다(데이터는 공유 PVC).
 eval/
+!eval/bench/
+eval/bench/.*
+eval/bench/results/
 tests/
 docs/
 _workspace/

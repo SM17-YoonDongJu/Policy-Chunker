@@ -148,3 +148,30 @@ def test_run_and_compare_end_to_end(bench, table_pdf, capsys):
     assert "결과 동일성: PASS" in out.read_text()
     meta = json.loads((bench.BENCH / "results" / "base" / "smoke" / "_run.json").read_text())
     assert meta["runs"][0]["ok"] and meta["version"]
+
+
+# ── 클러스터(공유 PVC·git 없는 이미지) ────────────────────────────────────────
+
+def test_data_dir_can_live_apart_from_definitions(tmp_path, monkeypatch):
+    """정의는 이미지에서, 캐시·PDF·결과는 팀이 공유하는 PVC에서 읽는다."""
+    monkeypatch.delenv("BENCH_HOME", raising=False)
+    monkeypatch.setenv("BENCH_DATA", str(tmp_path / "pvc"))
+    spec = importlib.util.spec_from_file_location("bench2", REPO / "eval" / "bench" / "bench.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.DEFS == REPO / "eval" / "bench"
+    assert mod.BENCH == tmp_path / "pvc"
+    assert mod.load_docset("smoke")["documents"], "정의는 이미지(레포)에 든 것을 읽어야 한다"
+
+
+def test_image_without_git_runs_its_own_code_only(bench, monkeypatch):
+    """이미지엔 .git이 없다. 다른 ref는 그 ref의 이미지로 돌려야 한다.
+
+    조용히 현재 이미지 코드로 돌면 '변형 B'라는 이름으로 A를 잰 결과가 남는다.
+    """
+    monkeypatch.setattr(bench, "_in_git", lambda: False)
+    monkeypatch.setenv("BENCH_VERSION", "sha-abc1234")
+    code_dir, version = bench.checkout(bench.WORKTREE)
+    assert code_dir == bench.REPO and version == "sha-abc1234"
+    with pytest.raises(SystemExit):
+        bench.checkout("main")

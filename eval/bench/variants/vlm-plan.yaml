@@ -1,0 +1,11 @@
+# VLM 대상만 정하고 호출은 하지 않는다(VISION_MAX_PAGES=0이면 첫 페이지 전에 상한에 닿는다).
+# GPU·Ollama가 없는 곳(개발 노트북·CI)에서 CPU 단계 시간과 'VLM이 할 일의 양'(대상 페이지 수)을
+# 재는 데 쓴다. baseline과 VLM 설정(VLM_TARGET 등)을 맞춰야 대상 수가 같다.
+slug: vlm-plan
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_TARGET: gap
+  VISION_MAX_PAGES: "0"
+status: draft
+note: CPU 단계 + VLM 대상 수만 측정

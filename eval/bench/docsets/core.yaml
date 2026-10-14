@@ -10,11 +10,36 @@
 #   plain  일반 약관
 #
 # 운영에서 타임아웃·격리·0청크가 난 문서는 여기로 옮겨 회귀 셋으로 쓴다(note에 사유).
+# 구성: 유형별 2건씩 6건. VLM 상한(문서당 50쪽, T4에서 쪽당 21~36초)이면 문서당 VLM이 최대
+# 약 20~30분이라 6건 전체가 2~3시간 안에 끝난다 — 마일스톤마다 돌릴 수 있는 크기다. 유형별 n=2는
+# 문서 단위 결론엔 작지만, 짝지은 비교라 문서 간 편차가 상쇄되고 VLM 지연 분포는 호출 단위
+# (최대 300건)로 본다. PR마다의 빠른 확인은 smoke(1건)로 한다.
+#
+# scan 2건은 아직 고르지 못했다(아래 TODO). corpus를 표본 추출해 blind 페이지 비율이 높은 문서를 찾는다.
 name: core
-documents: []
-#  - id: meritz-group-safe          # 결과 파일 이름. 영문·숫자·-만
-#    sha256: <64자>
-#    type: table
-#    doc_type: policy_terms
-#    insurer: 메리츠화재
-#    note: 표 214쪽 — VLM 타임아웃 35.6시간 사례
+documents:
+  - id: kb-yes365-235p
+    sha256: 4b93fedf00c8c66575d68d0ec351d621130f508847a67c2d3345b051a225be3e
+    type: table
+    doc_type: policy_terms
+    insurer: KB손해보험
+    note: 무배당 KB Yes!365건강보험(20.07) — 235쪽 중 PyMuPDF 표 210쪽
+  - id: meritz-group-safe-674p
+    sha256: 1754f12cc4fdb4b2b7f210699f07cade7484ff29bf8bcddc088a69ca3f1e0f39
+    type: table
+    doc_type: policy_terms
+    insurer: 메리츠화재
+    note: 단체안심상해보험(1906B) — 674쪽, 표 208쪽. 긴 문서의 꼬리
+  - id: promy-life-296p
+    sha256: 30ccf341b2ca3d2f89d337f8426eda34610bf73facd1d753abb6d028281866ec
+    type: plain
+    doc_type: policy_terms
+    insurer: DB손해보험
+    note: 무배당 프로미라이프 내생애 든든 종합보험1401 — smoke와 같은 문서
+  - id: plain-238p
+    sha256: 641a08c76f0e21b57d058ca46bf800921a65300efff50827dafb45cadbb022a5
+    type: plain
+    doc_type: policy_terms
+    insurer: 미상
+    note: 238쪽, 표 110쪽 — 표지에 텍스트 레이어 없음
+  # TODO scan 2건 — blind(텍스트 없음 + 페이지 덮는 이미지) 비율이 높은 문서
