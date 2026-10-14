@@ -31,6 +31,7 @@ python eval/bench/bench.py compare --docset core --base baseline --variant vlm-c
 | `ref` | git 커밋·브랜치·태그, 또는 `WORKTREE`(커밋 안 된 변경 포함). ref면 `.worktrees/`에 따로 체크아웃해 그 코드로 돈다 |
 | `env` | 이 변형에서 바꾸는 환경변수 (`VLM_DPI`, `VLM_TARGET`, `VLM_CONCURRENCY` …) |
 | `expect_identical_to` | 결과가 바뀌면 안 되는 변경(병렬화·단계 겹치기)이면 기준 slug. `compare`가 표 해시·청크 수·조번호가 **전부** 같은지 판정해 PASS/FAIL을 낸다(FAIL이면 종료 코드 1) |
+| `guardrail` | 결과가 바뀌는 변형의 품질 가드레일. 기본값(초안)으로 판정하고, 항목별로 덮어쓰거나 `false`로 끈다. 기본: 조번호 손실 0, 경계 신뢰도 하락 금지, 표 페이지 −5% 이내, `[?]` 셀 증가 금지, CPU 소스가 읽던 페이지의 표 변경 금지 |
 | `status`·`applied_at`·`note` | 운영 반영 여부와 시각, 메모. 운영 이력 쪽 전후 비교의 구간 경계로 쓴다 |
 
 ## 캐시
