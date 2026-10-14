@@ -452,9 +452,12 @@ main 머지
 K8s-manifests에 커밋할 때는 `brbs-manifests-ci` GitHub App 토큰을 쓴다 — 그 레포 하나의
 contents 쓰기로만 범위가 좁혀져 있고, CI는 AWS·클러스터 자격증명을 들지 않는다.
 
-> **지금은 자동 Sync가 아니다.** `etl-chunker-dev` Application이 `syncPolicy: {}`라, 태그가
-> 커밋돼도 파드는 바뀌지 않고 Argo CD UI에서 Sync를 눌러야 반영된다. 넘겨받는 첫 Sync를
-> diff로 확인하려고 일부러 수동으로 둔 상태다. `automated`로 바뀌면 이 문단은 사라진다.
+`etl-chunker-dev` Application은 자동 Sync다(`selfHeal: true`, `prune: false`). `prune`을 끈
+것은 `chunker-state` PVC 때문이다 — 파일이 git에서 잠깐 빠지는 실수로 날아가면 증분 처리의
+근거를 잃고 전체 재적재가 된다.
+
+`selfHeal`이 켜져 있으니 **`kubectl`로 파드나 설정을 직접 고치면 몇 분 안에 되돌아간다.**
+급해도 K8s-manifests에 PR을 올리는 게 제일 빠른 길이다.
 
 **롤백**은 K8s-manifests에서 태그 커밋을 revert하는 게 가장 빠르다 — 빌드도 CI도 거치지 않고
 Argo CD가 바로 되돌린다. 배포 이력이 곧 그 레포의 git 로그다.
