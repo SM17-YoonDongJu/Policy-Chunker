@@ -78,16 +78,33 @@ def stage_breakdown(docs: list[dict[str, Any]], cpu_workers: int = 1,
     gpu_bound = by_resource.get("gpu", 0.0) / max(gpu_parallel, 1)
     t_bound = round(max(cpu_bound, gpu_bound) + by_resource.get("io", 0.0), 1)
     calls = sum(vlm_outcomes.values())
+    bottleneck = "gpu" if gpu_bound > cpu_bound else "cpu"
+    # 단계별 하한 = 그 단계 시간 / 그 자원의 병렬도. 병목 자원에 속한 단계들의 하한 합이 곧 전체
+    # 하한(IO 제외)이다 — 그래서 '전체 하한을 줄이려면 어느 단계를 얼마나 줄여야 하는가'가 여기서
+    # 바로 읽힌다. 병목이 아닌 자원의 단계는 아무리 줄여도 전체 하한이 그대로다(critical=False).
+    parallel = {"cpu": max(cpu_workers, 1), "gpu": max(gpu_parallel, 1), "io": 1}
+    bound_total = t_bound or 1.0
+    stages: dict[str, dict[str, Any]] = {}
+    for k, v in sorted(per_stage.items(), key=lambda kv: -sum(kv[1])):
+        res = resource[k]
+        stage_bound = sum(v) / parallel.get(res, 1)
+        critical = res in (bottleneck, "io")
+        stages[k] = {"resource": res, "total_s": round(sum(v), 1),
+                     "share": round(sum(v) / total, 3), "p50_s": _pct(v, 0.5),
+                     "bound_s": round(stage_bound, 1), "critical": critical,
+                     # 전체 하한에서 이 단계가 차지하는 몫. 병목 밖의 단계는 0이다
+                     "bound_share": round(stage_bound / bound_total, 3) if critical else 0.0}
     return {
         "n": len(measured),
-        "stages": {k: {"resource": resource[k], "total_s": round(sum(v), 1),
-                       "share": round(sum(v) / total, 3), "p50_s": _pct(v, 0.5)}
-                   for k, v in sorted(per_stage.items(), key=lambda kv: -sum(kv[1]))},
+        "stages": stages,
         "by_resource": {k: round(v, 1) for k, v in by_resource.items()},
         "bound": {
             "t_actual_s": t_actual, "t_bound_s": t_bound,
             "gap_s": round(t_actual - t_bound, 1),
-            "bottleneck": "gpu" if gpu_bound > cpu_bound else "cpu",
+            "bottleneck": bottleneck,
+            # 병목 자원 안에서 하한을 가장 많이 차지하는 단계 — 줄이면 전체 하한이 같이 준다
+            "limiting_stage": next((k for k, st in stages.items()
+                                    if st["resource"] == bottleneck), None),
             "cpu_workers": cpu_workers, "gpu_parallel": gpu_parallel,
         },
         "vlm": {
@@ -186,8 +203,13 @@ def print_stage_breakdown(sb: dict[str, Any]) -> None:
         bar = "█" * round(st["share"] * 40)
         print(f"  {k:<11} {st['resource']:<4} {st['share']:>6.1%} {bar} "
               f"(합 {st['total_s']}s, p50 {st['p50_s']}s)")
+    print("\n단계별 하한 — ★는 전체 하한을 결정하는 단계(병목 자원·IO)")
+    for k, st in sb["stages"].items():
+        mark = "★" if st["critical"] else " "
+        share = f"하한의 {st['bound_share']:.1%}" if st["critical"] else "줄여도 하한 불변"
+        print(f"  {mark} {k:<11} {st['resource']:<4} {st['bound_s']:>9}s  {share}")
     print(f"\n실제 {b['t_actual_s']}s | 하한 {b['t_bound_s']}s | 차이 {b['gap_s']}s "
-          f"| 병목 {b['bottleneck']} (CPU 작업자 {b['cpu_workers']}, "
+          f"| 병목 {b['bottleneck']} → {b['limiting_stage']} (CPU 작업자 {b['cpu_workers']}, "
           f"GPU 동시도 {b['gpu_parallel']})")
     if v["calls"]:
         print(f"VLM 호출 {v['calls']}건 {v['outcomes']} | 타임아웃 {v['timeout_rate']:.1%} "

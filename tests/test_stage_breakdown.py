@@ -72,3 +72,30 @@ def test_truncated_rate():
     d = _doc(10.0, outcomes={"table": 4})
     d["stages"]["vlm"]["truncated"] = 1
     assert metrics.stage_breakdown([d])["vlm"]["truncated_rate"] == 0.25
+
+
+# ── 단계별 하한 ───────────────────────────────────────────────────────────────
+
+def test_stage_bounds_sum_to_the_total_bound_on_the_bottleneck():
+    """병목 자원 단계들의 하한 합 + IO = 전체 하한. 어느 단계를 줄여야 하는지가 여기서 읽힌다."""
+    d = _doc(100.0)
+    d["stages"]["store"] = {"seconds": 5.0, "resource": "io"}
+    sb = metrics.stage_breakdown([d], gpu_parallel=2)
+    st = sb["stages"]
+    assert st["vlm"]["bound_s"] == 30.0 and st["embed"]["bound_s"] == 5.0
+    crit = sum(s["bound_s"] for s in st.values() if s["critical"])
+    assert crit == sb["bound"]["t_bound_s"] == 40.0
+    assert sb["bound"]["limiting_stage"] == "vlm"
+
+
+def test_non_bottleneck_stages_do_not_move_the_bound():
+    """GPU가 병목이면 CPU 단계를 아무리 줄여도 전체 하한은 그대로다 — 그걸 표시해야 한다."""
+    st = metrics.stage_breakdown([_doc(100.0)])["stages"]
+    assert st["text"]["critical"] is False and st["text"]["bound_share"] == 0.0
+    assert st["vlm"]["critical"] is True and st["vlm"]["bound_share"] > 0.8
+
+
+def test_bottleneck_flips_to_cpu_with_enough_gpu_parallelism():
+    sb = metrics.stage_breakdown([_doc(100.0)], gpu_parallel=4)
+    assert sb["bound"]["limiting_stage"] == "chunk"
+    assert sb["stages"]["vlm"]["critical"] is False
