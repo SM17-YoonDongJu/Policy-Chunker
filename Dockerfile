@@ -1,14 +1,16 @@
 # insurance-chunker — 인덱싱 데몬 이미지.
-# worker.py가 상주하며 주기(INGEST_INTERVAL_SECONDS)마다 인덱싱한다 → docker ps에 상시 노출.
-# 일회성 실행이 필요하면 커맨드를 덮어쓴다:
-#   docker compose run --rm chunker \
+# worker.py가 상주하며 주기(INGEST_INTERVAL_SECONDS)마다 인덱싱한다. 운영에서는 brbs-etl
+# 노드의 Deployment(insurance-chunker, ns default)로 뜬다.
+# 일회성 실행이 필요하면 도는 파드에서 커맨드를 덮어쓴다:
+#   kubectl exec deploy/insurance-chunker -- \
 #     python ingest.py --pdf /data/약관.pdf --insurer 메리츠화재 --product "단체안심생활보험"
 #
 # base 의존만 설치한다: OCR(surya-ocr)·ST(sentence-transformers) extra는 무겁고 선택적이라 제외.
 #
-# VLM 표 추출은 이미지에 백엔드를 넣지 않고 같은 호스트의 ollama 컨테이너(brbs-ollama)를
-# 쓴다 — OpenAI 호환 /v1/chat/completions 한 번이라 추가 의존이 없다. 기본값이 그쪽을
-# 가리키므로(extractor.py) 설정 없이 동작한다. 끄려면 VLM_BACKEND=off.
+# 표 추출 VLM과 임베딩은 이미지에 백엔드를 넣지 않고 클러스터의 vLLM·ollama Service를
+# HTTP로 쓴다 — OpenAI 호환 /v1/chat/completions 한 번이라 추가 의존이 없다. 주소는 차트가
+# VLM_URL·OLLAMA_URL로 넣고(K8s-manifests), 코드 기본값은 로컬 개발용 localhost다.
+# VLM을 끄려면 VLM_BACKEND=off.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -38,24 +40,27 @@ COPY shutdown.py ./
 COPY eval/bench/bench.py eval/bench/README.md ./eval/bench/
 COPY eval/bench/docsets ./eval/bench/docsets
 COPY eval/bench/variants ./eval/bench/variants
-# Prometheus 스크랩 포트(METRICS_PORT). 접근은 보안그룹이 통제한다.
+# Prometheus 스크랩 포트(METRICS_PORT). 클러스터에서는 메트릭 전용 Service(ClusterIP)만
+# 이 포트를 열고, ServiceMonitor가 그 Service를 긁는다 — 노드 포트로는 뜨지 않는다.
 EXPOSE 9101
 
 # base 의존 + 패키지 설치. setuptools packages.find가 insurance_chunker/db를 포함한다.
 RUN pip install .
 
-# 비루트 실행. uid를 1000으로 못박는다 — 호스트 ./data가 ubuntu(uid 1000) 소유로
-# chown되므로(deploy.yml) 여기가 어긋나면 /data/state에 이력을 못 써 로컬 폴백으로 떨어진다.
+# 비루트 실행. uid를 1000으로 못박는다 — /data는 chunker-state PVC가 마운트되는 자리이고
+# 쓰기 권한이 uid에 달려 있어서, 여기가 바뀌면 /data/state에 이력을 못 써 로컬 폴백으로
+# 떨어진다(runlog.py). 폴백이 뜨면 이력이 파드와 함께 사라진다.
 RUN useradd --create-home --uid 1000 app && chown -R app:app /app
 USER app
 
 # 상시 데몬(worker.py) — 주기마다 ingest_many + rebuild_search_terms를 돌린다.
 # SIGTERM을 받으면 진행 중인 문서까지만 하고 멈춘다 — worker가 신호를 CLI에 전달하고
-# CLI가 문서 경계에서 접는다. 유예는 compose의 stop_grace_period가 정한다.
-# 일회성 실행은 `docker compose run --rm chunker python ingest.py ...`.
-# 마지막 인덱싱 성공 시각으로 건강을 판정한다 — 프로세스는 살아 있는데 매 주기 실패하는
-# 좀비를 프로세스 생존만으로는 못 잡기 때문. compose의 restart 정책은 unhealthy로 재시작하지
-# 않으므로(그건 Swarm 기능) 이건 자가치유가 아니라 `docker ps` STATUS로 드러내는 신호다.
+# CLI가 문서 경계에서 접는다. 유예는 파드의 terminationGracePeriodSeconds가 정한다.
+#
+# 아래 HEALTHCHECK는 로컬 docker 실행에서만 의미가 있다 — k8s는 이미지의 HEALTHCHECK를
+# 읽지 않고, 차트는 probe를 일부러 두지 않는다(배치 워커라 대기 구간이 길어서 liveness를
+# 걸면 적재 중에 재시작된다). 클러스터에서 좀비를 잡는 경로는 ServiceMonitor가 수집하는
+# insurance_chunker_last_success_timestamp_seconds 알림이다.
 HEALTHCHECK --interval=5m --timeout=10s --start-period=1m --retries=3 \
     CMD ["python", "/app/healthcheck.py"]
 

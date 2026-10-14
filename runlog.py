@@ -53,8 +53,9 @@ def now_iso() -> str:
 def state_dir() -> Path:
     """상태 디렉터리를 만들어 돌려준다. 쓸 수 없으면 ./.state로 폴백한다.
 
-    폴백은 로컬 개발·CI를 위한 것이다. 운영에선 /data가 호스트 볼륨으로 마운트돼 있다
-    (deploy/docker-compose.prod.yml). 폴백이 뜨면 이력이 컨테이너와 함께 사라지므로 경고한다.
+    폴백은 로컬 개발·CI를 위한 것이다. 운영에선 /data에 chunker-state PVC가 마운트돼 있다
+    (K8s-manifests의 charts/etl-chunker). 폴백이 뜨면 이력이 파드와 함께 사라지므로 경고한다.
+    증분 처리(SKIPPED 판정)의 근거가 이 디렉터리라, 유실되면 다음 주기가 전체 재적재가 된다.
     """
     global _dir_cache
     if _dir_cache is not None:
@@ -175,7 +176,7 @@ def record_run(summary: dict[str, Any]) -> dict[str, Any]:
 
     데몬 건강 판정은 여기서 하지 않는다 — 한 사이클은 적재 + search_terms 재구성까지이고
     그 전체 성패를 아는 건 worker뿐이라 record_cycle이 따로 맡는다. 이 CLI는 일회성
-    (docker compose run)으로도 돌므로 그때는 사이클 기록 없이 이 줄만 남는다.
+    (kubectl exec)으로도 돌므로 그때는 사이클 기록 없이 이 줄만 남는다.
     """
     rec = {"at": now_iso(), **summary}
     _append(_RUNS, rec)

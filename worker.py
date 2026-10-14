@@ -1,7 +1,7 @@
 """정기 인덱싱 데몬.
 
-호스트 cron 대신 컨테이너가 스스로 주기를 관리한다(brbs-corpus-worker와 같은 방식):
-`docker ps`에 상시 노출되고, 로그는 `docker logs brbs-insurance-chunker`로 본다.
+CronJob 대신 컨테이너가 스스로 주기를 관리한다(corpus-worker와 같은 방식). 그래서 운영에서는
+상주 Deployment로 뜨고, 로그는 `kubectl logs -f deploy/insurance-chunker`로 본다.
 
 한 사이클 = 적재(신규/변경 문서만 doc_hash 멱등) → rebuild_search_terms(BM25 용어).
 CLI를 subprocess로 부른다 — 한 사이클이 죽어도 데몬은 살아 다음 주기를 계속한다.

@@ -48,8 +48,9 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
 pip install -e ".[dev]"
 ```
 
-VLM 표 추출은 기본으로 켜져 있고, 같은 호스트의 **Ollama**(`qwen3-vl:8b-instruct`)에
-OpenAI 호환 `/v1/chat/completions`로 붙는다. 이미지에 추가 의존이 없다.
+VLM 표 추출은 기본으로 켜져 있고, OpenAI 호환 `/v1/chat/completions`를 쓰는 서버에 붙는다
+(`VLM_URL`). 로컬 개발은 Ollama(`qwen3-vl:8b-instruct`), 운영은 클러스터의 vLLM이다.
+이미지에 추가 의존이 없다.
 
 | 백엔드 | 준비물 |
 |---|---|
@@ -258,7 +259,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `EMBED_BACKEND` | `ollama` | `ollama` \| `sentence_transformers` (BGE-M3 전환) |
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
 | `VLM_BACKEND` | `local` | `local` \| `surya` \| `off` |
-| `VLM_URL` | `http://localhost:11434` | `local` 백엔드 서버 (같은 호스트 Ollama) |
+| `VLM_URL` | `http://localhost:11434` | `local` 백엔드 서버. 운영은 차트가 `http://vllm-qwen3vl:8000` |
 | `VLM_MODEL` | `qwen3-vl:8b-instruct` | Ollama는 필수. llama-server면 비운다 |
 | `VLM_PROMPT` | (한국어 표 변환 지시) | PaddleOCR-VL이면 `Table Recognition:` 로 |
 | `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
@@ -269,11 +270,11 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VISION_MAX_PAGES` | `50` | 문서당 VLM 호출 상한. 넘는 페이지는 PyMuPDF/pdfplumber 결과만 쓴다 |
 | `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
 | `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
-| `INGEST_CONCURRENCY` | `1` | 동시 처리 문서 수 (프로세스). 호스트 vCPU 4 기준 2가 현실적 |
+| `INGEST_CONCURRENCY` | `1` | 동시 처리 문서 수 (프로세스). 노드 vCPU 4 기준 2가 현실적 |
 | `HEALTH_GRACE_FACTOR` | `1.5` | 헬스체크 허용 배수 (마지막 성공 기준) |
 | `DISCORD_WEBHOOK_INGEST` | — | 사이클 결과 알림 웹훅 (없으면 알림만 생략) |
 | `INGEST_NOTIFY` | `always` | `always` \| `failure` |
-| `LOG_FORMAT` | `text` | `text` \| `json` (운영은 compose가 `json`) |
+| `LOG_FORMAT` | `text` | `text` \| `json` (운영은 차트가 `json`) |
 | `LOG_LEVEL` | `INFO` | 루트 로거 레벨 |
 | `METRICS_PORT` | `9101` | Prometheus `/metrics` 포트 (`0`이면 노출 안 함) |
 
@@ -286,7 +287,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 
 ### 무엇이 남나
 
-`INGEST_STATE_DIR`(기본 `/data/state`, 호스트 볼륨이라 컨테이너를 다시 만들어도 유지):
+`INGEST_STATE_DIR`(기본 `/data/state`, `chunker-state` PVC라 파드를 다시 만들어도 유지):
 
 | 파일 | 내용 |
 |---|---|
@@ -342,14 +343,29 @@ insurance_chunker_phase_duration_seconds_total{phase="parse|chunk|embed|store"}
 히스토그램은 두지 않는다 — 주당 문서 수백 건이면 p95를 낼 표본이 안 된다. 분포는
 `metrics.py`와 Loki가 맡는다.
 
+수집은 메트릭 전용 Service(`insurance-chunker-metrics:9101`)를 ServiceMonitor가 60초마다
+긁는 경로다. probe가 없는 워크로드라 **이게 좀비 판정의 유일한 경로**다 — 주기가 7일이어서
+이것 없이는 인덱싱이 멈춰도 몇 주 동안 아무도 모른다.
+
 ```bash
+# 파드에서 바로
+kubectl exec deploy/insurance-chunker -- \
+  python -c "import urllib.request;print(urllib.request.urlopen('http://localhost:9101/metrics').read().decode())" \
+  | grep insurance_chunker
+
+# 로컬 docker 실행이면
 curl -s localhost:9101/metrics | grep insurance_chunker
 ```
 
 ### 로그
 
-운영에서는 JSON 한 줄 = 로그 하나다(`LOG_FORMAT=json`, compose가 지정). Alloy가 이걸
-파싱해 `level`을 Loki 라벨로 올린다. 로컬 기본값은 `text`라 사람이 읽기 좋다.
+운영에서는 JSON 한 줄 = 로그 하나다(`LOG_FORMAT=json`, 차트가 지정). 클러스터의 Alloy가
+`/var/log/pods`에서 걷어 파싱하고 `level`을 Loki 라벨로 올린다. 로컬 기본값은 `text`라
+사람이 읽기 좋다.
+
+```bash
+kubectl logs -f deploy/insurance-chunker
+```
 
 문서·사이클 결과에는 집계용 필드가 실린다 — `/metrics` 없이 로그만으로도 알림을 걸 수 있다.
 
@@ -363,73 +379,115 @@ curl -s localhost:9101/metrics | grep insurance_chunker
 
 ### 헬스체크
 
-`docker ps`의 STATUS 열에 뜬다. 판정 기준은 **마지막 인덱싱 성공 시각** —
-프로세스는 살아 있는데 매 주기 실패하는 좀비를 프로세스 생존만으로는 못 잡기 때문이다.
+판정 기준은 **마지막 인덱싱 성공 시각** — 프로세스는 살아 있는데 매 주기 실패하는 좀비를
+프로세스 생존만으로는 못 잡기 때문이다. 주기 × `HEALTH_GRACE_FACTOR`를 넘기면 불건강.
+
+**클러스터에서는 이걸 probe로 쓰지 않는다.** 배치 워커라 대기 구간이 길어서 liveness를 걸면
+적재 중에 재시작되고, k8s는 이미지의 `HEALTHCHECK`도 읽지 않는다. 그래서 차트는 probe를
+두지 않고, 같은 판정을 Prometheus 쪽에서 한다 —
+`time() - insurance_chunker_last_success_timestamp_seconds`가 주기 × GRACE를 넘으면 알림.
+수집 경로는 메트릭 전용 Service와 ServiceMonitor다(아래 참고).
+
+손으로 볼 때는 이렇게 부른다.
 
 ```bash
-docker inspect --format '{{.State.Health.Status}}' brbs-insurance-chunker
-docker exec brbs-insurance-chunker python /app/healthcheck.py
+kubectl exec deploy/insurance-chunker -- python /app/healthcheck.py
 ```
 
-주기 × `HEALTH_GRACE_FACTOR`를 넘기면 unhealthy. compose의 `restart` 정책은 unhealthy로
-재시작하지 않으므로(그건 Swarm 기능) 자가치유가 아니라 드러내기 위한 신호다.
+로컬 `docker run`에서는 이미지의 `HEALTHCHECK`가 같은 스크립트를 돌려 `docker ps`의 STATUS에
+띄운다. 어느 쪽이든 자가치유가 아니라 드러내기 위한 신호다.
 
 ### 배포 구성
 
-`brbs-etl`(g4dn.xlarge / T4 16GB / vCPU 4 / RAM 16GiB) 한 대에 컨테이너 셋이 함께 뜬다.
+`soma-k8s` 클러스터의 GPU 워커 노드 `brbs-etl`(g4dn.xlarge / T4 16GB / vCPU 4 / RAM 16GiB)에
+파드 넷이 함께 뜬다. 노드는 `workload=etl` 라벨과 `workload=etl:NoSchedule` taint로 묶여 있어
+ETL 워크로드만 들어온다. 모두 `default` 네임스페이스다.
 
-| 컨테이너 | 레포 | 역할 | GPU |
+| 파드 | 레포 | 역할 | GPU |
 |---|---|---|---|
-| `brbs-insurance-chunker` | 이 레포 | S3 → pgvector 인덱싱 (7일 주기 데몬) | 임베딩·VLM을 **Ollama 경유**로 사용 |
-| `brbs-ollama` | — | 임베딩(`qwen3-embedding:0.6b`) · VLM(`qwen3-vl:8b-instruct`) | 직접 사용 |
-| `brbs-corpus-worker` | SM17-YoonDongJu/AI | Notion → S3 약관 스테이징 | 없음 |
+| `insurance-chunker` | 이 레포 | S3 → pgvector 인덱싱 (7일 주기 데몬) | 없음 — HTTP로 아래 둘을 쓴다 |
+| `ollama` | — | 임베딩(`qwen3-embedding:0.6b`) | `nvidia.com/gpu: 1` |
+| `vllm-qwen3vl` | — | 표 추출 VLM(`qwen3-vl:8b-instruct`) | `nvidia.com/gpu: 1` |
+| `corpus-worker` | SM17-YoonDongJu/AI | Notion → S3 약관 스테이징 | 없음 |
 
-우리 컨테이너는 GPU를 직접 잡지 않는다 — HTTP로 `brbs-ollama`에 요청할 뿐이다. 그래서
-compose에 GPU 예약이 없고, 이미지에도 CUDA 의존이 없다. 양쪽 다 `network_mode: host`라
-`localhost:11434`로 닿는다.
+물리 GPU는 한 장이고 device plugin의 time-slicing으로 2개로 광고해 ollama와 vLLM이 나눠 쓴다.
+우리 파드는 GPU를 직접 잡지 않으므로 이미지에 CUDA 의존이 없다.
 
-vCPU가 4개이고 셋이 나눠 쓰므로 `INGEST_CONCURRENCY` 상한이 낮다(아래 참고).
+호출은 `localhost`가 아니라 **Service 이름**으로 한다 — 파드마다 네트워크 namespace가 따로라
+`localhost`는 자기 파드를 가리킨다. 차트가 주소를 환경변수로 넣는다.
+
+```
+OLLAMA_URL = http://ollama:11434            임베딩
+VLM_URL    = http://vllm-qwen3vl:8000       표 추출
+```
+
+적재 진행 상태(`/data/state`)는 `chunker-state` PVC(local-path, 1Gi)에 있다. 증분 처리의
+근거라 유실되면 전체 재적재가 되므로, 이 앱의 Argo CD Application은 `prune`을 켜지 않는다.
+
+vCPU가 4개이고 파드들이 나눠 쓰므로 `INGEST_CONCURRENCY` 상한이 낮다(아래 참고).
+
+노드 전제·선행 리소스·인수 절차는 K8s-manifests의 `envs/dev/etl.md`에 있다.
 
 ### 배포와 롤백
 
-`main`에 머지되면 `deploy.yml`이 이미지를 빌드해 ECR로 올리고, SSM으로 EC2에서
-`deploy/remote-deploy.sh`를 실행한다. 그 스크립트가 pull → `up -d` → **검증 → 실패 시 롤백**까지 한다.
+GitOps다. **이 레포의 CI는 클러스터에 손을 대지 않는다** — 이미지를 올리고, 배포 설정
+레포의 이미지 태그를 고쳐 커밋하는 것까지가 전부다. 적용은 클러스터 안의 Argo CD가 한다.
 
-검증 항목(최대 90초 대기):
+```
+main 머지
+  └─ deploy.yml
+       ├─ ci.yml 재사용 (ruff · import 스모크 · pytest)
+       ├─ ECR push  soma/insurance_chunker:<sha7>  (+ :latest)
+       └─ K8s-manifests의 envs/dev/etl-chunker.values.yaml 의
+          image.tag 를 <sha7> 로 커밋                 ← 여기까지가 CI
+                │
+                ▼
+          Argo CD (etl-chunker-dev) 가 3분마다 확인 → 클러스터에 적용
+```
 
-| 확인 | 왜 |
-|---|---|
-| `RestartCount` 증가 | 크래시루프. `docker ps`만 보면 잠깐 떠 있는 걸 성공으로 착각한다 |
-| 컨테이너 `running` | 기본 |
-| 로그에 `인덱싱 데몬 시작` | 프로세스는 살아 있는데 `main`에 못 들어간 경우(`.env` 오류 등)를 잡는다 |
+태그는 **커밋 해시(sha7)**다. `:latest`처럼 떠다니는 태그를 쓰면 이미지를 덮어써도
+매니페스트 문자열이 그대로여서 Argo CD가 아무 일도 하지 않는다. 태그가 바뀌는 커밋 자체가
+배포 신호다.
 
-실패하면 직전에 돌던 이미지 태그로 자동 롤백하고, **롤백이 성공해도 배포는 실패로 보고한다**
-(초록불이 뜨면 아무도 안 본다). 첫 배포이거나 같은 태그 재배포라 되돌릴 지점이 없으면
-`롤백 대상 없음`을 남기고 실패한다.
+K8s-manifests에 커밋할 때는 `brbs-manifests-ci` GitHub App 토큰을 쓴다 — 그 레포 하나의
+contents 쓰기로만 범위가 좁혀져 있고, CI는 AWS·클러스터 자격증명을 들지 않는다.
 
-배포 성공 시 그 태그를 호스트 `.env`의 `IMAGE_TAG`에 기록한다 — 사람이 호스트에서
-`docker compose up -d`를 쳐도 같은 이미지가 뜨게 하려는 것.
+> **지금은 자동 Sync가 아니다.** `etl-chunker-dev` Application이 `syncPolicy: {}`라, 태그가
+> 커밋돼도 파드는 바뀌지 않고 Argo CD UI에서 Sync를 눌러야 반영된다. 넘겨받는 첫 Sync를
+> diff로 확인하려고 일부러 수동으로 둔 상태다. `automated`로 바뀌면 이 문단은 사라진다.
+
+**롤백**은 K8s-manifests에서 태그 커밋을 revert하는 게 가장 빠르다 — 빌드도 CI도 거치지 않고
+Argo CD가 바로 되돌린다. 배포 이력이 곧 그 레포의 git 로그다.
+
+Actions에서 `Deploy`를 `workflow_dispatch`로 돌리고 `image_tag`에 옛 `sha7`을 넣는 길도
+남아 있다. 이때는 빌드와 CI를 건너뛰고 그 태그를 커밋만 한다 — `main`이 깨져서 롤백하는
+상황인데 CI가 막으면 복구를 못 하기 때문이다.
+
+Discord 알림(`notify` 잡)은 **"태그를 커밋했다"까지**를 뜻한다. 실제로 파드가 떴는지는
+Argo CD만 아니까, 초록불을 배포 완료로 읽지 말 것.
 
 #### 시크릿
 
-`DATABASE_URL` · `DISCORD_WEBHOOK_INGEST` · `S3_BUCKET`은 SSM Parameter Store(SecureString)에
-두고, 배포할 때 `remote-deploy.sh`가 내려받아 호스트 `.env`에 쓴다.
+`DATABASE_URL`만 비밀값이다. AWS Secrets Manager의 `app/insurance-chunker-dev`에 두고,
+External Secrets Operator가 1시간마다 읽어 `insurance-chunker-secrets` Secret으로 만든다.
+차트는 그 Secret을 `secretKeyRef`로 참조할 뿐이라 **레포에는 "어떤 키를 가져올지"만 있고 값이
+없다**(K8s-manifests의 `envs/dev/manifests/externalsecret-insurance-chunker-secrets.yaml`).
 
 ```bash
-aws ssm put-parameter --type SecureString --overwrite \
-  --name /brbs/insurance-chunker/dev/DATABASE_URL --value 'postgresql://...'
+aws secretsmanager put-secret-value --secret-id app/insurance-chunker-dev \
+  --secret-string '{"DATABASE_URL":"postgresql://..."}'
 ```
 
-디스크의 평문을 없애는 게 목적은 아니다 — compose가 `env_file`로 읽어야 하는 이상 기동
-시점에 평문이 필요하다. 노리는 건 그 앞단이다: 사람이 호스트에 비밀번호를 손으로 넣지 않고,
-로테이션이 "SSM 값 변경 + 재배포"로 끝나며, 열람이 CloudTrail에 남고, 호스트를 다시 만들어도
-자동 복구된다.
+값을 바꿔도 **파드는 자동으로 재시작되지 않는다.** ESO가 Secret을 갱신해도 이미 뜬 파드는
+기동 시점에 읽은 환경변수를 계속 쓴다. 교체했으면 `kubectl rollout restart
+deploy/insurance-chunker`까지 해야 한다.
 
-파라미터가 없으면 기존 `.env` 값을 그대로 둔다 — 한 번에 이전하지 않아도 되게.
+`S3_BUCKET`·`AWS_REGION`은 비밀이 아니라 차트의 평문 환경변수다. S3·Secrets Manager 접근은
+노드 IAM 역할로 한다.
 
-**수동 롤백**은 Actions에서 `Deploy` 워크플로를 `workflow_dispatch`로 실행하고
-`image_tag`에 되돌릴 `sha7`을 넣으면 된다. 이때는 빌드도 CI도 건너뛴다 — `main`이 깨져서
-롤백하는 상황인데 CI가 막으면 복구를 못 하기 때문이다.
+`DISCORD_WEBHOOK_INGEST`는 **현재 dev 클러스터에 설정돼 있지 않다** — 사이클 결과 알림이
+조용히 생략된다(`notify.py`는 웹훅이 없으면 건너뛴다). 켜려면 Secrets Manager에 값을 넣고
+차트에 환경변수를 추가해야 한다.
 
 ### 문서 동시 처리
 
@@ -451,7 +509,7 @@ INGEST_CONCURRENCY=2 python ingest_catalog.py
 `spawn`을 명시한다 — `fork`면 부모의 psycopg2 커넥션과 boto3 상태를 물려받는데 둘 다
 fork-safe하지 않다.
 
-**동시성 상한은 호스트가 정한다.** vCPU가 4개이고 `corpus_worker`·Ollama와 나눠 쓰므로
+**동시성 상한은 노드가 정한다.** vCPU가 4개이고 `corpus-worker`·ollama·vLLM 파드와 나눠 쓰므로
 2가 현실적이고 3부터는 실측이 필요하다. `embed`는 GPU가 큐잉하므로 여기를 올린다고
 비례해서 빨라지지 않는다 — T4 실측에서 임베딩 부하가 이미 70W 캡을 넘겨 부스트 클럭이
 1590→1200MHz로 깎인다.
@@ -495,7 +553,7 @@ items.jsonl                                boundary_confidence: "ok" | "weak" | 
 구분할 수 없다.** 대신 "한 문서에 임베딩 0개"라는 명백한 신호를 본다.
 
 ```bash
-docker exec brbs-insurance-chunker python /app/slo.py
+kubectl exec deploy/insurance-chunker -- python /app/slo.py
 ```
 
 큰 변경 전 사람이 한 번 돌리는 `deploy_check.py`와는 역할이 다르다 — 그쪽은 asyncpg를
