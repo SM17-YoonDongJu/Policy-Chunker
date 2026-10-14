@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 _PREFIX = "insurance_chunker"
 # last_cycle_documents의 라벨 값 — 항상 전부 내보내 패널에 구멍이 안 생기게 한다.
 _STATUSES = ("ok", "empty", "skipped", "quarantined", "error")
+# vlm_calls_total의 라벨 값 — 0이어도 전부 내보낸다(타임아웃 비율 패널의 분모·분자).
+_VLM_OUTCOMES = ("table", "empty", "timeout", "error")
 
 
 def _iso_to_epoch(value: Any) -> float | None:
@@ -124,6 +126,23 @@ class RunlogCollector:
             phases.add_metric([phase], secs)
         yield phases
 
+        # phases의 parse는 텍스트·CPU 표·VLM·best-of를 한데 묶은 값이다. 그 안에서 GPU(VLM)가
+        # 얼마인지는 단계(stages) 기록으로만 보인다. 단계 분리 이전 이력에는 없다.
+        stage_totals, vlm_outcomes = _aggregate_stages()
+        stage_fam = CounterMetricFamily(f"{_PREFIX}_stage_duration_seconds_total",
+                                        "파이프라인 단계별 누적 소요(초)",
+                                        labels=["stage", "resource"])
+        for (stage, resource), secs in sorted(stage_totals.items()):
+            stage_fam.add_metric([stage, resource], secs)
+        yield stage_fam
+
+        vlm = CounterMetricFamily(f"{_PREFIX}_vlm_calls_total",
+                                  "결과별 누적 VLM 호출 수(table·empty·timeout·error)",
+                                  labels=["outcome"])
+        for outcome in _VLM_OUTCOMES:
+            vlm.add_metric([outcome], float(vlm_outcomes.get(outcome, 0)))
+        yield vlm
+
 
 def _max_retry() -> int:
     return int(os.environ.get("INGEST_MAX_RETRY", "3"))
@@ -144,6 +163,18 @@ def _aggregate_items() -> tuple[Counter, dict[str, float], int]:
         for phase, secs in (item.get("phases") or {}).items():
             phase_totals[phase] = phase_totals.get(phase, 0.0) + float(secs)
     return totals, phase_totals, chunks_total
+
+
+def _aggregate_stages() -> tuple[dict[tuple[str, str], float], Counter]:
+    """items.jsonl의 stages를 접어 (단계, 자원)별 누적 초와 VLM 결과별 호출 수를 만든다."""
+    totals: dict[tuple[str, str], float] = {}
+    outcomes: Counter = Counter()
+    for item in metrics_mod._read_jsonl("items.jsonl"):
+        for name, st in (item.get("stages") or {}).items():
+            key = (name, st.get("resource", "cpu"))
+            totals[key] = totals.get(key, 0.0) + float(st.get("seconds") or 0.0)
+        outcomes.update(((item.get("stages") or {}).get("vlm") or {}).get("outcomes") or {})
+    return totals, outcomes
 
 
 def start() -> bool:

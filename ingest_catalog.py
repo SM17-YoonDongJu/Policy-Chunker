@@ -367,6 +367,7 @@ def main() -> None:
                 "chunks": result.get("chunks", 0), "warnings": result.get("warnings", 0),
                 "elapsed_s": result.get("elapsed_s", 0.0), "phases": result.get("phases") or {},
                 "boundary_confidence": result.get("boundary_confidence"),
+                "stages": result.get("stages") or {},
             })
             if not args.dry_run:
                 # 이력 기록은 부모만 한다 — attempts.json 경합을 피하려는 것.
@@ -376,6 +377,7 @@ def main() -> None:
                     elapsed_s=result.get("elapsed_s", 0.0), phases=result.get("phases"),
                     error=result.get("error"), source="catalog",
                     boundary_confidence=result.get("boundary_confidence"),
+                    stages=result.get("stages"),
                     insurer=task["row"]["company"], product=task["row"]["product_name"])
 
     conn.close()

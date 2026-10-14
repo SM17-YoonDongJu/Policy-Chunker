@@ -121,3 +121,19 @@ def test_start_failure_does_not_raise(exp, monkeypatch):
     monkeypatch.setattr(prometheus_client, "start_http_server",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("address in use")))
     assert exp.start() is False
+
+
+def test_stage_and_vlm_counters_come_from_stage_records(exp):
+    """parse 안의 GPU(VLM) 몫은 단계 기록으로만 보인다. 이전 이력(stages 없음)이 섞여도 된다."""
+    exp._rl.record_item(sha256="old", name="old.pdf", status="OK", phases={"parse": 50.0})
+    exp._rl.record_item(sha256="a", name="a.pdf", status="OK", phases={"parse": 30.0},
+                        stages={"text": {"seconds": 5.0, "resource": "cpu"},
+                                "vlm": {"seconds": 20.0, "resource": "gpu",
+                                        "outcomes": {"table": 3, "timeout": 1}}})
+    s = _samples(exp)
+    key = "insurance_chunker_stage_duration_seconds_total|"
+    assert s[key + "[('resource', 'gpu'), ('stage', 'vlm')]"] == 20.0
+    assert s[key + "[('resource', 'cpu'), ('stage', 'text')]"] == 5.0
+    assert s["insurance_chunker_vlm_calls_total|[('outcome', 'timeout')]"] == 1.0
+    # 0이어도 라벨은 전부 나와야 비율 패널에 구멍이 안 생긴다
+    assert s["insurance_chunker_vlm_calls_total|[('outcome', 'error')]"] == 0.0

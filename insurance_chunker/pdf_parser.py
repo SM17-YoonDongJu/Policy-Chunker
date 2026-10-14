@@ -90,23 +90,11 @@ def parse_pdf(
     use_ocr: bool = True,
     use_vision: bool = True,
 ) -> list[PageResult]:
-    """전체 파싱: 텍스트 + 표(다중 소스 best-of). 최종 PageResult 반환."""
-    from .combine import select_best_tables
-    from .extractor import extract_tables_for_doc
+    """전체 파싱: 텍스트 + 표(다중 소스 best-of). 최종 PageResult 반환.
 
-    pages, page_numbers = parse_text(pdf_path, use_ocr=use_ocr)
+    단계(S1~S4)는 stages.parse가 나눠 부른다. 단계별 시간이 필요하면 그쪽을 직접 쓴다.
+    """
+    from .stages import parse
 
-    table_sources = extract_tables_for_doc(
-        pdf_path, page_numbers, use_vision=use_vision
-    )
-    best = select_best_tables(table_sources)
-
-    for page in pages:
-        entry = best.get(page.page_num)
-        if entry:
-            md, src = entry
-            page.tables = [{"markdown": md, "source": src}]
-
-    table_pages = sum(1 for p in pages if p.tables)
-    logger.info(f"표 부착 완료: {table_pages}페이지 (best-of)")
+    pages, _ = parse(pdf_path, use_ocr=use_ocr, use_vision=use_vision)
     return pages

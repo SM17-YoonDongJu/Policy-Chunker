@@ -1,0 +1,13 @@
+# 기준 변형. 다른 변형은 이것과 짝지어 비교한다.
+# ref: git ref(커밋·브랜치·태그) 또는 WORKTREE(커밋 안 된 변경 포함 현재 트리).
+# 단계 분리 CLI(stage_runner)가 들어간 커밋 이후만 돌릴 수 있다. main에 머지되면 그 커밋으로 고정한다.
+slug: baseline
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_TARGET: gap
+  VLM_DPI: "150"
+  VISION_MAX_PAGES: "50"
+status: applied
+applied_at: null
+note: 단계 분리 직후 상태 — Phase 1 기준선
