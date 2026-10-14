@@ -1,7 +1,7 @@
-"""컨테이너 헬스체크 — 데몬이 '살아 있지만 매 주기 실패하는' 좀비 상태를 잡는다.
+"""헬스체크 — 데몬이 '살아 있지만 매 주기 실패하는' 좀비 상태를 잡는다.
 
 프로세스 생존만으로는 부족하다. worker.py는 사이클이 실패해도 예외를 삼키고 다음 주기를
-기다리므로(데몬 생존 우선), 인덱싱이 몇 주째 안 되고 있어도 컨테이너는 running이다.
+기다리므로(데몬 생존 우선), 인덱싱이 몇 주째 안 되고 있어도 파드는 Running이다.
 그래서 '마지막 성공 적재 시각'을 건강 기준으로 삼는다.
 
 판정:
@@ -13,7 +13,10 @@
   INGEST_INTERVAL_SECONDS  주기(초). worker.py와 같은 값을 본다.
   HEALTH_GRACE_FACTOR      허용 배수. 기본 1.5 (한 주기를 놓치는 정도는 봐주고, 두 주기는 아니다).
 
-사용: docker-compose.prod.yml의 healthcheck가 `python /app/healthcheck.py`로 부른다.
+사용: 이미지의 HEALTHCHECK가 부른다 — 로컬 docker 실행에서만 동작한다. k8s는 이미지의
+HEALTHCHECK를 읽지 않고 차트도 probe를 두지 않으므로, 클러스터에서 같은 판정을 하는 것은
+insurance_chunker_last_success_timestamp_seconds 알림이다(식도 같다: 주기 x GRACE).
+손으로 볼 때는 `kubectl exec deploy/insurance-chunker -- python /app/healthcheck.py`.
 """
 from __future__ import annotations
 

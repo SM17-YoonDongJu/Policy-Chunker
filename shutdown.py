@@ -1,8 +1,13 @@
-"""정지 신호 처리 — 배포가 컨테이너를 재생성할 때 문서 경계에서 멈추기 위한 공용 스위치.
+"""정지 신호 처리 — 배포가 파드를 재생성할 때 문서 경계에서 멈추기 위한 공용 스위치.
 
-배포는 `docker compose up -d --force-recreate`로 컨테이너를 다시 만든다. 그때 SIGTERM은
-PID 1(worker.py)에만 가고, stop_grace_period가 지나면 SIGKILL이 프로세스를 전부 끊는다.
-그 사이에 하던 일을 접고 이력을 남기는 것이 여기 목적이다.
+배포는 이미지 태그가 바뀐 Deployment를 Recreate 전략으로 다시 띄운다(RWO PVC를 독점해
+롤링이 안 된다). 그때 SIGTERM은 PID 1(worker.py)에만 가고, terminationGracePeriodSeconds가
+지나면 SIGKILL이 프로세스를 전부 끊는다. 그 사이에 하던 일을 접고 이력을 남기는 것이
+여기 목적이다.
+
+※ 차트가 terminationGracePeriodSeconds를 지정하지 않아 현재 유예는 k8s 기본값 30초다.
+  문서 하나가 수십 초~분이라 아래 "문서 경계에서 접기"가 제때 끝나지 못할 수 있다
+  (docker compose 시절에는 이 값을 120초로 늘려뒀다).
 
 문서 하나를 중간에 끊지는 않는다. 저장 트랜잭션의 단위가 문서이고, 끊어봐야 다음 주기에
 그 문서를 처음부터 다시 해야 하기 때문이다. 그래서 CLI는 문서와 문서 사이에서만

@@ -24,7 +24,8 @@ prometheus_client를 적재 CLI 안에 심으면 프로세스 종료와 함께 �
 
 환경변수:
   METRICS_PORT     리슨 포트. 기본 9101. 0이면 노출하지 않는다.
-  METRICS_ADDR     바인드 주소. 기본 0.0.0.0 (원격 스크랩 — 접근은 보안그룹으로 통제).
+  METRICS_ADDR     바인드 주소. 기본 0.0.0.0 (파드 밖에서 스크랩 — 노출 범위는 메트릭
+                   전용 ClusterIP Service가 정하고, ServiceMonitor가 그것만 긁는다).
 """
 from __future__ import annotations
 
@@ -186,7 +187,7 @@ def start() -> bool:
     if port <= 0:
         logger.info("METRICS_PORT=0 — /metrics 노출 안 함")
         return False
-    addr = os.environ.get("METRICS_ADDR", "0.0.0.0")  # noqa: S104 - 접근은 보안그룹이 통제
+    addr = os.environ.get("METRICS_ADDR", "0.0.0.0")  # noqa: S104 - 노출 범위는 ClusterIP Service
     try:
         from prometheus_client import REGISTRY, start_http_server
 
