@@ -102,9 +102,6 @@ jobs:
 
   # 3) K8s-manifests의 dev 이미지 태그를 바꿔 커밋한다. 클러스터 권한은 쓰지 않는다.
   #
-  # ⚠️ ETL 앱은 아직 수동 Sync다(Application의 syncPolicy: {}). 이 커밋만으로는 파드가 바뀌지
-  #    않고 Argo CD에서 Sync를 눌러야 반영된다. automated로 전환되면 이 문단을 지운다.
-  #
   # 떠다니는 태그(:latest)는 매니페스트 문자열이 그대로여서 Argo CD가 아무 일도 하지 않으므로
   # 커밋 해시 태그(sha7)를 쓴다.
   update-manifests:
