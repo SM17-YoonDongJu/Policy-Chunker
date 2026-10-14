@@ -59,6 +59,7 @@ def stage_breakdown(docs: list[dict[str, Any]], cpu_workers: int = 1,
     by_resource: dict[str, float] = defaultdict(float)
     vlm_lat: list[float] = []
     vlm_outcomes: Counter = Counter()
+    vlm_truncated = 0
     measured = [d for d in docs if d.get("stages")]
     for d in measured:
         for name, st in d["stages"].items():
@@ -69,6 +70,7 @@ def stage_breakdown(docs: list[dict[str, Any]], cpu_workers: int = 1,
         v = d["stages"].get("vlm") or {}
         vlm_lat.extend(v.get("latencies") or [])
         vlm_outcomes.update(v.get("outcomes") or {})
+        vlm_truncated += int(v.get("truncated") or 0)
 
     total = sum(by_resource.values()) or 1.0
     t_actual = round(sum(float(d.get("elapsed_s") or 0.0) for d in measured), 1)
@@ -91,6 +93,8 @@ def stage_breakdown(docs: list[dict[str, Any]], cpu_workers: int = 1,
         "vlm": {
             "calls": calls, "outcomes": dict(vlm_outcomes),
             "timeout_rate": round(vlm_outcomes["timeout"] / calls, 3) if calls else None,
+            # max_tokens에서 잘린 응답 — 생성 시간을 상한까지 쓰고 표 끝을 잃는다
+            "truncated_rate": round(vlm_truncated / calls, 3) if calls else None,
             "latency_p50_s": _pct(vlm_lat, 0.5) if vlm_lat else None,
             "latency_p95_s": _pct(vlm_lat, 0.95) if vlm_lat else None,
         },
@@ -187,6 +191,7 @@ def print_stage_breakdown(sb: dict[str, Any]) -> None:
           f"GPU 동시도 {b['gpu_parallel']})")
     if v["calls"]:
         print(f"VLM 호출 {v['calls']}건 {v['outcomes']} | 타임아웃 {v['timeout_rate']:.1%} "
+              f"| 잘림 {v['truncated_rate']:.1%} "
               f"| p50 {v['latency_p50_s']}s p95 {v['latency_p95_s']}s")
 
 

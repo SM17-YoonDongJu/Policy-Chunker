@@ -357,7 +357,8 @@ def extract_vision_local(fitz_page, pno: int, *,
                              timeout=(VLM_CONNECT_TIMEOUT, VLM_TIMEOUT))
         resp.raise_for_status()
         body = resp.json()
-        out = body["choices"][0]["message"]["content"].strip()
+        choice = body["choices"][0]
+        out = choice["message"]["content"].strip()
     except Exception as e:
         stat.update(seconds=round(time.perf_counter() - t0, 2), outcome=_vlm_outcome(e))
         _record_vlm_call(stat)
@@ -371,7 +372,11 @@ def extract_vision_local(fitz_page, pno: int, *,
     usage = body.get("usage") or {}
     stat.update(seconds=round(time.perf_counter() - t0, 2),
                 prompt_tokens=usage.get("prompt_tokens"),
-                completion_tokens=usage.get("completion_tokens"))
+                completion_tokens=usage.get("completion_tokens"),
+                # "length"면 max_tokens(4096)에서 잘렸다. 운영에서 VLM 지연 p90(222초)이
+                # 4096토큰을 생성 속도(18.7토큰/초)로 끝까지 뽑는 시간과 같았다 —
+                # 잘린 표는 시간도 품질도 잃는다.
+                finish_reason=choice.get("finish_reason"))
     md = _parse_vlm_output(out)
     stat["outcome"] = "table" if md else "empty"
     _record_vlm_call(stat)

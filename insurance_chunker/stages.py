@@ -135,6 +135,7 @@ def vlm_call_summary(calls: list[dict]) -> dict[str, Any]:
     px = [c["image_px"] for c in calls if c.get("image_px")]
     return {
         "outcomes": outcomes,
+        "truncated": sum(1 for c in calls if c.get("finish_reason") == "length"),
         "latencies": lat,
         "latency_p50": _pct(lat, 0.5),
         "latency_p95": _pct(lat, 0.95),
