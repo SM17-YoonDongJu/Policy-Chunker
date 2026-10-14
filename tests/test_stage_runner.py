@@ -184,3 +184,18 @@ def test_cli_prints_stage_records(runner, fake_vlm, mixed_pdf, tmp_path, capsys)
     recs = json.loads(capsys.readouterr().out)
     assert [r["stage"] for r in recs] == ["text", "tables_cpu", "vlm", "combine"]
     assert recs[2]["resource"] == "gpu"
+
+
+def test_report_follows_the_dry_run_contract(runner, fake_vlm, mixed_pdf, tmp_path):  # noqa: F811
+    """벤치마크는 chunker 내부를 import하지 않고 이 파일만 읽는다. 청크 본문은 없어야 한다."""
+    sr = runner()
+    report_path = tmp_path / "r.json"
+    sr.main(["--pdf", mixed_pdf, "--artifacts", str(tmp_path / "a"), "--to", "chunk",
+             "--doc-type", "plain", "--report", str(report_path)])
+    rep = json.loads(report_path.read_text())
+    import ingest_many
+    assert rep["contract"] == ingest_many.DRY_RUN_CONTRACT
+    assert {"doc_hash", "stages", "tables_by_page", "summary", "elapsed_s"} <= rep.keys()
+    assert "chunks" not in rep and "content" not in json.dumps(rep["summary"])
+    assert rep["elapsed_s"] == pytest.approx(sum(s["seconds"] for s in rep["stages"].values()),
+                                             abs=0.05)

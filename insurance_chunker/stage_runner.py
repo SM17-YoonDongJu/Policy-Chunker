@@ -253,6 +253,46 @@ def run(
     return records
 
 
+# ── 리포트 ───────────────────────────────────────────────────────────────────
+
+REPORT_CONTRACT = 2  # ingest_many.DRY_RUN_CONTRACT와 같은 형식
+
+
+def write_report(path: Path, artifacts: Path, meta: DocMeta, records: list[dict]) -> dict:
+    """단계 기록 + 페이지별 표 지문 + 청크 요약. 벤치마크는 이 파일만 읽는다.
+
+    청크 본문은 싣지 않는다 — 약관 원문을 벤치마크 결과에 복제하지 않기 위해서다.
+    """
+    by = {r["stage"]: r for r in records}
+    report: dict[str, Any] = {
+        "contract": REPORT_CONTRACT, "doc_hash": meta.doc_hash, "source_pdf": meta.source_pdf,
+        "code": code_fingerprint(),
+        "stages": {r["stage"]: {"seconds": r["seconds"], "resource": r["resource"],
+                                "cached": r["cached"], **r["metrics"]} for r in records},
+        # 캐시에서 읽은 단계도 그 산출물을 만들 때 잰 시간이 들어 있으므로 합이 곧 처리 시간이다.
+        "elapsed_s": round(sum(r["seconds"] for r in records), 2),
+    }
+    if "combine" in by:
+        cpath = Path(by["combine"]["path"])
+        pages = _load_output("combine", json.loads(cpath.read_text())["output"], cpath)
+        report["tables_by_page"] = stages.table_fingerprint(pages)
+    if "chunk" in by:
+        cpath = Path(by["chunk"]["path"])
+        chunked = _load_output("chunk", json.loads(cpath.read_text())["output"], cpath)
+        tokens = [c.token_count for c in chunked.chunks]
+        report["summary"] = {
+            "chunk_count": len(chunked.chunks),
+            "tok_avg": round(sum(tokens) / len(tokens)) if tokens else 0,
+            "over_600": sum(1 for t in tokens if t > 600),
+            "warnings": len(chunked.warnings),
+            "boundary_confidence": chunked.report.get("boundary_confidence"),
+            "articles": sorted({c.article_number for c in chunked.chunks if c.article_number}),
+        }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -271,6 +311,8 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--ollama-url", default=None)
     p.add_argument("--embed-model", default=None)
     p.add_argument("--json", action="store_true", help="단계 기록을 JSON으로 출력")
+    p.add_argument("--report", default=None,
+                   help="dry-run 결과와 같은 계약(contract 2)의 요약 JSON을 이 경로에 쓴다")
     return p.parse_args(argv)
 
 
@@ -291,6 +333,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                   use_vision=not args.no_vision, target=args.target_tokens,
                   hard_max=args.hard_max_tokens, ollama_url=args.ollama_url,
                   embed_model=args.embed_model)
+    if args.report:
+        write_report(Path(args.report), Path(args.artifacts), meta, records)
     if args.json:
         print(json.dumps(records, ensure_ascii=False, indent=2))
         return

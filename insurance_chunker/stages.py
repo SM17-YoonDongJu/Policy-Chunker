@@ -188,7 +188,9 @@ def table_fingerprint(pages: list[PageResult]) -> dict[str, dict[str, Any]]:
         md = p.tables[0]["markdown"]
         out[str(p.page_num)] = {"source": p.tables[0]["source"],
                                 "sha256": hashlib.sha256(md.encode()).hexdigest()[:16],
-                                "chars": len(md)}
+                                "chars": len(md),
+                                # VLM 프롬프트가 '읽기 어려운 셀'에 쓰게 한 표식
+                                "unknown_cells": md.count("[?]")}
     return out
 
 
