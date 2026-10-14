@@ -107,7 +107,41 @@ def vlm(pdf_path: str, cpu: TablesCpu, use_vision: bool = True) -> StageResult:
         "calls": extractor._vision_call_count,
         "tables": len(tables),
         "circuit_open": extractor.vision_circuit_open(),
+        **vlm_call_summary(extractor.vision_page_stats()),
     })
+
+
+def _pct(values: list[float], q: float) -> Optional[float]:
+    """가장 가까운 순위 방식 백분위수(metrics.py와 같은 규칙)."""
+    if not values:
+        return None
+    s = sorted(values)
+    return s[min(len(s) - 1, int(len(s) * q))]
+
+
+def vlm_call_summary(calls: list[dict]) -> dict[str, Any]:
+    """VLM 호출 기록 → 단계 지표.
+
+    latencies는 원값 목록으로 남긴다. 문서별 p95를 모아 다시 p95를 내면 틀린 값이 되므로,
+    문서셋 전체 분포는 metrics.py가 이 목록을 합쳐서 낸다. 문서당 최대 VISION_MAX_PAGES개라
+    이력 파일이 크게 불지 않는다.
+    """
+    lat = [c["seconds"] for c in calls]
+    outcomes: dict[str, int] = {}
+    for c in calls:
+        outcomes[c["outcome"]] = outcomes.get(c["outcome"], 0) + 1
+    prompt = [c["prompt_tokens"] for c in calls if c.get("prompt_tokens") is not None]
+    gen = [c["completion_tokens"] for c in calls if c.get("completion_tokens") is not None]
+    px = [c["image_px"] for c in calls if c.get("image_px")]
+    return {
+        "outcomes": outcomes,
+        "latencies": lat,
+        "latency_p50": _pct(lat, 0.5),
+        "latency_p95": _pct(lat, 0.95),
+        "prompt_tokens_p50": _pct(prompt, 0.5),
+        "completion_tokens_p50": _pct(gen, 0.5),
+        "image_px_p50": _pct(px, 0.5),
+    }
 
 
 def table_sources(cpu: TablesCpu, vlm_tables: dict[int, str]) -> dict[str, dict[int, str]]:
@@ -137,6 +171,25 @@ def combine(pages: list[PageResult], cpu: TablesCpu, vlm_tables: dict[int, str])
         "table_pages": table_pages,
         "chosen": chosen,
     })
+
+
+def table_fingerprint(pages: list[PageResult]) -> dict[str, dict[str, Any]]:
+    """페이지별로 최종 채택된 표의 출처와 해시.
+
+    병렬화처럼 결과가 바뀌면 안 되는 변경은 이 해시가 전부 같아야 하고, DPI처럼 결과를 바꾸는
+    변경은 몇 페이지가 달라졌는지를 여기서 센다. 본문은 싣지 않는다(원문 보관 금지 원칙).
+    """
+    import hashlib
+
+    out: dict[str, dict[str, Any]] = {}
+    for p in pages:
+        if not p.tables:
+            continue
+        md = p.tables[0]["markdown"]
+        out[str(p.page_num)] = {"source": p.tables[0]["source"],
+                                "sha256": hashlib.sha256(md.encode()).hexdigest()[:16],
+                                "chars": len(md)}
+    return out
 
 
 def parse(pdf_path: str, use_ocr: bool = True,

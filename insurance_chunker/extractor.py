@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,10 @@ LLAMA_CPP_BINARY = os.environ.get(
 
 _vision_call_count = 0
 _vision_fail_streak = 0
+# 문서 안 VLM 호출 한 건마다 {page, seconds, outcome, image_px, prompt_tokens,
+# completion_tokens}. 차단기·상한과 같은 수명(문서 단위)이다. 단건 지연이 렌더 해상도(비전
+# 토큰)에서 오는지 생성 길이에서 오는지 가르려면 호출마다 이 넷이 함께 있어야 한다.
+_vision_page_stats: list[dict] = []
 
 
 class _VLMCallFailed(Exception):
@@ -109,9 +114,21 @@ def reset_vision_counter() -> None:
     차단기를 문서 단위로 두는 이유: 서버가 잠깐 죽었다 살아난 경우 다음 문서까지
     포기할 이유가 없다. 반대로 한 문서 안에서는 한 번 접었으면 끝까지 접는다.
     """
-    global _vision_call_count, _vision_fail_streak
+    global _vision_call_count, _vision_fail_streak, _vision_page_stats
     _vision_call_count = 0
     _vision_fail_streak = 0
+    _vision_page_stats = []
+
+
+def vision_page_stats() -> list[dict]:
+    """이 문서에서 나간 VLM 호출 기록(호출 순서). 계측용."""
+    return list(_vision_page_stats)
+
+
+def _vlm_outcome(exc: Exception) -> str:
+    """실패를 타임아웃과 그 밖으로 가른다. 타임아웃 비율이 VLM_TIMEOUT 조정의 근거가 된다."""
+    import requests
+    return "timeout" if isinstance(exc, requests.Timeout) else "error"
 
 
 def vision_circuit_open() -> bool:
@@ -315,6 +332,8 @@ def extract_vision_local(fitz_page, pno: int, *,
     except Exception as e:
         logger.warning(f"p{pno}: 이미지 렌더링 실패: {e}")
         return None
+    # 비전 토큰 수는 입력 픽셀 수에 비례한다(Qwen 계열은 28px 패치). 가짜 페이지엔 크기가 없다.
+    image_px = (getattr(pix, "width", 0) or 0) * (getattr(pix, "height", 0) or 0)
 
     payload: dict = {
         "messages": [{
@@ -331,12 +350,17 @@ def extract_vision_local(fitz_page, pno: int, *,
     if VLM_MODEL:
         payload["model"] = VLM_MODEL
 
+    stat: dict = {"page": pno, "image_px": image_px}
+    t0 = time.perf_counter()
     try:
         resp = requests.post(f"{VLM_URL}/v1/chat/completions", json=payload,
                              timeout=(VLM_CONNECT_TIMEOUT, VLM_TIMEOUT))
         resp.raise_for_status()
-        out = resp.json()["choices"][0]["message"]["content"].strip()
+        body = resp.json()
+        out = body["choices"][0]["message"]["content"].strip()
     except Exception as e:
+        stat.update(seconds=round(time.perf_counter() - t0, 2), outcome=_vlm_outcome(e))
+        _record_vlm_call(stat)
         logger.warning(f"p{pno}: 로컬 VLM 실패: {e}",
                        extra={"event": "vlm_call_failed", "page": pno,
                               "error": f"{type(e).__name__}: {e}"})
@@ -344,6 +368,24 @@ def extract_vision_local(fitz_page, pno: int, *,
             raise _VLMCallFailed(str(e)) from e
         return None
 
+    usage = body.get("usage") or {}
+    stat.update(seconds=round(time.perf_counter() - t0, 2),
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"))
+    md = _parse_vlm_output(out)
+    stat["outcome"] = "table" if md else "empty"
+    _record_vlm_call(stat)
+    return md
+
+
+def _record_vlm_call(stat: dict) -> None:
+    """호출 한 건을 문서 기록에 쌓고 구조화 로그로도 남긴다(Loki에서 분포를 보는 용도)."""
+    _vision_page_stats.append(stat)
+    logger.info(f"p{stat['page']}: VLM {stat['outcome']} {stat['seconds']}s",
+                extra={"event": "vlm_page", **stat})
+
+
+def _parse_vlm_output(out: str) -> Optional[str]:
     if not out:
         return None
     if "<fcel>" in out or "<ecel>" in out:

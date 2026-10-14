@@ -217,9 +217,105 @@ def test_run_one_keeps_phase_names_and_adds_stages(ex, fake_vlm, mixed_pdf, tmp_
 
     assert result["status"] == "OK"
     assert set(result["phases"]) == {"hash", "parse", "chunk"}
-    assert list(result["stages"]) == ["text", "tables_cpu", "vlm", "combine", "chunk"]
+    assert list(result["stages"]) == ["hash", "text", "tables_cpu", "vlm", "combine", "chunk"]
     assert result["stages"]["vlm"]["resource"] == "gpu"
     # 단계 합이 parse 구간을 넘으면 어딘가 이중으로 재고 있는 것이다.
     parse_stages = sum(result["stages"][k]["seconds"]
                        for k in ("text", "tables_cpu", "vlm", "combine"))
     assert parse_stages <= result["phases"]["parse"] + 0.05
+
+
+# ── VLM 호출 계측 ─────────────────────────────────────────────────────────────
+# 단건 지연이 렌더 해상도(비전 토큰)에서 오는지 생성 길이에서 오는지 가르려면 호출마다
+# 소요·결과·이미지 크기·토큰이 함께 있어야 한다.
+
+def test_vlm_stage_carries_per_call_stats(ex, monkeypatch, mixed_pdf):
+    ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_TARGET="both")
+    import requests
+
+    from insurance_chunker import stages
+
+    class _UsageResp(_Resp):
+        def json(self):
+            return {**super().json(), "usage": {"prompt_tokens": 1200,
+                                                "completion_tokens": 80}}
+
+    n = {"i": 0}
+
+    def _post(url, json=None, timeout=None):
+        n["i"] += 1
+        return _UsageResp("| a |\n|---|\n| 1 |" if n["i"] % 2 else "표 없음")
+
+    monkeypatch.setattr(requests, "post", _post)
+    _, results = stages.parse(mixed_pdf)
+    v = results[2].metrics
+    assert len(v["latencies"]) == v["calls"] == n["i"]
+    assert v["outcomes"]["table"] + v["outcomes"]["empty"] == n["i"]
+    assert v["prompt_tokens_p50"] == 1200 and v["completion_tokens_p50"] == 80
+    assert v["image_px_p50"] > 0, "실제 렌더 크기가 실려야 비전 토큰을 추정할 수 있다"
+
+
+def test_timeout_is_told_apart_from_other_failures(ex, monkeypatch, mixed_pdf):
+    """타임아웃 비율이 VLM_TIMEOUT을 정하는 근거다 — 다른 실패와 섞이면 못 쓴다."""
+    ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_TARGET="both", VLM_FAIL_STREAK="99")
+    import requests
+
+    from insurance_chunker import stages
+
+    n = {"i": 0}
+
+    def _post(url, json=None, timeout=None):
+        n["i"] += 1
+        if n["i"] == 1:
+            raise requests.ReadTimeout("read timed out")
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "post", _post)
+    _, results = stages.parse(mixed_pdf)
+    outcomes = results[2].metrics["outcomes"]
+    assert outcomes["timeout"] == 1
+    assert outcomes["error"] == n["i"] - 1
+
+
+def test_vlm_stats_reset_per_document(ex, fake_vlm, mixed_pdf):
+    ex(VLM_BACKEND="local", VLM_MODEL="m")
+    from insurance_chunker import stages
+
+    _, first = stages.parse(mixed_pdf)
+    _, second = stages.parse(mixed_pdf)
+    assert len(second[2].metrics["latencies"]) == len(first[2].metrics["latencies"])
+
+
+def test_table_fingerprint_has_source_and_hash_but_no_text(ex, fake_vlm, mixed_pdf):
+    """병렬화 같은 변경은 이 해시가 전부 같아야 한다. 원문은 싣지 않는다."""
+    ex(VLM_BACKEND="local", VLM_MODEL="m")
+    from insurance_chunker import stages
+
+    pages, _ = stages.parse(mixed_pdf)
+    fp = stages.table_fingerprint(pages)
+    assert set(fp) == {str(p.page_num) for p in pages if p.tables}
+    for page in pages:
+        if page.tables:
+            entry = fp[str(page.page_num)]
+            assert entry["source"] == page.tables[0]["source"]
+            assert len(entry["sha256"]) == 16 and "markdown" not in entry
+
+
+def test_dry_run_file_carries_the_bench_contract(ex, fake_vlm, mixed_pdf, tmp_path):
+    """벤치마크가 읽는 형식 — 단계 기록과 페이지별 표 해시가 있어야 변형끼리 비교한다."""
+    ex(VLM_BACKEND="local", VLM_MODEL="m")
+    import json
+
+    import ingest_many
+
+    args = argparse.Namespace(
+        dry_run=True, no_ocr=True, no_vision=False, no_embed=True,
+        target_tokens=500, hard_max_tokens=1000, db_url=None,
+        ollama_url=None, embed_model=None, overwrite=False, no_init_schema=True)
+    doc = {"pdf": mixed_pdf, "doc_type": "plain", "insurer": "t", "product_name": "p"}
+    ingest_many._run_one(doc, args, tmp_path)
+    out = json.loads((tmp_path / "mixed_dry_run.json").read_text())
+    assert out["contract"] == ingest_many.DRY_RUN_CONTRACT == 2
+    assert {"doc_hash", "summary", "stages", "tables_by_page", "chunks"} <= out.keys()
+    assert "latencies" in out["stages"]["vlm"]
+    assert out["tables_by_page"]

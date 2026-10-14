@@ -28,6 +28,11 @@ logging_setup.configure()
 logger = logging.getLogger(__name__)
 
 
+# dry-run 결과 파일의 형식 버전. 1 = summary·chunks만 있던 예전 형식(버전 필드 없음).
+# 2 = doc_hash·stages(단계별 시간·자원·지표)·tables_by_page(페이지별 채택 표의 출처·해시) 추가.
+DRY_RUN_CONTRACT = 2
+
+
 def _fmt_phases(phases: dict) -> str:
     """구간 타이밍을 로그 한 줄로. 어디가 병목인지 로그만 봐도 보이게."""
     return " ".join(f"{k}={v}s" for k, v in phases.items()) if phases else "-"
@@ -93,6 +98,9 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
 
     with runlog.phase(timings, "hash"):
         doc_hash = compute_doc_hash(str(pdf_path))
+    # 해시·저장도 단계 기록에 넣는다. 빠지면 실제 시간엔 있고 단계 합엔 없는 몫이 생겨
+    # 하한과의 차이(병렬화로 줄일 몫)가 그만큼 부풀려진다.
+    stage_log["hash"] = {"seconds": timings["hash"], "resource": stages.CPU}
     meta = DocMeta(
         source_pdf=pdf_path.name,
         doc_hash=doc_hash,
@@ -154,8 +162,12 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
                 "warnings": len(warnings),
             }
             out_file = dry_run_dir / f"{pdf_path.stem}_dry_run.json"
+            # 벤치마크(eval)가 읽는 계약이다. 필드를 바꾸면 DRY_RUN_CONTRACT를 올린다.
             out_file.write_text(
-                json.dumps({"summary": summary, "chunks": [asdict(c) for c in chunks]},
+                json.dumps({"contract": DRY_RUN_CONTRACT, "doc_hash": meta.doc_hash,
+                            "summary": summary, "stages": stage_log,
+                            "tables_by_page": stages.table_fingerprint(pages),
+                            "chunks": [asdict(c) for c in chunks]},
                            ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
@@ -167,6 +179,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
                     _upload_tables_to_s3(table_metas)
                 upsert_chunks(conn, chunks, replace_doc_hash=replace_hash)
                 verify_upsert(conn, meta.doc_hash)
+            stage_log["store"] = {"seconds": timings["store"], "resource": stages.IO}
     finally:
         # 예외로 빠져나가도 커넥션은 돌려준다 — 사이클이 문서 수만큼 커넥션을 새로 여므로
         # 흘리면 실패가 쌓일수록 RDS 커넥션이 고갈된다.
@@ -231,7 +244,8 @@ def main() -> None:
                 status=result["status"], chunks=result.get("chunks", 0),
                 warnings=result.get("warnings", 0), elapsed_s=result.get("elapsed_s", 0.0),
                 phases=result.get("phases"), error=result.get("error"), source="manifest",
-                boundary_confidence=result.get("boundary_confidence"))
+                boundary_confidence=result.get("boundary_confidence"),
+                stages=result.get("stages"))
 
     ok = sum(1 for r in results if r["status"] == "OK")
     err = sum(1 for r in results if r["status"] == "ERROR")

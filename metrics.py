@@ -43,7 +43,62 @@ def _pct(values: list[float], q: float) -> float:
     return s[min(len(s) - 1, int(len(s) * q))]
 
 
-def collect(last: Optional[int] = None) -> dict[str, Any]:
+def stage_breakdown(docs: list[dict[str, Any]], cpu_workers: int = 1,
+                    gpu_parallel: int = 1) -> dict[str, Any]:
+    """문서별 stages 기록을 합쳐 단계별 비중과 병렬화 하한을 낸다.
+
+    docs는 runlog items나 dry-run 결과처럼 elapsed_s·stages를 가진 dict 목록이다.
+
+    하한(t_bound)은 '자원을 완벽하게 겹쳐 써도 이보다 빨라질 수 없는 시간'이다 —
+    max(CPU 단계 합 / CPU 작업자 수, GPU 단계 합 / GPU 동시도). 실제 시간(t_actual)과의
+    차이가 단계 겹치기·병렬화로 줄일 수 있는 몫이고, 하한 자체를 내리려면 단계의 단가
+    (표 탐지 범위, DPI, 엔진)를 바꿔야 한다. 둘을 가르는 게 이 수치의 쓰임이다.
+    """
+    per_stage: dict[str, list[float]] = defaultdict(list)
+    resource: dict[str, str] = {}
+    by_resource: dict[str, float] = defaultdict(float)
+    vlm_lat: list[float] = []
+    vlm_outcomes: Counter = Counter()
+    measured = [d for d in docs if d.get("stages")]
+    for d in measured:
+        for name, st in d["stages"].items():
+            secs = float(st.get("seconds") or 0.0)
+            per_stage[name].append(secs)
+            resource[name] = st.get("resource", "cpu")
+            by_resource[resource[name]] += secs
+        v = d["stages"].get("vlm") or {}
+        vlm_lat.extend(v.get("latencies") or [])
+        vlm_outcomes.update(v.get("outcomes") or {})
+
+    total = sum(by_resource.values()) or 1.0
+    t_actual = round(sum(float(d.get("elapsed_s") or 0.0) for d in measured), 1)
+    cpu_bound = by_resource.get("cpu", 0.0) / max(cpu_workers, 1)
+    gpu_bound = by_resource.get("gpu", 0.0) / max(gpu_parallel, 1)
+    t_bound = round(max(cpu_bound, gpu_bound) + by_resource.get("io", 0.0), 1)
+    calls = sum(vlm_outcomes.values())
+    return {
+        "n": len(measured),
+        "stages": {k: {"resource": resource[k], "total_s": round(sum(v), 1),
+                       "share": round(sum(v) / total, 3), "p50_s": _pct(v, 0.5)}
+                   for k, v in sorted(per_stage.items(), key=lambda kv: -sum(kv[1]))},
+        "by_resource": {k: round(v, 1) for k, v in by_resource.items()},
+        "bound": {
+            "t_actual_s": t_actual, "t_bound_s": t_bound,
+            "gap_s": round(t_actual - t_bound, 1),
+            "bottleneck": "gpu" if gpu_bound > cpu_bound else "cpu",
+            "cpu_workers": cpu_workers, "gpu_parallel": gpu_parallel,
+        },
+        "vlm": {
+            "calls": calls, "outcomes": dict(vlm_outcomes),
+            "timeout_rate": round(vlm_outcomes["timeout"] / calls, 3) if calls else None,
+            "latency_p50_s": _pct(vlm_lat, 0.5) if vlm_lat else None,
+            "latency_p95_s": _pct(vlm_lat, 0.95) if vlm_lat else None,
+        },
+    }
+
+
+def collect(last: Optional[int] = None, cpu_workers: int = 1,
+            gpu_parallel: int = 1) -> dict[str, Any]:
     items, runs = _read_jsonl("items.jsonl"), _read_jsonl("runs.jsonl")
     if last:
         runs = runs[-last:]
@@ -91,6 +146,8 @@ def collect(last: Optional[int] = None) -> dict[str, Any]:
                            if sum(elapsed) else None),
         },
         "freshness": runlog.daemon_state().get("last_success_at"),
+        # stages는 단계 분리 이후 문서에만 있다. 그 전 이력은 n에서 빠진다.
+        "stage_breakdown": stage_breakdown(done, cpu_workers, gpu_parallel),
     }
 
 
@@ -110,18 +167,40 @@ def _print(m: dict[str, Any]) -> None:
         for k, v in m["phase_share"].items():
             bar = "█" * round(v["share"] * 40)
             print(f"  {k:<6} {v['share']:>6.1%} {bar} (합 {v['total_s']}s, p50 {v['p50_s']}s)")
+    sb = m.get("stage_breakdown") or {}
+    if sb.get("n"):
+        print_stage_breakdown(sb)
     c = m["chunks"]
     rate = f" | {c['per_second']}청크/초" if c["per_second"] else ""
     print(f"\n적재 청크 {c['total']:,}개{rate}")
+
+
+def print_stage_breakdown(sb: dict[str, Any]) -> None:
+    b, v = sb["bound"], sb["vlm"]
+    print(f"\n단계별 비중(n={sb['n']}) — 자원 태그로 하한을 계산한다")
+    for k, st in sb["stages"].items():
+        bar = "█" * round(st["share"] * 40)
+        print(f"  {k:<11} {st['resource']:<4} {st['share']:>6.1%} {bar} "
+              f"(합 {st['total_s']}s, p50 {st['p50_s']}s)")
+    print(f"\n실제 {b['t_actual_s']}s | 하한 {b['t_bound_s']}s | 차이 {b['gap_s']}s "
+          f"| 병목 {b['bottleneck']} (CPU 작업자 {b['cpu_workers']}, "
+          f"GPU 동시도 {b['gpu_parallel']})")
+    if v["calls"]:
+        print(f"VLM 호출 {v['calls']}건 {v['outcomes']} | 타임아웃 {v['timeout_rate']:.1%} "
+              f"| p50 {v['latency_p50_s']}s p95 {v['latency_p95_s']}s")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="인덱싱 실행 이력 → 운영 지표")
     ap.add_argument("--last", type=int, default=None, help="최근 N개 사이클만")
     ap.add_argument("--json", action="store_true", help="JSON으로 출력")
+    ap.add_argument("--cpu-workers", type=int, default=1,
+                    help="하한 계산에 쓸 CPU 작업자 수(INGEST_CONCURRENCY에 맞춘다)")
+    ap.add_argument("--gpu-parallel", type=int, default=1,
+                    help="하한 계산에 쓸 GPU 동시도(OLLAMA_NUM_PARALLEL에 맞춘다)")
     args = ap.parse_args()
 
-    m = collect(args.last)
+    m = collect(args.last, args.cpu_workers, args.gpu_parallel)
     if args.json:
         print(json.dumps(m, ensure_ascii=False, indent=2))
     else:
