@@ -501,6 +501,120 @@ def vlm_target_pages(pymupdf_pages: list[int], gaps: list[int]) -> list[int]:
 
 
 # ── 문서 단위 추출 ────────────────────────────────────────────────────────────
+# CPU 단계(PyMuPDF·pdfplumber·camelot + VLM 대상 선정)와 GPU 단계(VLM)를 따로 부를 수
+# 있게 나눠 둔다. 한 함수에 묶여 있으면 VLM 시간이 표 추출 전체에 묻혀 따로 잴 수 없고,
+# VLM만 설정을 바꿔 다시 돌리는 실험도 못 한다. extract_tables_for_doc은 둘을 이어 부르는
+# 예전 진입점으로 남긴다(호출부가 eval 스크립트까지 여럿이다).
+
+def extract_cpu_tables(
+    pdf_path: str,
+    page_numbers: list[int],
+    use_vision: bool = True,
+) -> tuple[dict[str, dict[int, str]], list[int], dict]:
+    """CPU 소스로 표를 뽑고 VLM 투입 대상을 정한다.
+
+    Returns:
+        (table_sources, vlm_targets, info)
+        table_sources: {"pymupdf": {...}, "pdfplumber": {...}, "camelot": {...}} — 설치된 것만
+        vlm_targets:   VLM을 부를 페이지. 순서가 곧 예산 소진 순서. VLM을 안 쓰면 빈 목록
+        info:          {"pymupdf_pages": int, "gap_pages": int} — 로그·계측용
+    """
+    import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
+
+    pymupdf_tables: dict[int, str] = {}
+
+    with fitz.open(pdf_path) as doc:
+        for pno in page_numbers:
+            fitz_page = doc[pno - 1]
+            md = extract_pymupdf(fitz_page)
+            if md:
+                pymupdf_tables[pno] = md
+
+        table_pages = sorted(pymupdf_tables.keys())
+        gaps = gap_pages(doc, page_numbers, pymupdf_tables)
+
+    table_sources: dict[str, dict[int, str]] = {"pymupdf": pymupdf_tables}
+
+    # CPU 소스는 후보를 넓혀도 싸다. 괘선 없는 표는 PyMuPDF가 못 보지만
+    # pdfplumber는 보기도 하므로, GPU를 쓰기 전에 여기서 먼저 건진다.
+    cpu_pages = sorted(set(table_pages) | set(gaps))
+
+    # pdfplumber (선택)
+    pp = extract_pdfplumber_tables(pdf_path, cpu_pages)
+    if pp:
+        table_sources["pdfplumber"] = pp
+
+    # camelot (선택)
+    cm = extract_camelot_tables(pdf_path, cpu_pages)
+    if cm:
+        table_sources["camelot"] = cm
+
+    # VLM — 기본은 PyMuPDF가 닿지 못한 페이지(gap)
+    targets: list[int] = []
+    if use_vision and VLM_BACKEND != "off":
+        targets = vlm_target_pages(table_pages, gaps)
+    info = {"pymupdf_pages": len(table_pages), "gap_pages": len(gaps)}
+    return table_sources, targets, info
+
+
+def extract_vlm_tables(
+    pdf_path: str,
+    targets: list[int],
+    total_pages: int,
+    info: Optional[dict] = None,
+) -> dict[int, str]:
+    """VLM 대상 페이지의 표를 뽑는다 → {page: markdown}. 백엔드가 off면 빈 dict.
+
+    문서 경계이므로 호출 상한과 차단기를 여기서 되돌린다.
+    total_pages·info는 로그에만 쓴다.
+    """
+    reset_vision_counter()
+    if VLM_BACKEND == "off":
+        return {}
+
+    info = info or {}
+    total = len(targets)
+    logger.info(
+        f"VLM 대상: {total}페이지 (전체 {total_pages}페이지 중 "
+        f"target={VLM_TARGET}, PyMuPDF표 {info.get('pymupdf_pages', 0)}쪽/"
+        f"미탐지 {info.get('gap_pages', 0)}쪽, "
+        f"backend={VLM_BACKEND}{f', model={VLM_MODEL}' if VLM_MODEL else ''})",
+        extra={"event": "vlm_targets", "target": VLM_TARGET, "pages": total,
+               "pymupdf_pages": info.get("pymupdf_pages", 0),
+               "gap_pages": info.get("gap_pages", 0)})
+    if VLM_BACKEND == "surya":
+        return extract_surya_tables(pdf_path, targets)
+
+    import pymupdf as fitz
+
+    vlm_tables: dict[int, str] = {}
+    with fitz.open(pdf_path) as doc:
+        for i, pno in enumerate(targets, 1):
+            # 차단기가 열렸으면 남은 페이지는 호출도 로그도 하지 않는다.
+            # 안 끊으면 "처리 중" 줄만 수백 개 쌓여 로그가 사실과 어긋난다.
+            if vision_circuit_open():
+                logger.warning(
+                    f"VLM 차단 — 남은 {total - i + 1}페이지 건너뜀",
+                    extra={"event": "vlm_pages_skipped",
+                           "skipped": total - i + 1, "total": total})
+                break
+            if vision_budget_exhausted():
+                # 품질이 아니라 시간을 위해 접는 것이라 level이 다르다 —
+                # 남은 페이지도 PyMuPDF/pdfplumber 결과는 그대로 쓴다.
+                logger.info(
+                    f"VLM 상한 {VISION_MAX_PAGES}페이지 도달 — 남은 "
+                    f"{total - i + 1}페이지는 PyMuPDF/pdfplumber 결과만 쓴다",
+                    extra={"event": "vlm_budget_exhausted",
+                           "limit": VISION_MAX_PAGES,
+                           "skipped": total - i + 1, "total": total})
+                break
+            logger.info(f"VLM [{i}/{total}] p{pno} 처리 중...")
+            md_vision = extract_vision(doc[pno - 1], pno)
+            if md_vision:
+                vlm_tables[pno] = md_vision
+                logger.info(f"VLM [{i}/{total}] p{pno} 완료 (표 추출됨)")
+    return vlm_tables
+
 
 def extract_tables_for_doc(
     pdf_path: str,
@@ -516,77 +630,13 @@ def extract_tables_for_doc(
         {"pymupdf": {page: md}, "pdfplumber": {page: md}, "camelot": {page: md}, "vlm": {page: md}}
         설치된 도구만 포함. combine.py가 페이지별 best-of를 선택.
     """
-    import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
-
-    pymupdf_tables: dict[int, str] = {}
-    reset_vision_counter()
-
-    with fitz.open(pdf_path) as doc:
-        for pno in page_numbers:
-            fitz_page = doc[pno - 1]
-            md = extract_pymupdf(fitz_page)
-            if md:
-                pymupdf_tables[pno] = md
-
-        table_sources: dict[str, dict[int, str]] = {"pymupdf": pymupdf_tables}
-        table_pages = sorted(pymupdf_tables.keys())
-        gaps = gap_pages(doc, page_numbers, pymupdf_tables)
-
-        # CPU 소스는 후보를 넓혀도 싸다. 괘선 없는 표는 PyMuPDF가 못 보지만
-        # pdfplumber는 보기도 하므로, GPU를 쓰기 전에 여기서 먼저 건진다.
-        cpu_pages = sorted(set(table_pages) | set(gaps))
-
-        # pdfplumber (선택)
-        pp = extract_pdfplumber_tables(pdf_path, cpu_pages)
-        if pp:
-            table_sources["pdfplumber"] = pp
-
-        # camelot (선택)
-        cm = extract_camelot_tables(pdf_path, cpu_pages)
-        if cm:
-            table_sources["camelot"] = cm
-
-        # VLM — 기본은 PyMuPDF가 닿지 못한 페이지(gap)
-        if use_vision and VLM_BACKEND != "off":
-            targets = vlm_target_pages(table_pages, gaps)
-            total = len(targets)
-            logger.info(
-                f"VLM 대상: {total}페이지 (전체 {len(page_numbers)}페이지 중 "
-                f"target={VLM_TARGET}, PyMuPDF표 {len(table_pages)}쪽/미탐지 {len(gaps)}쪽, "
-                f"backend={VLM_BACKEND}{f', model={VLM_MODEL}' if VLM_MODEL else ''})",
-                extra={"event": "vlm_targets", "target": VLM_TARGET, "pages": total,
-                       "pymupdf_pages": len(table_pages), "gap_pages": len(gaps)})
-            if VLM_BACKEND == "surya":
-                vlm_tables = extract_surya_tables(pdf_path, targets)
-            else:
-                vlm_tables = {}
-                for i, pno in enumerate(targets, 1):
-                    # 차단기가 열렸으면 남은 페이지는 호출도 로그도 하지 않는다.
-                    # 안 끊으면 "처리 중" 줄만 수백 개 쌓여 로그가 사실과 어긋난다.
-                    if vision_circuit_open():
-                        logger.warning(
-                            f"VLM 차단 — 남은 {total - i + 1}페이지 건너뜀",
-                            extra={"event": "vlm_pages_skipped",
-                                   "skipped": total - i + 1, "total": total})
-                        break
-                    if vision_budget_exhausted():
-                        # 품질이 아니라 시간을 위해 접는 것이라 level이 다르다 —
-                        # 남은 페이지도 PyMuPDF/pdfplumber 결과는 그대로 쓴다.
-                        logger.info(
-                            f"VLM 상한 {VISION_MAX_PAGES}페이지 도달 — 남은 "
-                            f"{total - i + 1}페이지는 PyMuPDF/pdfplumber 결과만 쓴다",
-                            extra={"event": "vlm_budget_exhausted",
-                                   "limit": VISION_MAX_PAGES,
-                                   "skipped": total - i + 1, "total": total})
-                        break
-                    logger.info(f"VLM [{i}/{total}] p{pno} 처리 중...")
-                    fitz_page = doc[pno - 1]
-                    md_vision = extract_vision(fitz_page, pno)
-                    if md_vision:
-                        vlm_tables[pno] = md_vision
-                        logger.info(f"VLM [{i}/{total}] p{pno} 완료 (표 추출됨)")
-            if vlm_tables:
-                table_sources["vlm"] = vlm_tables
+    table_sources, targets, info = extract_cpu_tables(pdf_path, page_numbers, use_vision)
+    if use_vision and VLM_BACKEND != "off":
+        vlm_tables = extract_vlm_tables(pdf_path, targets, len(page_numbers), info)
+        if vlm_tables:
+            table_sources["vlm"] = vlm_tables
+    else:
+        reset_vision_counter()
 
     counts = {k: len(v) for k, v in table_sources.items()}
     logger.info(f"표 추출 완료: {counts}")

@@ -76,10 +76,9 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     from collections import Counter
     from dataclasses import asdict
 
-    from insurance_chunker.chunker import auto_doc_type, chunk_document
+    from insurance_chunker import stages
+    from insurance_chunker.chunker import auto_doc_type
     from insurance_chunker.models import DocMeta, compute_doc_hash
-    from insurance_chunker.pdf_parser import parse_pdf
-    from insurance_chunker.validator import validate_chunks
 
     pdf_path = Path(doc["pdf"])
     if not pdf_path.exists():
@@ -88,9 +87,9 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     doc_type = doc.get("doc_type") or auto_doc_type(pdf_path.name)
     t0 = time.time()
     timings: dict[str, float] = {}
-    # 경계 검출 품질 — 청킹은 성공해도 섹션이 안 갈리면 조번호가 어긋난다.
-    # 로그로만 흘려보내면 "성공한 문서"로 집계돼 아무도 모른다.
-    chunk_report: dict = {}
+    # 단계(S1~S6)별 시간·자원·규모. phases는 예전 구간(parse/chunk/embed/store)을 그대로
+    # 유지한다 — exporter·대시보드가 그 이름으로 집계하므로 이름을 바꾸면 시계열이 끊긴다.
+    stage_log: dict[str, dict] = {}
 
     with runlog.phase(timings, "hash"):
         doc_hash = compute_doc_hash(str(pdf_path))
@@ -125,23 +124,25 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
 
     try:
         with runlog.phase(timings, "parse"):
-            pages = parse_pdf(str(pdf_path), use_ocr=not args.no_ocr,
-                              use_vision=not args.no_vision)
+            pages, parsed = stages.parse(str(pdf_path), use_ocr=not args.no_ocr,
+                                         use_vision=not args.no_vision)
+        stage_log.update({r.name: r.summary() for r in parsed})
         with runlog.phase(timings, "chunk"):
-            chunks, table_metas = chunk_document(
+            s5 = stages.chunk(
                 pages, meta,
                 pdf_path=str(pdf_path) if doc_type == "policy_terms" else None,
                 target=args.target_tokens,
                 hard_max=args.hard_max_tokens,
-                report=chunk_report,
             )
-            vr = validate_chunks(chunks)
-            chunks = vr.valid_chunks
+        stage_log["chunk"] = s5.summary()
+        chunks, table_metas = s5.output.chunks, s5.output.table_metas
+        warnings, chunk_report = s5.output.warnings, s5.output.report
 
         if not args.no_embed and doc_type != "product_summary":
-            from insurance_chunker.embedder import embed_chunks
             with runlog.phase(timings, "embed"):
-                chunks = embed_chunks(chunks, ollama_url=args.ollama_url, model=args.embed_model)
+                s6 = stages.embed(chunks, ollama_url=args.ollama_url, model=args.embed_model)
+            stage_log["embed"] = s6.summary()
+            chunks = s6.output
 
         if args.dry_run:
             tokens = [c.token_count for c in chunks]
@@ -150,7 +151,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
                 "chunk_type_counts": dict(Counter(c.chunk_type for c in chunks)),
                 "over_600": sum(1 for t in tokens if t > 600),
                 "tok_avg": round(sum(tokens) / len(tokens)) if tokens else 0,
-                "warnings": len(vr.warnings),
+                "warnings": len(warnings),
             }
             out_file = dry_run_dir / f"{pdf_path.stem}_dry_run.json"
             out_file.write_text(
@@ -175,9 +176,10 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     return {
         "pdf": pdf_path.name, "status": "OK", "doc_type": doc_type,
         "doc_hash": meta.doc_hash,
-        "chunks": len(chunks), "warnings": len(vr.warnings),
+        "chunks": len(chunks), "warnings": len(warnings),
         "elapsed_s": round(time.time() - t0, 1),
         "phases": timings,
+        "stages": stage_log,
         "boundary_confidence": chunk_report.get("boundary_confidence"),
         "boundaries": chunk_report.get("boundaries"),
     }
