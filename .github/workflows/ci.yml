@@ -28,10 +28,10 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Ruff lint
-        # 배포 대상 코드에 한정(eval/는 실험 스크립트라 제외).
+        # 배포 대상 코드 + 벤치마크(eval/bench)에 한정. 나머지 eval/는 실험 스크립트라 제외.
         # 규칙은 pyproject의 [tool.ruff.lint] select로 고정돼 있다 — ruff 버전이 올라도
         # 검사 범위가 저절로 넓어지지 않으므로 블로킹으로 둘 수 있다.
-        run: ruff check insurance_chunker db tests ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py runlog.py notify.py healthcheck.py metrics.py logging_setup.py exporter.py slo.py deploy_check.py shutdown.py
+        run: ruff check insurance_chunker db tests eval/bench ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py runlog.py notify.py healthcheck.py metrics.py logging_setup.py exporter.py slo.py deploy_check.py shutdown.py
 
       - name: Import smoke
         # 패키지 import + CLI 엔트리포인트가 실제로 로드되는지 확인(의존성 해상도 검증).

@@ -1,0 +1,20 @@
+# 고정 문서셋 — 변형끼리 비교하는 기준이다. 한 번 정하면 함부로 바꾸지 않는다(바꾸면 이전
+# 결과와 비교가 끊긴다. 바꿀 땐 새 이름의 문서셋을 만든다).
+#
+# PDF는 커밋하지 않는다(약관 원문). 카탈로그 sha256(ai.corpus_file_part.sha256)으로 지정하고
+# `python eval/bench/bench.py fetch --docset core`로 받는다. 로컬 파일이면 pdf: 경로를 쓴다.
+#
+# type은 결과를 나눠 보는 축이다 — 문서 구성이 바뀐 것이 개선 효과처럼 보이지 않게.
+#   scan   페이지를 덮는 이미지(OCR 스캔본). VLM gap 대상이 많다
+#   table  표가 많은 약관. VLM·CPU 표 추출 비중이 크다
+#   plain  일반 약관
+#
+# 운영에서 타임아웃·격리·0청크가 난 문서는 여기로 옮겨 회귀 셋으로 쓴다(note에 사유).
+name: core
+documents: []
+#  - id: meritz-group-safe          # 결과 파일 이름. 영문·숫자·-만
+#    sha256: <64자>
+#    type: table
+#    doc_type: policy_terms
+#    insurer: 메리츠화재
+#    note: 표 214쪽 — VLM 타임아웃 35.6시간 사례

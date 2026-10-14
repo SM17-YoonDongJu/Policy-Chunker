@@ -23,3 +23,8 @@ eval/*.jsonl
 !eval/questions_gen_*.jsonl
 eval/*.log
 eval/*.csv
+# 벤치마크 캐시·내려받은 PDF·ref별 워크트리 (결과 JSON은 *.json으로 이미 제외)
+eval/bench/.artifacts/
+eval/bench/.pdfs/
+eval/bench/.worktrees/
+eval/bench/results/

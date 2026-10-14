@@ -1,0 +1,8 @@
+# VLM을 끈 변형. 결과가 바뀌는 변경이라 expect_identical_to를 두지 않는다.
+# VLM이 표 품질에 얼마나 기여하는지(바뀐 페이지 수)와 시간 몫을 보는 데 쓴다.
+slug: vlm-off
+ref: WORKTREE
+env:
+  VLM_BACKEND: "off"
+status: draft
+note: VLM 기여도 확인용
