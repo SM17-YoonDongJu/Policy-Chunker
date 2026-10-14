@@ -40,6 +40,8 @@ jobs:
           python ingest.py --help > /dev/null
           python ingest_many.py --help > /dev/null
           python ingest_catalog.py --help > /dev/null
+          # 단계 분리 실행(벤치마크용). 운영 이미지 CMD는 아니지만 같은 단계 함수를 부른다.
+          python -m insurance_chunker.stage_runner --help > /dev/null
           # 데몬 경로도 확인 — 이미지 CMD가 worker.py라 여기서 깨지면 배포 후 크래시루프가 된다.
           python -c "import worker, runlog, notify, healthcheck, metrics, logging_setup, exporter, slo, shutdown; print('daemon modules import OK')"
           python metrics.py --help > /dev/null
