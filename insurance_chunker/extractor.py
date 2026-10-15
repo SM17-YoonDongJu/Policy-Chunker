@@ -35,6 +35,12 @@ VLM_DPI = int(os.environ.get("VLM_DPI", "150"))
 # 페이지(토큰을 끝까지 쓰는 경우)도 200초 안쪽이다. 300초를 넘기면 느린 게 아니라
 # 고장난 것이다 — 실제로 Ollama가 CPU로 떨어졌을 때 600초로도 한 장을 못 끝냈다.
 VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "300"))
+# 페이지당 출력 토큰 상한. 생성이 VLM 시간의 대부분이라(vLLM 단일 요청 18.7토큰/초) 상한이 곧
+# 최악 페이지의 시간이다. smoke 벤치마크(2026-10-14)에서 50건 중 7건이 4096까지 생성했고 그 7건이
+# VLM 시간의 약 53%였다 — 상한까지 가는 응답은 대개 반복 폭주라 끝까지 받아도 쓸 수 없다. 줄이면
+# 결과가 바뀌는 변경이라 벤치마크 가드레일로 판정한 뒤 바꾼다. 프롬프트(비전 토큰 포함, p50 약
+# 2,300)와 합쳐 vLLM max-model-len(운영 6,144)을 넘지 않게 둔다.
+VLM_MAX_TOKENS = int(os.environ.get("VLM_MAX_TOKENS", "4096"))
 # 접속 타임아웃은 따로 짧게 둔다. 같은 호스트의 Ollama라 붙는 건 즉시여야 하고,
 # 서버가 아예 없으면 밀리초 안에 알아야지 읽기 타임아웃까지 기다릴 이유가 없다.
 VLM_CONNECT_TIMEOUT = float(os.environ.get("VLM_CONNECT_TIMEOUT", "5"))
@@ -358,7 +364,7 @@ def call_vlm(img_b64: str, pno: int, image_px: int = 0,
             ],
         }],
         "temperature": 0,
-        "max_tokens": 4096,
+        "max_tokens": VLM_MAX_TOKENS,
     }
     if VLM_MODEL:
         payload["model"] = VLM_MODEL
@@ -384,7 +390,7 @@ def call_vlm(img_b64: str, pno: int, image_px: int = 0,
     stat.update(seconds=round(time.perf_counter() - t0, 2),
                 prompt_tokens=usage.get("prompt_tokens"),
                 completion_tokens=usage.get("completion_tokens"),
-                # "length"면 max_tokens(4096)에서 잘렸다. 운영에서 VLM 지연 p90(222초)이
+                # "length"면 max_tokens(VLM_MAX_TOKENS)에서 잘렸다. 운영에서 VLM 지연 p90(222초)이
                 # 4096토큰을 생성 속도(18.7토큰/초)로 끝까지 뽑는 시간과 같았다 —
                 # 잘린 표는 시간도 품질도 잃는다.
                 finish_reason=choice.get("finish_reason"))

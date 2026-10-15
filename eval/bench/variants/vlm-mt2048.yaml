@@ -1,0 +1,14 @@
+# 출력 상한 2048토큰. 결과가 바뀌는 변경이라 가드레일(기본값)로 판정한다.
+# smoke baseline에서 4096까지 생성한 7건이 VLM 시간의 약 53%였다. 상한을 절반으로 줄이면 그 꼬리가
+# 절반이 된다 — 대신 정말 긴 표가 잘리는지 가드레일(표 페이지 −5%, CPU 페이지 불변 등)이 본다.
+# VLM_MAX_TOKENS가 들어간 이미지에서만 의미가 있다.
+slug: vlm-mt2048
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_TARGET: gap
+  VLM_DPI: "150"
+  VISION_MAX_PAGES: "50"
+  VLM_MAX_TOKENS: "2048"
+status: draft
+note: Phase 3 C — 출력 상한

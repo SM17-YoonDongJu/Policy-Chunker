@@ -1,0 +1,16 @@
+# VLM 동시 호출 3 + 읽기 타임아웃 600초. 결과는 baseline과 같아야 한다.
+# vlm-c3(타임아웃 300초)는 2026-10-14 smoke에서 6건이 타임아웃으로 표를 잃어 FAIL이었다 — 동시도
+# 3이면 요청당 생성이 느려져, max_tokens 근처까지 가는 긴 응답이 300초를 넘겼다. 타임아웃을 늘려
+# 끊김을 없앤 뒤 결과 동일성과 실효 동시도 k를 다시 잰다.
+slug: vlm-c3-t600
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_TARGET: gap
+  VLM_DPI: "150"
+  VISION_MAX_PAGES: "50"
+  VLM_CONCURRENCY: "3"
+  VLM_TIMEOUT: "600"
+expect_identical_to: baseline
+status: draft
+note: vlm-c3 타임아웃 FAIL 재측정

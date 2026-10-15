@@ -1,0 +1,16 @@
+# baseline을 같은 조건으로 한 번 더 — vLLM이 같은 입력에 같은 표를 내는지(재현성) 본다.
+# vlm-c3에서 타임아웃이 아닌데도 표가 바뀐 페이지가 4쪽 있었다. 요청을 묶을 때의 fp16 연산 순서
+# 차이일 수 있는데, baseline끼리도 다르다면 "완전 일치" 기준을 VLM 페이지에 한해 조정해야 한다.
+# VLM_TIMEOUT 301은 캐시 키를 baseline과 다르게 해 VLM을 실제로 다시 부르게 하려는 것이다.
+# 동시도 1에서는 300초 근처까지 가는 호출이 없어(baseline p95 218초) 동작에 영향이 없다.
+slug: baseline-r2
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_TARGET: gap
+  VLM_DPI: "150"
+  VISION_MAX_PAGES: "50"
+  VLM_TIMEOUT: "301"
+expect_identical_to: baseline
+status: draft
+note: baseline 재현성 확인
