@@ -565,3 +565,19 @@ def test_page_covering_image_with_sparse_text_is_first(ex, tmp_path):
     gaps = extractor.gap_pages(d, [1], {})
     d.close()
     assert gaps == [1]
+
+
+def test_max_tokens_comes_from_the_environment(ex, monkeypatch):
+    """출력 상한이 최악 페이지의 시간이다 — 재빌드 없이 바꿔 잴 수 있어야 한다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_MAX_TOKENS="2048")
+    seen = _capture(monkeypatch)
+    extractor.extract_vision_local(_FakePage(), 1)
+    assert seen["payload"]["max_tokens"] == 2048
+
+
+def test_max_tokens_default_is_unchanged(ex, monkeypatch):
+    monkeypatch.delenv("VLM_MAX_TOKENS", raising=False)
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    seen = _capture(monkeypatch)
+    extractor.extract_vision_local(_FakePage(), 1)
+    assert seen["payload"]["max_tokens"] == 4096

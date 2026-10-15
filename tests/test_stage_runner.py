@@ -199,3 +199,12 @@ def test_report_follows_the_dry_run_contract(runner, fake_vlm, mixed_pdf, tmp_pa
     assert "chunks" not in rep and "content" not in json.dumps(rep["summary"])
     assert rep["elapsed_s"] == pytest.approx(sum(s["seconds"] for s in rep["stages"].values()),
                                              abs=0.05)
+
+
+def test_max_tokens_change_invalidates_vlm(runner, fake_vlm, mixed_pdf, tmp_path):  # noqa: F811
+    """출력 상한은 결과를 바꾼다 — 바꾸면 VLM부터 다시 돌아야 한다."""
+    sr = runner(VLM_MAX_TOKENS="4096")
+    sr.run(mixed_pdf, tmp_path, _meta(mixed_pdf), to_stage="vlm")
+    sr = runner(VLM_MAX_TOKENS="2048")
+    recs = _by_stage(sr.run(mixed_pdf, tmp_path, _meta(mixed_pdf), to_stage="vlm"))
+    assert recs["tables_cpu"]["cached"] and not recs["vlm"]["cached"]
