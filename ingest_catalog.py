@@ -173,6 +173,13 @@ def _should_quarantine(hist: dict | None, retry_ok: bool) -> bool:
     return hist.get("attempts", 0) >= _MAX_RETRY
 
 
+def _attempt_label(hist: dict) -> str:
+    """격리 사유를 사람이 읽을 말로. STARTED는 '끝을 못 본 시도'(OOM·강제 종료)다."""
+    if hist.get("status") == "STARTED":
+        return "처리 중 중단(OOM·강제 종료)"
+    return hist.get("status", "?")
+
+
 def _download(bucket: str, key: str, dest: Path) -> bool:
     try:
         _s3_client().download_file(bucket, key, str(dest))
@@ -220,38 +227,59 @@ def _process_one(task: dict) -> dict:
     return result
 
 
-def _run_tasks(tasks: list[dict], concurrency: int):
+def _run_tasks(tasks: list[dict], concurrency: int, on_start=None):
     """작업 목록을 순서대로(또는 동시에) 실행하며 (task, result)를 하나씩 내놓는다.
 
     정지 신호(배포·재시작)가 오면 문서와 문서 사이에서 멈춘다. 시작한 문서는 끝까지 간다 —
     저장 트랜잭션의 단위가 문서라 중간에 끊어도 다음 주기에 처음부터 다시 해야 한다.
+
+    on_start(task)는 그 문서가 실제로 시작되기 직전에 부모에서 불린다(시도 선기록용). 그래서
+    풀 경로도 작업을 전부 미리 넣지 않고 동시도만큼만 넣는다 — 전부 넣으면 아직 시작도 안 한
+    문서가 '시작'으로 적혀, 사이클이 죽었을 때 엉뚱한 문서의 시도 횟수가 오른다.
     """
     if concurrency <= 1 or len(tasks) <= 1:
         for t in tasks:
             if shutdown.stopping():
                 return
+            if on_start:
+                on_start(t)
             yield t, _process_one(t)
         return
 
     import multiprocessing
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 
     # spawn을 명시한다. fork면 부모의 psycopg2 커넥션과 boto3 상태를 그대로 물려받는데
     # 둘 다 fork-safe하지 않다. 재import 비용(1~2초)은 문서 처리 시간에 비하면 무시할 만하다.
     ctx = multiprocessing.get_context("spawn")
     ex = ProcessPoolExecutor(max_workers=concurrency, mp_context=ctx)
+    queue = iter(tasks)
+    pending: dict = {}
+
+    def submit_next() -> None:
+        t = next(queue, None)
+        if t is None:
+            return
+        if on_start:
+            on_start(t)
+        pending[ex.submit(_process_one, t)] = t
+
     try:
-        futures = {ex.submit(_process_one, t): t for t in tasks}
-        for fut in as_completed(futures):
-            t = futures[fut]
-            try:
-                yield t, fut.result()
-            except Exception as e:  # noqa: BLE001 - 워커가 죽어도 나머지는 계속
-                logger.exception(f"워커 실패: {t['name']}")
-                yield t, {"pdf": t["name"], "status": "ERROR",
-                          "error": f"{type(e).__name__}: {e}", "phases": {}}
-            if shutdown.stopping():
-                return
+        for _ in range(concurrency):
+            submit_next()
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for fut in done:
+                t = pending.pop(fut)
+                try:
+                    yield t, fut.result()
+                except Exception as e:  # noqa: BLE001 - 워커가 죽어도 나머지는 계속
+                    logger.exception(f"워커 실패: {t['name']}")
+                    yield t, {"pdf": t["name"], "status": "ERROR",
+                              "error": f"{type(e).__name__}: {e}", "phases": {}}
+                if shutdown.stopping():
+                    return
+                submit_next()
     finally:
         # 아직 시작 안 한 작업만 취소한다(cancel_futures). 돌고 있는 문서는 기다린다 —
         # with 블록의 기본 shutdown은 대기 중인 것까지 전부 실행해 버려서 쓸 수 없다.
@@ -314,16 +342,23 @@ def main() -> None:
 
             # 격리 — 0청크/오류가 연속 _MAX_RETRY회면 더는 받지도, 파싱하지도 않는다.
             hist = runlog.attempt(sha) if (sha and not args.dry_run) else None
+            if hist and hist.get("status") == "STARTED":
+                # 선기록만 남고 결과가 없다 = 지난 시도가 끝을 못 봤다(OOM·강제 종료).
+                # 이번에도 죽으면 상한에 걸려 격리되므로, 그 전에 어느 문서인지 소리를 낸다.
+                logger.warning(f"[{i}/{len(rows)}] {name} — 지난 시도가 끝을 못 봤다 "
+                               f"({hist['attempts']}회째, 마지막 {hist['last_at']})",
+                               extra={"event": "attempt_unfinished", "document": name,
+                                      "attempts": hist["attempts"]})
             if _should_quarantine(hist, retry_ok):
                 logger.warning(
                     f"[{i}/{len(rows)}] {name} — QUARANTINED: "
-                    f"{hist['status']} {hist['attempts']}회 연속 (마지막 {hist['last_at']}) "
+                    f"{_attempt_label(hist)} {hist['attempts']}회 연속 (마지막 {hist['last_at']}) "
                     f"— 다운로드·파싱 생략. 다시 시도하려면 --retry-quarantined")
                 results.append({"status": "QUARANTINED", "pdf": name})
                 runlog.record_item(sha256=sha, name=name, status="QUARANTINED",
                                    source="catalog", insurer=row["company"],
                                    product=row["product_name"],
-                                   error=f"{hist['status']} {hist['attempts']}회 연속")
+                                   error=f"{_attempt_label(hist)} {hist['attempts']}회 연속")
                 continue
 
             tasks.append({
@@ -339,8 +374,14 @@ def main() -> None:
             logger.info(f"처리 대상 {len(tasks)}건 (동시 {concurrency})",
                         extra={"event": "ingest_start", "pending": len(tasks),
                                "concurrency": concurrency})
+        def _mark_started(task: dict) -> None:
+            # 처리를 시작하기 전에 시도를 먼저 센다. OOM으로 프로세스가 통째로 죽으면 아래
+            # record_item이 불리지 않아 흔적이 없고, 다음 기동이 같은 문서에서 또 죽는다.
+            if not args.dry_run and task["row"]["sha256"]:
+                runlog.record_attempt_start(sha256=task["row"]["sha256"], name=task["name"])
+
         done = 0
-        for task, result in _run_tasks(tasks, concurrency):
+        for task, result in _run_tasks(tasks, concurrency, on_start=_mark_started):
             done += 1
             name, sha = task["name"], task["row"]["sha256"]
             results.append(result)
@@ -368,6 +409,7 @@ def main() -> None:
                 "elapsed_s": result.get("elapsed_s", 0.0), "phases": result.get("phases") or {},
                 "boundary_confidence": result.get("boundary_confidence"),
                 "stages": result.get("stages") or {},
+                "rss_peak_mb": result.get("rss_peak_mb"),
             })
             if not args.dry_run:
                 # 이력 기록은 부모만 한다 — attempts.json 경합을 피하려는 것.
@@ -377,7 +419,7 @@ def main() -> None:
                     elapsed_s=result.get("elapsed_s", 0.0), phases=result.get("phases"),
                     error=result.get("error"), source="catalog",
                     boundary_confidence=result.get("boundary_confidence"),
-                    stages=result.get("stages"),
+                    stages=result.get("stages"), rss_peak_mb=result.get("rss_peak_mb"),
                     insurer=task["row"]["company"], product=task["row"]["product_name"])
 
     conn.close()

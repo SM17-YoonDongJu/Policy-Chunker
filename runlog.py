@@ -14,6 +14,8 @@
   runs.jsonl     적재 CLI 1회 실행 = 1줄 (append-only, 지표 산출용)
   items.jsonl    문서 1건 처리 = 1줄 (append-only, phase 타이밍 포함)
   attempts.json  sha256 -> 최근 시도 요약. 0청크/실패 문서의 무한 재처리를 막는 데 쓴다.
+                 처리를 시작할 때 STARTED로 먼저 적는다(write-ahead) — OOM처럼 프로세스가
+                 통째로 죽어 결과 기록이 안 남는 시도도 세어야 같은 문서로 영원히 돌아오지 않는다.
   daemon.json    데몬 기동 시각과 마지막 사이클 성패. healthcheck가 읽는다.
 
 환경변수:
@@ -156,9 +158,37 @@ def record_item(*, sha256: Optional[str], name: str, status: str,
         return
     attempts = _read_json(_ATTEMPTS, {})
     prev = attempts.get(sha256, {})
-    # 성공하면 카운터를 0으로 되돌린다 — 다음에 파일이 바뀌어 다시 실패해도 재시도 기회를 준다.
-    n = 0 if status == "OK" else int(prev.get("attempts", 0)) + 1
+    if status == "OK":
+        # 성공하면 카운터를 0으로 되돌린다 — 다음에 파일이 바뀌어 다시 실패해도 재시도 기회를 준다.
+        n = 0
+    elif prev.get("status") == "STARTED":
+        # record_attempt_start가 이미 이 시도를 셌다 — 결과는 상태만 덮고 다시 더하지 않는다.
+        n = int(prev.get("attempts", 0))
+    else:
+        n = int(prev.get("attempts", 0)) + 1
     attempts[sha256] = {"status": status, "attempts": n, "last_at": rec["at"], "name": name}
+    _write_json(_ATTEMPTS, attempts)
+
+
+def record_attempt_start(*, sha256: Optional[str], name: str) -> None:
+    """문서 처리를 시작하기 전에 시도를 먼저 센다(write-ahead).
+
+    OOM·강제 종료로 프로세스가 통째로 사라지면 record_item이 불리지 않아 attempts.json에
+    흔적이 없고, 다음 기동이 같은 문서로 돌아와 같은 자리에서 또 죽는다 — 434쪽 문서 하나로
+    닷새 동안 111번 재시작한 것이 그 모양이다. 여기서 미리 올려 두면 끝을 못 본 시도도
+    상한(_MAX_RETRY)에 걸려 격리된다. 정상 종료면 record_item이 상태를 덮고 OK면 0으로
+    되돌리며, 이미 센 시도를 다시 더하지 않는다.
+
+    STARTED가 남아 있는 문서는 '이전 시도가 끝을 못 봤다'는 뜻이다. 배포 재시작도 여기에
+    걸릴 수 있지만 시작한 문서는 정지 신호를 받아도 끝까지 가므로(shutdown) 드물고,
+    걸리면 --retry-quarantined로 푼다.
+    """
+    if not sha256:
+        return
+    attempts = _read_json(_ATTEMPTS, {})
+    prev = attempts.get(sha256, {})
+    attempts[sha256] = {"status": "STARTED", "attempts": int(prev.get("attempts", 0)) + 1,
+                        "last_at": now_iso(), "name": name}
     _write_json(_ATTEMPTS, attempts)
 
 

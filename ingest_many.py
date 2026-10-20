@@ -193,6 +193,9 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
         "elapsed_s": round(time.time() - t0, 1),
         "phases": timings,
         "stages": stage_log,
+        # 이 프로세스의 최고 상주 메모리. 동시 처리면 워커의 값이고, 순차면 사이클 내내 쌓인
+        # 값이라 문서가 지날수록 오르는지(누적)도 여기서 보인다.
+        "rss_peak_mb": stages.peak_rss_mb(),
         "boundary_confidence": chunk_report.get("boundary_confidence"),
         "boundaries": chunk_report.get("boundaries"),
     }
@@ -243,6 +246,7 @@ def main() -> None:
                 sha256=result.get("doc_hash"), name=result.get("pdf", "?"),
                 status=result["status"], chunks=result.get("chunks", 0),
                 warnings=result.get("warnings", 0), elapsed_s=result.get("elapsed_s", 0.0),
+                rss_peak_mb=result.get("rss_peak_mb"),
                 phases=result.get("phases"), error=result.get("error"), source="manifest",
                 boundary_confidence=result.get("boundary_confidence"),
                 stages=result.get("stages"))

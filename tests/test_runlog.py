@@ -236,3 +236,42 @@ def test_weak_boundary_counter_in_metrics(rl, monkeypatch):
     samples = {s.name: s.value for f in exporter.RunlogCollector().collect()
                for s in f.samples}
     assert samples["insurance_chunker_weak_boundary_documents"] == 2.0
+
+
+# ── 시도 선기록 (write-ahead) ────────────────────────────────────────────────
+
+def test_started_marker_counts_an_unfinished_attempt(rl):
+    """처리를 시작하면서 먼저 센다 — OOM으로 프로세스가 사라지면 record_item이 불리지 않아
+    attempts에 흔적이 없고, 다음 기동이 같은 문서에서 또 죽는다(434쪽 문서로 111회 재시작)."""
+    rl.record_attempt_start(sha256="abc", name="x.pdf")
+    h = rl.attempt("abc")
+    assert h["status"] == "STARTED" and h["attempts"] == 1
+
+    rl.record_attempt_start(sha256="abc", name="x.pdf")  # 죽고 다시 떠서 또 시작
+    assert rl.attempt("abc")["attempts"] == 2
+
+
+def test_result_after_start_does_not_double_count(rl):
+    """선기록이 이미 센 시도를 결과 기록이 또 더하면 상한에 두 배 빨리 닿는다."""
+    rl.record_attempt_start(sha256="abc", name="x.pdf")
+    rl.record_item(sha256="abc", name="x.pdf", status="EMPTY")
+    h = rl.attempt("abc")
+    assert h["status"] == "EMPTY" and h["attempts"] == 1
+
+
+def test_ok_after_start_resets_the_counter(rl):
+    rl.record_attempt_start(sha256="abc", name="x.pdf")
+    rl.record_attempt_start(sha256="abc", name="x.pdf")
+    rl.record_item(sha256="abc", name="x.pdf", status="OK", chunks=5)
+    assert rl.attempt("abc")["attempts"] == 0
+
+
+def test_result_without_start_still_counts(rl):
+    """ingest_many 경로처럼 선기록 없이 결과만 오는 호출부의 동작은 그대로다."""
+    rl.record_item(sha256="abc", name="x.pdf", status="ERROR")
+    assert rl.attempt("abc")["attempts"] == 1
+
+
+def test_start_without_sha_is_ignored(rl):
+    rl.record_attempt_start(sha256=None, name="x.pdf")
+    assert rl.attempt("") is None
