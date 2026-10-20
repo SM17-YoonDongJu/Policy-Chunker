@@ -140,14 +140,20 @@ def test_staged_parse_still_matches_legacy_with_concurrency(load, monkeypatch, m
 # ── 실제로 동시에 나가는가 ────────────────────────────────────────────────────
 
 def test_calls_really_overlap_up_to_the_limit(load, monkeypatch, table_pdf):
+    """동시도 3이면 8건이 3·3·2 세 차례로 나가 0.6초 안팎이다. 직렬이면 1.6초다.
+
+    VLM 단계의 시간만 재고 렌더링은 가짜로 둔다. 전체 파싱 벽시계로 재면 텍스트 추출·pdfplumber·
+    렌더 같은 CPU 구간이 1.12초 예산에 섞여, 느린 러너에서는 동시 호출과 무관하게 깨진다 —
+    ubuntu-latest가 Ubuntu 26으로 바뀐 2026-10-19 이후 CI의 pytest가 13초에서 120초로 늘자
+    이 테스트만 5.35초로 떨어졌다. 로컬에서도 예산의 0.84초를 이미 쓰고 있었다.
+    """
     extractor, _ = load(VLM_BACKEND="local", VLM_MODEL="m", VLM_TARGET="tables",
                         VLM_CONCURRENCY="3")
+    monkeypatch.setattr(extractor, "render_page", lambda page, pno: (f"img{pno}", 1))
     srv = _install(monkeypatch, _Server(delay=0.2))
-    t0 = time.perf_counter()
-    _run(extractor, table_pdf)
-    elapsed = time.perf_counter() - t0
+    _, vlm = _run(extractor, table_pdf)
     assert srv.peak == 3, f"동시 처리 최댓값이 {srv.peak} — 동시도 3이어야 한다"
-    assert elapsed < 8 * 0.2 * 0.7, f"직렬(1.6초)과 다를 바 없다: {elapsed:.2f}초"
+    assert vlm.seconds < 8 * 0.2 * 0.7, f"직렬(1.6초)과 다를 바 없다: {vlm.seconds:.2f}초"
 
 
 def test_concurrency_one_is_strictly_sequential(load, monkeypatch, table_pdf):
