@@ -291,9 +291,9 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 
 | 파일 | 내용 |
 |---|---|
-| `items.jsonl` | 문서 1건 처리 = 1줄. 상태·청크 수·**단계별 소요 시간**(hash/parse/chunk/embed/store) |
+| `items.jsonl` | 문서 1건 처리 = 1줄. 상태·청크 수·**단계별 소요 시간**(hash/parse/chunk/embed/store)·최고 상주 메모리(`rss_peak_mb`, 단계별은 `stages.*.rss_mb`) |
 | `runs.jsonl` | 적재 CLI 1회 실행 = 1줄. 사이클 집계 |
-| `attempts.json` | sha256 → 최근 시도 요약. 격리 판정에 쓴다 |
+| `attempts.json` | sha256 → 최근 시도 요약. 격리 판정에 쓴다. 처리를 **시작할 때** `STARTED`로 먼저 적으므로 OOM처럼 결과 기록 없이 죽은 시도도 센다 |
 | `daemon.json` | 기동 시각 · 마지막 사이클 성패 · **마지막 성공 시각** |
 
 DB 테이블이 아니라 파일인 이유: `corpus.*`의 DDL 진실원은 AI 레포 `migrations/corpus` 하나다.
@@ -567,6 +567,12 @@ kubectl exec deploy/insurance-chunker -- python /app/slo.py
 0청크 문서는 `policy_chunks`에 행이 안 생겨 `doc_already_ingested`가 영원히 `False`다 —
 상한이 없으면 매 주기 S3에서 다시 받아 다시 파싱한다. `INGEST_MAX_RETRY`회 연속 실패하면
 격리해 다운로드조차 하지 않는다. 성공 한 번이면 카운터가 0으로 돌아간다.
+
+시도는 문서 처리를 **시작하기 전에** `STARTED`로 먼저 센다. OOM이나 강제 종료로 프로세스가
+통째로 죽으면 결과 기록이 안 남아 다음 기동이 같은 문서로 돌아와 같은 자리에서 또 죽는데
+(434쪽 문서 하나로 닷새 동안 111회 재시작), 선기록이 있으면 그 시도도 상한에 걸려 격리된다.
+`attempts.json`에 `STARTED`가 남아 있는 문서가 그렇게 끝을 못 본 문서이고, 사이클 시작 로그에
+`attempt_unfinished`로 찍힌다. 배포 재시작은 시작한 문서를 끝까지 보내므로 보통 여기 안 걸린다.
 
 ```bash
 # 격리 목록

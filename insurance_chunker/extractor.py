@@ -198,7 +198,16 @@ def extract_pdfplumber_tables(pdf_path: str, pages: list[int]) -> dict[int, str]
             for p in pages:
                 if p - 1 >= len(pdf.pages):
                     continue
-                tabs = pdf.pages[p - 1].extract_tables() or []
+                page = pdf.pages[p - 1]
+                try:
+                    tabs = page.extract_tables() or []
+                finally:
+                    # pdfplumber는 건드린 쪽의 글자·선 객체를 문서를 닫을 때까지 캐시에 들고 있다.
+                    # 한국어 약관은 쪽당 글자 2천 개 안팎이고 글자 하나가 2KB짜리 dict라 쪽당
+                    # 3~5MB다. 434쪽 문서에서 표·gap 356쪽을 한 번에 돌자 2GB를 넘겨 파드 한도
+                    # 4Gi에서 죽었다(OOM 111회 재시작, 2026-10-15~20). 쪽마다 캐시를 풀면
+                    # 최고점이 한 쪽 분량으로 내려간다. close()는 캐시만 비우고 문서는 안 닫는다.
+                    page.close()
                 mds = [_rows_to_md(t) for t in tabs]
                 mds = [m for m in mds if m]
                 if mds:

@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -30,6 +32,31 @@ logger = logging.getLogger(__name__)
 CPU, GPU, IO = "cpu", "gpu", "io"
 
 
+def rss_mb() -> Optional[float]:
+    """이 프로세스의 현재 상주 메모리(MB). Linux는 /proc, 그 밖은 최고점(ru_maxrss)으로 대신한다.
+
+    어느 단계가 메모리를 먹는지는 이것 없이는 추측뿐이다 — pdfplumber가 2GB를 쌓아 OOM으로
+    111번 재시작하는 동안 죽는 순간은 VLM 단계여서, 로그만으로는 엉뚱한 단계를 의심했다.
+    """
+    try:
+        with open("/proc/self/statm", encoding="ascii") as f:
+            resident_pages = int(f.read().split()[1])
+        return round(resident_pages * os.sysconf("SC_PAGE_SIZE") / 1048576, 1)
+    except (OSError, ValueError, IndexError):
+        return peak_rss_mb()
+
+
+def peak_rss_mb() -> Optional[float]:
+    """이 프로세스가 지금까지 쓴 최고 상주 메모리(MB). 문서 한 건의 메모리 예산을 재는 기준."""
+    try:
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except Exception:  # noqa: BLE001 - 계측이 파이프라인을 죽이면 안 된다
+        return None
+    # ru_maxrss 단위가 플랫폼마다 다르다: Linux는 KB, macOS는 bytes.
+    return round(peak / 1048576 if sys.platform == "darwin" else peak / 1024, 1)
+
+
 @dataclass
 class StageResult:
     name: str
@@ -37,6 +64,11 @@ class StageResult:
     seconds: float
     resource: str
     metrics: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # 단계가 끝난 직후의 상주 메모리를 지표에 끼운다. 이력(items.jsonl의 stages)과 로그에
+        # 단계별로 남아, 어느 단계에서 메모리가 뛰는지 사후에 보인다.
+        self.metrics.setdefault("rss_mb", rss_mb())
 
     def summary(self) -> dict[str, Any]:
         """runlog·로그에 남길 형태. 출력 본문은 빼고 시간·자원·지표만."""

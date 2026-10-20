@@ -252,3 +252,80 @@ def test_nothing_starts_after_the_stop_signal(wk):
     """정지 예약 뒤에는 새 CLI를 띄우지 않는다 — 띄워봐야 곧 SIGKILL이다."""
     wk.shutdown.request_stop()
     assert wk._run("ingest_catalog", [sys.executable, "-c", "pass"]) is False
+
+
+# ── 시도 선기록 훅 (OOM 루프 방지) ───────────────────────────────────────────
+
+def test_unfinished_attempts_count_toward_quarantine():
+    """선기록만 남은(STARTED) 문서도 상한에 닿으면 격리된다 — 이게 없으면 OOM 문서는 영원히 돈다."""
+    assert ingest_catalog._should_quarantine({"status": "STARTED", "attempts": 3}, False)
+    assert ingest_catalog._attempt_label({"status": "STARTED"}).startswith("처리 중 중단")
+    assert ingest_catalog._attempt_label({"status": "EMPTY"}) == "EMPTY"
+
+
+def test_on_start_fires_right_before_each_task_in_serial_path(monkeypatch):
+    order = []
+
+    def _run(t):
+        order.append(("run", t["name"]))
+        return {"pdf": t["name"], "status": "OK"}
+
+    monkeypatch.setattr(ingest_catalog, "_process_one", _run)
+    tasks = [{"name": "a.pdf"}, {"name": "b.pdf"}]
+    list(ingest_catalog._run_tasks(tasks, 1, on_start=lambda t: order.append(("start", t["name"]))))
+    assert order == [("start", "a.pdf"), ("run", "a.pdf"), ("start", "b.pdf"), ("run", "b.pdf")]
+
+
+def test_pool_marks_only_tasks_that_are_actually_in_flight(monkeypatch):
+    """풀 경로는 동시도만큼만 미리 넣는다. 전부 미리 넣으면 아직 시작도 안 한 문서가 '시작'으로
+    적혀, 사이클이 죽었을 때 엉뚱한 문서의 시도 횟수가 오른다."""
+    import concurrent.futures as cf
+
+    class _Pool(cf.ThreadPoolExecutor):
+        def __init__(self, max_workers=None, mp_context=None, **kw):
+            super().__init__(max_workers=max_workers)
+
+    monkeypatch.setattr(cf, "ProcessPoolExecutor", _Pool)
+    lock, events = threading.Lock(), []
+
+    def _work(t):
+        time.sleep(0.02)
+        with lock:
+            events.append(("done", t["name"]))
+        return {"pdf": t["name"], "status": "OK", "echo": t["name"]}
+
+    def _start(t):
+        with lock:
+            events.append(("start", t["name"]))
+
+    monkeypatch.setattr(ingest_catalog, "_process_one", _work)
+    tasks = [{"name": f"{i}.pdf"} for i in range(6)]
+    pairs = list(ingest_catalog._run_tasks(tasks, 2, on_start=_start))
+
+    assert sorted(t["name"] for t, _ in pairs) == sorted(t["name"] for t in tasks)
+    assert all(r["echo"] == t["name"] for t, r in pairs)
+    assert [n for k, n in events if k == "start"] == [t["name"] for t in tasks]
+    in_flight = 0
+    for kind, _ in events:
+        in_flight += 1 if kind == "start" else -1
+        assert in_flight <= 2, "동시도보다 많은 문서가 '시작'으로 적혔다"
+
+
+def test_pool_worker_crash_becomes_an_error_result(monkeypatch):
+    import concurrent.futures as cf
+
+    class _Pool(cf.ThreadPoolExecutor):
+        def __init__(self, max_workers=None, mp_context=None, **kw):
+            super().__init__(max_workers=max_workers)
+
+    monkeypatch.setattr(cf, "ProcessPoolExecutor", _Pool)
+
+    def _boom(t):
+        if t["name"] == "b.pdf":
+            raise RuntimeError("worker died")
+        return {"pdf": t["name"], "status": "OK"}
+
+    monkeypatch.setattr(ingest_catalog, "_process_one", _boom)
+    out = {t["name"]: r["status"] for t, r in
+           ingest_catalog._run_tasks([{"name": n} for n in ("a.pdf", "b.pdf", "c.pdf")], 2)}
+    assert out == {"a.pdf": "OK", "b.pdf": "ERROR", "c.pdf": "OK"}
