@@ -112,6 +112,17 @@ _PADDLE_TASK_PROMPT = "Table Recognition:"
 # VLM_PROMPT를 명시하면 어느 모델이든 그 값이 이긴다.
 VLM_PROMPT = os.environ.get("VLM_PROMPT") or (
     _PADDLE_TASK_PROMPT if "paddleocr" in VLM_MODEL.lower() else _DEFAULT_VLM_PROMPT)
+# 텍스트 레이어 없는 쪽(스캔)의 본문 복구 프롬프트. 표 프롬프트와 같은 규칙으로 모델명에
+# 따라 기본값을 고른다 — Paddle은 "OCR:" 태스크 토큰이 쪽 전체 markdown을 낸다(Colab 실험
+# 방법 D에서 확인).
+_PADDLE_OCR_TASK_PROMPT = "OCR:"
+_DEFAULT_OCR_PROMPT = (
+    "이 페이지 이미지의 글을 읽는 순서대로 원문 그대로 출력하라.\n"
+    "- 의역·요약·설명·머리말 금지. 본문 텍스트만.\n"
+    "- 읽을 수 없는 글자는 [?]로 표기하고 계속 진행하라."
+)
+VLM_OCR_PROMPT = os.environ.get("VLM_OCR_PROMPT") or (
+    _PADDLE_OCR_TASK_PROMPT if "paddleocr" in VLM_MODEL.lower() else _DEFAULT_OCR_PROMPT)
 # 1이면 VLM 표 셀을 같은 쪽 텍스트 레이어 줄과 대조해(공백 제거, ratio>=0.8) 일치하는 줄로
 # 교정한다. 입력 토큰이 영역당 1,100~1,300에서 막혀 해상도로는 못 고치는 오독(실측:
 # 관혈→관협)이 대상이다. 켜고 끈 차이를 벤치의 cell_match(텍스트 레이어 일치율)로 재서
@@ -135,6 +146,9 @@ _vision_fail_streak = 0
 _vision_page_stats: list[dict] = []
 # 이 문서에서 텍스트 레이어로 교정한 셀 수(VLM_SNAP_TEXT). 켜고 끈 효과를 지표에서 본다.
 _snap_count = 0
+# 이 문서에서 OCR로 복구한 쪽의 본문({page: text}). VlmStage가 만들고 _publish가 옮긴다 —
+# 표(extract_vlm_tables 반환값)와 수명은 같지만 쓰임이 달라(본문 채움) 따로 든다.
+_ocr_texts: dict[int, str] = {}
 
 
 class _VLMCallFailed(Exception):
@@ -147,16 +161,22 @@ def reset_vision_counter() -> None:
     차단기를 문서 단위로 두는 이유: 서버가 잠깐 죽었다 살아난 경우 다음 문서까지
     포기할 이유가 없다. 반대로 한 문서 안에서는 한 번 접었으면 끝까지 접는다.
     """
-    global _vision_call_count, _vision_fail_streak, _vision_page_stats, _snap_count
+    global _vision_call_count, _vision_fail_streak, _vision_page_stats, _snap_count, _ocr_texts
     _vision_call_count = 0
     _vision_fail_streak = 0
     _vision_page_stats = []
     _snap_count = 0
+    _ocr_texts = {}
 
 
 def vision_page_stats() -> list[dict]:
     """이 문서에서 나간 VLM 호출 기록(호출 순서). 계측용."""
     return list(_vision_page_stats)
+
+
+def vision_ocr_texts() -> dict[int, str]:
+    """이 문서에서 OCR로 복구한 쪽의 본문. stages.vlm이 단계 출력에 싣는다."""
+    return dict(_ocr_texts)
 
 
 def _vlm_outcome(exc: Exception) -> str:
@@ -416,6 +436,22 @@ def snap_cells_to_text(md: str, lines: list[str]) -> tuple[str, int]:
     return "\n".join(out_rows), snapped
 
 
+def _looping_lines(text: str) -> bool:
+    """같은 줄이 VLM_LOOP_CELLS번 연속 — OCR 출력의 반복 루프 지문(_looping_cells의 짝)."""
+    streak, prev = 0, None
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s == prev:
+            streak += 1
+            if streak >= VLM_LOOP_CELLS:
+                return True
+        else:
+            streak, prev = 1, s
+    return False
+
+
 def _looping_cells(md: str) -> bool:
     """같은 값의 셀이 VLM_LOOP_CELLS번 연속되는가 — 반복 루프에 빠진 출력의 지문.
 
@@ -475,8 +511,12 @@ def render_page(fitz_page, pno: int,
 
 
 def call_vlm(img_b64: str, pno: int, image_px: int = 0,
-             record: Optional[Callable[[dict], None]] = None) -> Optional[str]:
-    """렌더된 이미지 → VLM → markdown 표. 표 없으면 None, 호출 실패면 _VLMCallFailed.
+             record: Optional[Callable[[dict], None]] = None,
+             task: str = "table") -> Optional[str]:
+    """렌더된 이미지 → VLM → 결과. 호출 실패면 _VLMCallFailed.
+
+    task="table"이면 markdown 표(표 없으면 None), task="ocr"이면 쪽 본문 텍스트(빈 쪽이면
+    None) — 텍스트 레이어 없는 쪽의 본문 복구(#74)가 쓴다.
 
     record는 호출 기록(소요·결과·토큰·잘림)을 받는다. 없으면 모듈 기록(_vision_page_stats)에
     쌓는다. 병렬 호출에서는 호출부(VlmStage)가 자기 기록으로 받는다. 스레드에서 불려도 되도록
@@ -491,7 +531,7 @@ def call_vlm(img_b64: str, pno: int, image_px: int = 0,
             "content": [
                 {"type": "image_url",
                  "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
-                {"type": "text", "text": VLM_PROMPT},
+                {"type": "text", "text": VLM_OCR_PROMPT if task == "ocr" else VLM_PROMPT},
             ],
         }],
         "temperature": 0,
@@ -500,7 +540,7 @@ def call_vlm(img_b64: str, pno: int, image_px: int = 0,
     if VLM_MODEL:
         payload["model"] = VLM_MODEL
 
-    stat: dict = {"page": pno, "image_px": image_px}
+    stat: dict = {"page": pno, "image_px": image_px, "task": task}
     t0 = time.perf_counter()
     try:
         resp = requests.post(f"{VLM_URL}/v1/chat/completions", json=payload,
@@ -525,23 +565,31 @@ def call_vlm(img_b64: str, pno: int, image_px: int = 0,
                 # 4096토큰을 생성 속도(18.7토큰/초)로 끝까지 뽑는 시간과 같았다 —
                 # 잘린 표는 시간도 품질도 잃는다.
                 finish_reason=choice.get("finish_reason"))
-    md = _parse_vlm_output(out)
+    if task == "ocr":
+        result = _strip_fences(_normalize_superscripts(out)).strip() or None
+        degenerate = _looping_lines(result) if result else False
+    else:
+        result = _parse_vlm_output(out)
+        degenerate = _looping_cells(result) if result else False
     # 퇴행 출력 폐기 — 운영 기준선에서 호출의 28%가 상한에서 잘렸고, Colab 실험에서 그 대부분이
     # 백지 입력의 반복 루프였다. 잘린 표는 행이 끊겨 구조가 틀리므로 반쪽을 싣는 대신 버리고
     # 그 쪽은 CPU 소스 폴백에 맡긴다. outcome으로 남겨 비율을 지표에서 본다.
-    if md:
+    if result:
         reason = ("truncated" if choice.get("finish_reason") == "length"
-                  else "loop" if _looping_cells(md) else None)
+                  else "loop" if degenerate else None)
         if reason:
             stat["outcome"] = reason
             record(stat)
             logger.warning(f"p{pno}: VLM 퇴행 출력 폐기 ({reason})",
                            extra={"event": "vlm_output_discarded", "page": pno,
-                                  "reason": reason})
+                                  "reason": reason, "task": task})
             return None
-    stat["outcome"] = "table" if md else "empty"
+    if task == "ocr":
+        stat["outcome"] = "text" if result else "empty"
+    else:
+        stat["outcome"] = "table" if result else "empty"
     record(stat)
-    return md
+    return result
 
 
 def extract_vision_local(fitz_page, pno: int, *,
@@ -743,6 +791,7 @@ def extract_cpu_tables(
     page_numbers: list[int],
     use_vision: bool = True,
     layout_boxes: Optional[dict[int, list[list[float]]]] = None,
+    ocr_pages: Optional[list[int]] = None,
 ) -> tuple[dict[str, dict[int, str]], list, dict]:
     """CPU 소스(PyMuPDF)로 표를 뽑고 VLM 투입 대상을 정한다.
 
@@ -751,11 +800,14 @@ def extract_cpu_tables(
     그 역할을 대신한다). None이면(LAYOUT_BACKEND=off) 예전 그대로 gap 휴리스틱 + 쪽 목록.
     PyMuPDF 표는 두 경로 모두 뽑는다 — 박스 쪽에서 VLM이 실패하면 폴백이다.
 
+    ocr_pages(레이아웃이 가려낸 텍스트 레이어 없는 쪽, #74)는 {"page", "ocr": True}
+    대상이 되어 쪽 전체가 본문 복구(OCR 프롬프트)로 간다. 레이아웃 경로에서만 쓴다.
+
     Returns:
         (table_sources, vlm_targets, info)
         table_sources: {"pymupdf": {page: md}}
-        vlm_targets:   [{"page", "bbox"}] 또는 [page]. 순서가 곧 예산 소진 순서
-        info:          {"pymupdf_pages", "gap_pages", "crops"} — 로그·계측용
+        vlm_targets:   [{"page","ocr"} | {"page","bbox"}] 또는 [page]. 순서 = 예산 소진 순서
+        info:          {"pymupdf_pages", "gap_pages", "crops", "ocr_pages"} — 로그·계측용
     """
     import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
 
@@ -776,12 +828,16 @@ def extract_cpu_tables(
     targets: list = []
     if use_vision and VLM_BACKEND != "off":
         if layout_boxes is not None:
-            targets = [{"page": pno, "bbox": list(bbox)}
-                       for pno in sorted(layout_boxes) for bbox in layout_boxes[pno]]
+            # 본문 복구(OCR)가 표 crop보다 먼저다 — 표에는 PyMuPDF 폴백이 있지만, 이 쪽의
+            # 본문은 이것 말고 어디에도 없다. 예산(VISION_MAX_CROPS)이 순서대로 깎인다.
+            targets = ([{"page": pno, "ocr": True} for pno in (ocr_pages or [])]
+                       + [{"page": pno, "bbox": list(bbox)}
+                          for pno in sorted(layout_boxes) for bbox in layout_boxes[pno]])
         else:
             targets = vlm_target_pages(table_pages, gaps)
     info = {"pymupdf_pages": len(table_pages), "gap_pages": len(gaps),
-            "crops": len(targets) if layout_boxes is not None else 0}
+            "crops": len(targets) if layout_boxes is not None else 0,
+            "ocr_pages": len(ocr_pages or []) if layout_boxes is not None else 0}
     return table_sources, targets, info
 
 
@@ -824,7 +880,7 @@ def extract_vlm_tables(
     with fitz.open(pdf_path) as doc:
         vlm_tables = stage.run(doc, targets)
         if VLM_SNAP_TEXT and crops and vlm_tables:
-            _snap_tables(doc, targets, vlm_tables)
+            _snap_tables(doc, [t for t in targets if "bbox" in t], vlm_tables)
     _publish(stage)
     return vlm_tables
 
@@ -856,10 +912,11 @@ def _publish(stage) -> None:
     extract_vision 경로, 테스트)가 예전 계약 그대로 동작하게 하려는 것이다. 단계가 끝난 뒤
     한 번 옮기므로 병렬 호출 중에는 모듈 상태를 아무도 건드리지 않는다.
     """
-    global _vision_call_count, _vision_fail_streak, _vision_page_stats
+    global _vision_call_count, _vision_fail_streak, _vision_page_stats, _ocr_texts
     _vision_call_count = stage.calls
     _vision_fail_streak = VLM_FAIL_STREAK if stage.circuit_open else stage.streak
     _vision_page_stats = list(stage.stats)
+    _ocr_texts = dict(stage.ocr_texts)
 
 
 def extract_tables_for_doc(

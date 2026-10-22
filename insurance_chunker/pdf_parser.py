@@ -4,8 +4,9 @@ Policy-Chunker(main) extract.py와 동일한 텍스트 추출 방식:
   - PyMuPDF get_text("blocks") 로 텍스트 블록 추출
   - 표 bbox와 겹치는 블록은 제외 (본문·표 중복 방지)
 
-스캔본(이미지 PDF)은 지원하지 않는다. 폰트 신호가 없어 경계 감지가
-실패하므로 OCR 전처리 후 텍스트 PDF로 변환해서 입력해야 한다.
+텍스트 레이어가 없는 쪽(스캔)은 여기서는 빈 문자열로 남고, 레이아웃 경로가 켜져 있으면
+VLM OCR가 본문을 복구해 combine 단계에서 채운다(is_ocr=True, #74). 문서 전체가 스캔이면
+폰트 신호가 없어 경계 감지가 weak로 판정된다 — 조항 라벨 품질은 기대할 수 없다.
 """
 from __future__ import annotations
 

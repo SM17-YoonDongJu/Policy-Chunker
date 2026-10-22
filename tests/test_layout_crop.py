@@ -191,12 +191,18 @@ def test_crop_budget_is_vision_max_crops(ex, fake_vlm, fake_layout, crop_pdf):  
 
 
 def test_gap_heuristic_is_not_used_when_layout_is_on(ex, fake_vlm, fake_layout, mixed_pdf):  # noqa: F811
-    """이미지만 있는 쪽(기존 gap 1순위)도 박스가 없으면 VLM에 가지 않는다 — 백지 루프의 뿌리."""
+    """레이아웃이 켜지면 gap 휴리스틱은 끝이다 — 백지 루프의 뿌리였다.
+
+    이미지만 있는 쪽(기존 gap 1순위)은 표 프롬프트가 아니라 본문 복구(OCR, #74)로 가고,
+    표 프롬프트 호출은 박스가 있을 때만 나간다.
+    """
     ex(VLM_BACKEND="local", VLM_MODEL="m")
     fake_layout({})  # 박스 0개
     _, by = _parse(mixed_pdf)
-    assert fake_vlm["n"] == 0
     assert by["tables_cpu"].metrics["gap_pages"] == 0
+    assert by["vlm"].metrics["tables"] == 0, "박스가 없으면 표 호출은 0이어야 한다"
+    assert fake_vlm["n"] == by["vlm"].metrics["ocr_targets"] == 1, \
+        "이미지만 있는 쪽 하나가 본문 복구로 간다"
 
 
 # ── 폴백: 레이아웃이 없으면 기존 경로 그대로 ──────────────────────────────────
@@ -278,7 +284,7 @@ def test_blank_pages_skip_the_model(tmp_path, monkeypatch):
 
     fake = _FakeModel([])
     monkeypatch.setattr(layout_mod, "_load_model", lambda: fake)
-    boxes, metrics = layout_mod.detect_tables(str(path))
+    boxes, ocr_pages, metrics = layout_mod.detect_tables(str(path))
     assert fake.calls == 1
     assert metrics["blank_skipped"] == 1
-    assert boxes == {}
+    assert boxes == {} and ocr_pages == []

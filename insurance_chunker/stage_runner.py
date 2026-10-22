@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 
 # 산출물 형식이 바뀌면 올린다 — 예전 산출물을 잘못 읽는 대신 키가 달라져 다시 돈다.
 # 2: layout 단계 추가, tables_cpu.targets가 crop({"page","bbox"}) 목록일 수 있다.
-ARTIFACT_VERSION = 2
+# 3: vlm 출력이 {tables, ocr_text}(VlmOut), layout 출력에 ocr_pages.
+ARTIFACT_VERSION = 3
 
 # layout이 text보다 앞이다 — 텍스트의 표 영역 제외 기준이 레이아웃 박스라서.
 ORDER = ["layout", "text", "tables_cpu", "vlm", "combine", "chunk", "embed"]
@@ -100,7 +101,9 @@ def stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
                 # 결과는 바꾸지 않지만 시간을 바꾼다. 키에서 빼면 동시도만 바꾼 변형이 기준선의
                 # VLM 산출물(과 그때 잰 시간)을 재사용해 '개선 없음'으로 보인다.
                 "concurrency": extractor.VLM_CONCURRENCY,
-                "prompt": hashlib.sha256(extractor.VLM_PROMPT.encode()).hexdigest()[:12]}
+                "prompt": hashlib.sha256(extractor.VLM_PROMPT.encode()).hexdigest()[:12],
+                "ocr_prompt": hashlib.sha256(
+                    extractor.VLM_OCR_PROMPT.encode()).hexdigest()[:12]}
     if name == "chunk":
         return {"meta": asdict(opts["meta"]), "target": opts["target"],
                 "hard_max": opts["hard_max"]}
@@ -138,7 +141,7 @@ def _dump_output(name: str, output: Any, path: Path) -> Any:
     if name == "tables_cpu":
         return asdict(output)
     if name == "vlm":
-        return output
+        return asdict(output)
     if name == "combine":
         return [asdict(p) for p in output]
     if name == "chunk":
@@ -168,7 +171,8 @@ def _load_output(name: str, data: Any, path: Path) -> Any:
             sources={k: _int_keys(v) for k, v in data["sources"].items()},
             targets=data["targets"], page_numbers=data["page_numbers"], info=data["info"])
     if name == "vlm":
-        return _int_keys(data)
+        return stages.VlmOut(tables=_int_keys(data["tables"]),
+                             ocr_text=_int_keys(data.get("ocr_text") or {}))
     if name == "combine":
         return _pages(data)
     if name == "chunk":

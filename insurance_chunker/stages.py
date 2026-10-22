@@ -88,12 +88,23 @@ class LayoutResult:
     여기로 수렴하므로, 의존이 빠진 이미지가 'VLM이 조용히 꺼진 상태'가 되지 않는다."""
     enabled: bool
     boxes: dict[int, list[dict]]  # 쪽 → [{"bbox_pdf", "bbox_px", "score"}], 읽기 순서
+    # 텍스트 레이어가 없는데 그림이 쪽을 덮는 쪽(스캔) — 본문 복구(OCR) 대상(#74)
+    ocr_pages: list[int] = field(default_factory=list)
 
     def pdf_boxes(self) -> Optional[dict[int, list[list[float]]]]:
         """쪽 → bbox(PDF 포인트) 목록. 꺼져 있으면 None — 호출부가 기존 경로로 간다."""
         if not self.enabled:
             return None
         return {pno: [b["bbox_pdf"] for b in bs] for pno, bs in self.boxes.items()}
+
+
+@dataclass
+class VlmOut:
+    """S4 출력. tables는 표(combine이 쪽에 붙인다), ocr_text는 텍스트 레이어 없는 쪽의
+    복구 본문(combine이 page.text를 채우고 is_ocr를 세운다). 섞지 않는 이유 — OCR 결과가
+    표 목록에 들어가면 본문이 표 row 청크로 쪼개진다."""
+    tables: dict[int, str]
+    ocr_text: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -130,12 +141,13 @@ def layout(pdf_path: str) -> StageResult:
     if layout_mod.LAYOUT_BACKEND == "off":
         return StageResult("layout", LayoutResult(enabled=False, boxes={}), 0.0, CPU,
                            {"skipped": True, "boxes": 0})
-    (boxes, m), sec = _timed(layout_mod.detect_tables, pdf_path)
-    out = LayoutResult(enabled=layout_mod.available(), boxes=boxes)
+    (boxes, ocr_pages, m), sec = _timed(layout_mod.detect_tables, pdf_path)
+    out = LayoutResult(enabled=layout_mod.available(), boxes=boxes, ocr_pages=ocr_pages)
     if not out.enabled:
         # 박스가 일부 쌓였어도 버린다 — 반쯤 켜진 상태로 내려가면 그 문서만 제외 기준이
         # 섞여서, 같은 설정의 두 실행이 다른 결과를 낸다.
         out.boxes = {}
+        out.ocr_pages = []
     return StageResult("layout", out, sec, CPU, {"enabled": out.enabled, **m})
 
 
@@ -158,12 +170,14 @@ def tables_cpu(pdf_path: str, page_numbers: list[int], use_vision: bool = True,
     from .extractor import extract_cpu_tables
 
     layout_boxes = layout_result.pdf_boxes() if layout_result else None
+    ocr_pages = layout_result.ocr_pages if layout_result and layout_result.enabled else None
     (sources, targets, info), sec = _timed(
-        extract_cpu_tables, pdf_path, page_numbers, use_vision, layout_boxes)
+        extract_cpu_tables, pdf_path, page_numbers, use_vision, layout_boxes, ocr_pages)
     out = TablesCpu(sources=sources, targets=targets, page_numbers=page_numbers, info=info)
     return StageResult("tables_cpu", out, sec, CPU, {
         "table_pages": {k: len(v) for k, v in sources.items()},
         "gap_pages": info.get("gap_pages", 0),
+        "ocr_pages": info.get("ocr_pages", 0),
         "vlm_targets": len(targets),
     })
 
@@ -174,14 +188,17 @@ def vlm(pdf_path: str, cpu: TablesCpu, use_vision: bool = True) -> StageResult:
 
     if not use_vision or extractor.VLM_BACKEND == "off":
         extractor.reset_vision_counter()
-        return StageResult("vlm", {}, 0.0, GPU, {"skipped": True, "tables": 0})
+        return StageResult("vlm", VlmOut(tables={}), 0.0, GPU, {"skipped": True, "tables": 0})
     tables, sec = _timed(extractor.extract_vlm_tables,
                          pdf_path, cpu.targets, len(cpu.page_numbers), cpu.info)
-    return StageResult("vlm", tables, sec, GPU, {
+    out = VlmOut(tables=tables, ocr_text=extractor.vision_ocr_texts())
+    return StageResult("vlm", out, sec, GPU, {
         "targets": len(cpu.targets),
         "concurrency": extractor.VLM_CONCURRENCY,
         "calls": extractor._vision_call_count,
         "tables": len(tables),
+        "ocr_targets": cpu.info.get("ocr_pages", 0),
+        "ocr_recovered": len(out.ocr_text),
         "circuit_open": extractor.vision_circuit_open(),
         "snapped_cells": extractor._snap_count,
         **vlm_call_summary(extractor.vision_page_stats()),
@@ -230,32 +247,44 @@ def table_sources(cpu: TablesCpu, vlm_tables: dict[int, str]) -> dict[str, dict[
     return sources
 
 
-def combine(pages: list[PageResult], cpu: TablesCpu, vlm_tables: dict[int, str],
+def combine(pages: list[PageResult], cpu: TablesCpu, vlm_out: VlmOut,
             layout_result: Optional[LayoutResult] = None) -> StageResult:
     """페이지별 표를 고르고 PageResult에 붙인다. pages를 제자리에서 고친다.
 
     레이아웃이 켜져 있으면 VLM(crop) 우선·PyMuPDF 폴백이고, 꺼져 있으면 예전
     더블스페이스 best-of다.
+
+    OCR로 복구한 본문은 여기서 page.text를 채우고 is_ocr를 세운다(#74) — 그 쪽은 폰트
+    신호가 없어 경계 검출이 아무 경계도 못 만드는 쪽이고, 라벨은 label_for가 앞 경계를
+    그대로 잇는다. is_ocr는 그 사실을 하류가 알 수 있게 남기는 표시다.
     """
     from .combine import select_best_tables, select_layout_tables
 
     t0 = time.perf_counter()
     if layout_result and layout_result.enabled:
-        best = select_layout_tables(cpu.sources.get("pymupdf", {}), vlm_tables)
+        best = select_layout_tables(cpu.sources.get("pymupdf", {}), vlm_out.tables)
     else:
-        best = select_best_tables(table_sources(cpu, vlm_tables))
+        best = select_best_tables(table_sources(cpu, vlm_out.tables))
     chosen: dict[str, int] = {}
+    recovered = 0
     for page in pages:
         entry = best.get(page.page_num)
         if entry:
             md, src = entry
             page.tables = [{"markdown": md, "source": src}]
             chosen[src] = chosen.get(src, 0) + 1
+        txt = vlm_out.ocr_text.get(page.page_num)
+        if txt and not page.text.strip():
+            # 복구는 빈 쪽에만 — 텍스트 레이어가 있는 쪽을 VLM 출력으로 덮지 않는다.
+            page.text = txt
+            page.is_ocr = True
+            recovered += 1
 
     table_pages = sum(1 for p in pages if p.tables)
     return StageResult("combine", pages, round(time.perf_counter() - t0, 2), CPU, {
         "table_pages": table_pages,
         "chosen": chosen,
+        "ocr_recovered_pages": recovered,
     })
 
 
@@ -341,7 +370,7 @@ def parse(pdf_path: str, use_ocr: bool = True,
     pages, page_numbers = s2.output
     s3 = tables_cpu(pdf_path, page_numbers, use_vision=use_vision, layout_result=s1.output)
     s4 = vlm(pdf_path, s3.output, use_vision=use_vision)
-    counts = {k: len(v) for k, v in table_sources(s3.output, s4.output).items()}
+    counts = {k: len(v) for k, v in table_sources(s3.output, s4.output.tables).items()}
     logger.info(f"표 추출 완료: {counts}")
     s5 = combine(pages, s3.output, s4.output, layout_result=s1.output)
     logger.info(f"표 부착 완료: {s5.metrics['table_pages']}페이지")

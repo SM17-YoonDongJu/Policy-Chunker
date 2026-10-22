@@ -175,7 +175,7 @@ def test_vlm_stage_is_measured_on_its_own(ex, fake_vlm, mixed_pdf):
     s2, s3 = results[2], results[3]
     assert s3.metrics["targets"] == s2.metrics["vlm_targets"] > 0
     assert s3.metrics["calls"] == fake_vlm["n"]
-    assert s3.metrics["tables"] == len(s3.output)
+    assert s3.metrics["tables"] == len(s3.output.tables)
 
 
 def test_vlm_stage_is_recorded_even_when_skipped(ex, fake_vlm, mixed_pdf):
@@ -186,7 +186,7 @@ def test_vlm_stage_is_recorded_even_when_skipped(ex, fake_vlm, mixed_pdf):
     _, results = stages.parse(mixed_pdf)
     s3 = results[3]
     assert s3.name == "vlm" and s3.metrics["skipped"] is True
-    assert s3.output == {} and fake_vlm["n"] == 0
+    assert s3.output.tables == {} and fake_vlm["n"] == 0
 
 
 def test_summary_carries_time_and_resource_but_not_the_output(ex, fake_vlm, mixed_pdf):
