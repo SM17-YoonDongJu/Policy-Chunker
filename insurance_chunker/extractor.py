@@ -167,13 +167,39 @@ def vision_budget_exhausted() -> bool:
 
 # ── PyMuPDF ───────────────────────────────────────────────────────────────────
 
+# find_tables가 테두리 안 본문을 표로 오인한다 — 손해보험 약관은 "보상하는 사항" 류를
+# 전폭 테두리(1~2열)에 수십 쪽 이어 쓰는 관습이 있어 드물지 않다(DB p236, 현대 p31,
+# 메리츠 p64, 삼성 p9에서 실측). 그 쪽은 본문 줄 중심점이 전부 박스 안이라 parse_text에서
+# 통째로 빠지고, 거대한 한 셀 markdown만 남는다. 가짜 표의 지문은 셀 수다 — 본문 테두리는
+# 셀이 1~2개거나 쪽 대부분을 덮으면서 셀이 거의 없고, 진짜 전면 표(순환계질환 분류표
+# 22행 = 44셀)는 셀이 수십 개다. 면적만 보면 진짜 전면 표가 죽는다.
+TABLE_BORDER_FRAC = float(os.environ.get("TABLE_BORDER_FRAC", "0.6"))
+TABLE_BORDER_MAX_CELLS = int(os.environ.get("TABLE_BORDER_MAX_CELLS", "8"))
+
+
+def is_border_box(table, page_rect) -> bool:
+    """find_tables 결과 하나가 표가 아니라 본문 테두리인가.
+
+    parse_text(본문 제외)와 extract_pymupdf(표 생성)가 같은 판정을 써야 한다 —
+    한쪽만 거르면 본문이 빠진 채 표도 없거나, 본문과 한 셀 표가 중복된다.
+    """
+    cells = [c for c in (table.cells or []) if c is not None]
+    if len(cells) <= 2:
+        return True
+    x0, y0, x1, y1 = table.bbox
+    page_area = abs(page_rect.width * page_rect.height) or 1.0
+    return (abs((x1 - x0) * (y1 - y0)) >= TABLE_BORDER_FRAC * page_area
+            and len(cells) <= TABLE_BORDER_MAX_CELLS)
+
+
 def extract_pymupdf(fitz_page) -> Optional[str]:
-    """fitz page → markdown 표 문자열. 표가 없거나 실패 시 None."""
+    """fitz page → markdown 표 문자열. 표가 없거나 실패 시 None. 테두리 오탐은 뺀다."""
     try:
         tabs = fitz_page.find_tables()
-        if not tabs.tables:
+        real = [t for t in tabs.tables if not is_border_box(t, fitz_page.rect)]
+        if not real:
             return None
-        parts = [tab.to_markdown() for tab in tabs.tables if tab.to_markdown().strip()]
+        parts = [tab.to_markdown() for tab in real if tab.to_markdown().strip()]
         return "\n\n".join(parts) if parts else None
     except Exception as e:
         logger.debug(f"PyMuPDF 표 추출 실패: {e}")

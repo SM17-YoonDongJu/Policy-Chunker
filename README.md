@@ -268,6 +268,8 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VLM_CONNECT_TIMEOUT` | `5` | 접속 타임아웃(초). 서버가 없으면 즉시 실패해야 한다 |
 | `VLM_FAIL_STREAK` | `3` | 연속 실패 N회면 그 문서의 남은 페이지는 VLM 건너뜀 |
 | `VLM_TARGET` | `gap` | VLM 투입 대상. `gap`=PyMuPDF가 못 닿은 페이지 \| `tables`=표 탐지 페이지(구동작) \| `both` |
+| `TABLE_BORDER_FRAC` | `0.6` | find_tables 박스가 쪽 면적의 이 비율 이상 + 셀 희박이면 본문 테두리로 보고 표에서 뺀다 |
+| `TABLE_BORDER_MAX_CELLS` | `8` | 면적 기준과 함께 쓰는 셀 수 상한. 셀 1~2개는 면적과 무관하게 테두리 |
 | `VISION_MAX_PAGES` | `50` | 문서당 VLM 호출 상한. 넘는 페이지는 PyMuPDF/pdfplumber 결과만 쓴다 |
 | `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
 | `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
