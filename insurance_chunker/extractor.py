@@ -112,6 +112,11 @@ _PADDLE_TASK_PROMPT = "Table Recognition:"
 # VLM_PROMPT를 명시하면 어느 모델이든 그 값이 이긴다.
 VLM_PROMPT = os.environ.get("VLM_PROMPT") or (
     _PADDLE_TASK_PROMPT if "paddleocr" in VLM_MODEL.lower() else _DEFAULT_VLM_PROMPT)
+# 1이면 VLM 표 셀을 같은 쪽 텍스트 레이어 줄과 대조해(공백 제거, ratio>=0.8) 일치하는 줄로
+# 교정한다. 입력 토큰이 영역당 1,100~1,300에서 막혀 해상도로는 못 고치는 오독(실측:
+# 관혈→관협)이 대상이다. 켜고 끈 차이를 벤치의 cell_match(텍스트 레이어 일치율)로 재서
+# 기본값을 정한다 — 그때까지 기본 off.
+VLM_SNAP_TEXT = os.environ.get("VLM_SNAP_TEXT", "0") == "1"
 # markdown 셀에서 같은 값이 이만큼 연속되면 퇴행(반복 루프) 출력으로 보고 폐기한다.
 # Colab 실험(2026-10-20)에서 백지 입력이 같은 토큰을 수천 번 반복했다 — max_tokens에
 # 닿으면 finish_reason으로 잡히지만, 그 전에 멈춘 루프는 이 검사만이 잡는다.
@@ -128,6 +133,8 @@ _vision_fail_streak = 0
 # completion_tokens}. 차단기·상한과 같은 수명(문서 단위)이다. 단건 지연이 렌더 해상도(비전
 # 토큰)에서 오는지 생성 길이에서 오는지 가르려면 호출마다 이 넷이 함께 있어야 한다.
 _vision_page_stats: list[dict] = []
+# 이 문서에서 텍스트 레이어로 교정한 셀 수(VLM_SNAP_TEXT). 켜고 끈 효과를 지표에서 본다.
+_snap_count = 0
 
 
 class _VLMCallFailed(Exception):
@@ -140,10 +147,11 @@ def reset_vision_counter() -> None:
     차단기를 문서 단위로 두는 이유: 서버가 잠깐 죽었다 살아난 경우 다음 문서까지
     포기할 이유가 없다. 반대로 한 문서 안에서는 한 번 접었으면 끝까지 접는다.
     """
-    global _vision_call_count, _vision_fail_streak, _vision_page_stats
+    global _vision_call_count, _vision_fail_streak, _vision_page_stats, _snap_count
     _vision_call_count = 0
     _vision_fail_streak = 0
     _vision_page_stats = []
+    _snap_count = 0
 
 
 def vision_page_stats() -> list[dict]:
@@ -328,6 +336,84 @@ def _otsl_to_markdown(otsl: str) -> Optional[str]:
     if row:
         grid.append(row)
     return _grid_to_markdown(grid)
+
+
+# ── 텍스트 레이어 스냅 (VLM_SNAP_TEXT=1) ──────────────────────────────────────
+
+_SNAP_MAX_CHARS = 40  # 짧은 셀만 — 긴 문단 셀은 줄 단위 대조가 성립하지 않는다
+VLM_SNAP_RATIO = float(os.environ.get("VLM_SNAP_RATIO", "0.8"))
+
+
+def _lines_in_boxes(fitz_page, boxes: list[list[float]]) -> list[str]:
+    """박스(+crop 여백) 안에 중심점이 있는 텍스트 레이어 줄 — 스냅 대조의 사전.
+
+    parse_text가 표 영역이라 본문에서 뺀 바로 그 줄들이다. crop 렌더와 같은 여백을 써야
+    경계에 걸친 줄이 화면에는 보이는데 사전에는 없는 어긋남이 안 생긴다.
+    """
+    pad = _CLIP_PAD_PX * 72.0 / VLM_DPI
+    out: list[str] = []
+    for blk in fitz_page.get_text("dict")["blocks"]:
+        if blk.get("type", 1) != 0:
+            continue
+        for ln in blk.get("lines", []):
+            txt = "".join(s["text"] for s in ln["spans"]).strip()
+            if not txt:
+                continue
+            cx = (ln["bbox"][0] + ln["bbox"][2]) / 2
+            cy = (ln["bbox"][1] + ln["bbox"][3]) / 2
+            if any(b[0] - pad <= cx <= b[2] + pad and b[1] - pad <= cy <= b[3] + pad
+                   for b in boxes):
+                out.append(txt)
+    return out
+
+
+def snap_cells_to_text(md: str, lines: list[str]) -> tuple[str, int]:
+    """VLM 표의 짧은 셀을 텍스트 레이어 줄로 교정한다. (교정된 md, 교정 셀 수) 반환.
+
+    대조는 공백 제거본으로 한다. 레이어와 이미 정확히 일치하는 셀은 건드리지 않고,
+    ratio >= VLM_SNAP_RATIO로 가장 가까운 줄이 있으면 그 줄의 원문으로 바꾼다.
+    <br>가 든 셀(여러 항목)과 긴 셀(>_SNAP_MAX_CHARS)은 제외 — 셀 하나가 레이어 여러
+    줄에 걸쳐 있어 줄 단위 대조가 안 맞는다.
+    """
+    import difflib
+
+    if not lines:
+        return md, 0
+    dense_lines = [(re.sub(r"\s+", "", ln), ln) for ln in lines]
+    exact = {d for d, _ in dense_lines}
+    snapped = 0
+    out_rows: list[str] = []
+    matcher = difflib.SequenceMatcher()
+    for row in md.splitlines():
+        if not row.strip().startswith("|"):
+            out_rows.append(row)
+            continue
+        cells = row.strip().strip("|").split("|")
+        changed = False
+        for i, cell in enumerate(cells):
+            c = cell.strip()
+            if (not c or set(c) <= {"-", ":"} or "<br>" in c
+                    or len(c) > _SNAP_MAX_CHARS):
+                continue
+            dense = re.sub(r"\s+", "", c)
+            if not dense or dense in exact:
+                continue
+            matcher.set_seq2(dense)  # seq1만 바꾸면 seq2 캐시가 재사용된다
+            best_ratio, best_text = 0.0, None
+            for d, orig in dense_lines:
+                matcher.set_seq1(d)
+                if (matcher.real_quick_ratio() <= best_ratio
+                        or matcher.quick_ratio() <= best_ratio):
+                    continue
+                r = matcher.ratio()
+                if r > best_ratio:
+                    best_ratio, best_text = r, orig
+            if best_ratio >= VLM_SNAP_RATIO and best_text is not None:
+                cells[i] = f" {best_text.replace('|', '／')} "
+                snapped += 1
+                changed = True
+        out_rows.append("|" + "|".join(cells) + "|" if changed else row)
+    return "\n".join(out_rows), snapped
 
 
 def _looping_cells(md: str) -> bool:
@@ -737,8 +823,30 @@ def extract_vlm_tables(
     stage = VlmStage(budget=VISION_MAX_CROPS if crops else None)
     with fitz.open(pdf_path) as doc:
         vlm_tables = stage.run(doc, targets)
+        if VLM_SNAP_TEXT and crops and vlm_tables:
+            _snap_tables(doc, targets, vlm_tables)
     _publish(stage)
     return vlm_tables
+
+
+def _snap_tables(doc, targets: list[dict], vlm_tables: dict[int, str]) -> None:
+    """crop 결과의 셀을 그 쪽 레이아웃 박스 안 텍스트 레이어 줄로 교정한다(제자리).
+
+    문서 단위 교정 수는 _snap_count로 남아 단계 지표(snapped_cells)가 된다.
+    """
+    global _snap_count
+    boxes_by_page: dict[int, list[list[float]]] = {}
+    for t in targets:
+        boxes_by_page.setdefault(t["page"], []).append(t["bbox"])
+    snapped = 0
+    for pno in list(vlm_tables):
+        lines = _lines_in_boxes(doc[pno - 1], boxes_by_page.get(pno, []))
+        vlm_tables[pno], n = snap_cells_to_text(vlm_tables[pno], lines)
+        snapped += n
+    _snap_count = snapped
+    if snapped:
+        logger.info(f"텍스트 레이어 스냅: 셀 {snapped}개 교정",
+                    extra={"event": "vlm_snap", "snapped": snapped})
 
 
 def _publish(stage) -> None:

@@ -183,6 +183,7 @@ def vlm(pdf_path: str, cpu: TablesCpu, use_vision: bool = True) -> StageResult:
         "calls": extractor._vision_call_count,
         "tables": len(tables),
         "circuit_open": extractor.vision_circuit_open(),
+        "snapped_cells": extractor._snap_count,
         **vlm_call_summary(extractor.vision_page_stats()),
     })
 
