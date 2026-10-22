@@ -11,6 +11,7 @@ env:
   VLM_DPI: "150"
   VISION_MAX_PAGES: "50"
   VLM_TIMEOUT: "301"
+  LAYOUT_BACKEND: "off"   # 코드 기본이 paddle로 바뀜 — 이 변형은 기존 경로 측정
 expect_identical_to: baseline
 status: draft
 note: baseline 재현성 확인

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
 
@@ -32,8 +33,14 @@ def _center_in(line_bbox, table_bbox) -> bool:
 def parse_text(
     pdf_path: str,
     use_ocr: bool = True,  # 하위 호환성 유지, 현재 미사용
+    table_boxes: Optional[dict[int, list]] = None,
 ) -> tuple[list[PageResult], list[int]]:
     """PyMuPDF get_text("blocks")로 텍스트 추출. 표 영역 제외.
+
+    table_boxes(쪽 → 표 bbox 목록)는 레이아웃 단계(stages.layout)가 준다 — 레이아웃이
+    켜져 있으면 그것이 제외 기준이다. find_tables는 테두리 본문 오탐(#73)과 세로 병합
+    유실이 있어, 레이아웃 박스가 있으면 쓰지 않는다. None이면(LAYOUT_BACKEND=off)
+    예전처럼 쪽마다 find_tables로 잡는다.
 
     Returns:
         (pages, page_numbers)
@@ -53,12 +60,15 @@ def parse_text(
 
             # 표 bbox 탐지 (표 영역 텍스트 제외용). 테두리 오탐(is_border_box)은 빼야 한다 —
             # 테두리 안 본문을 표로 믿고 빼면 그 쪽의 조항이 통째로 유실된다(이슈 #73).
-            try:
-                found = page.find_tables()
-                tboxes = [t.bbox for t in (found.tables if found else [])
-                          if not is_border_box(t, page.rect)]
-            except Exception:
-                tboxes = []
+            if table_boxes is not None:
+                tboxes = table_boxes.get(pno, [])
+            else:
+                try:
+                    found = page.find_tables()
+                    tboxes = [t.bbox for t in (found.tables if found else [])
+                              if not is_border_box(t, page.rect)]
+                except Exception:
+                    tboxes = []
 
             # 텍스트 추출 — 표 영역 제외는 줄 단위로 (블록 단위는 헤딩 유실)
             blocks_text: list[str] = []

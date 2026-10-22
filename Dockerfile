@@ -5,7 +5,8 @@
 #   kubectl exec deploy/insurance-chunker -- \
 #     python ingest.py --pdf /data/약관.pdf --insurer 메리츠화재 --product "단체안심생활보험"
 #
-# base 의존만 설치한다: OCR(surya-ocr)·ST(sentence-transformers) extra는 무겁고 선택적이라 제외.
+# base + [layout](레이아웃 모델) 의존을 설치한다. OCR(surya-ocr)·ST(sentence-transformers)
+# extra는 무겁고 선택적이라 제외.
 #
 # 표 추출 VLM과 임베딩은 이미지에 백엔드를 넣지 않고 클러스터의 vLLM·ollama Service를
 # HTTP로 쓴다 — OpenAI 호환 /v1/chat/completions 한 번이라 추가 의존이 없다. 주소는 차트가
@@ -19,7 +20,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # ca-certificates: Ollama/DB/외부 TLS 검증용. 그 외 시스템 의존은 wheel로 충족
-# (pymupdf·kiwipiepy·psycopg2-binary·pdfplumber 모두 manylinux 휠 제공).
+# (pymupdf·kiwipiepy·psycopg2-binary·paddleocr 모두 manylinux 휠 제공).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -44,8 +45,14 @@ COPY eval/bench/variants ./eval/bench/variants
 # 이 포트를 열고, ServiceMonitor가 그 Service를 긁는다 — 노드 포트로는 뜨지 않는다.
 EXPOSE 9101
 
-# base 의존 + 패키지 설치. setuptools packages.find가 insurance_chunker/db를 포함한다.
-RUN pip install .
+# base 의존 + 패키지 + 레이아웃 모델 의존 설치. setuptools packages.find가
+# insurance_chunker/db를 포함한다. paddlepaddle(CPU 휠)은 자체 인덱스에만 있어
+# 따로 깐다 — [layout]을 먼저 깔면 numpy 등 공통 의존이 PyPI에서 해결된 뒤라
+# paddle 인덱스에서는 paddlepaddle 휠 하나만 받는다. chunker 파드는 GPU가 없다.
+# 주의: paddle 런타임+모델 의존으로 이미지가 수백 MB 늘어난다 — 첫 CI 빌드에서
+# 이미지 크기와 빌드 시간을 재서 여기에 기록할 것.
+RUN pip install ".[layout]" \
+    && pip install paddlepaddle==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
 
 # 비루트 실행. uid를 1000으로 못박는다 — /data는 chunker-state PVC가 마운트되는 자리이고
 # 쓰기 권한이 uid에 달려 있어서, 여기가 바뀌면 /data/state에 이력을 못 써 로컬 폴백으로

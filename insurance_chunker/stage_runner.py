@@ -36,14 +36,17 @@ from .models import DocMeta, InsuranceChunk, PageResult, TableMeta
 logger = logging.getLogger(__name__)
 
 # 산출물 형식이 바뀌면 올린다 — 예전 산출물을 잘못 읽는 대신 키가 달라져 다시 돈다.
-ARTIFACT_VERSION = 1
+# 2: layout 단계 추가, tables_cpu.targets가 crop({"page","bbox"}) 목록일 수 있다.
+ARTIFACT_VERSION = 2
 
-ORDER = ["text", "tables_cpu", "vlm", "combine", "chunk", "embed"]
+# layout이 text보다 앞이다 — 텍스트의 표 영역 제외 기준이 레이아웃 박스라서.
+ORDER = ["layout", "text", "tables_cpu", "vlm", "combine", "chunk", "embed"]
 UPSTREAM = {
-    "text": [],
-    "tables_cpu": ["text"],
+    "layout": [],
+    "text": ["layout"],
+    "tables_cpu": ["text", "layout"],
     "vlm": ["tables_cpu"],
-    "combine": ["text", "tables_cpu", "vlm"],
+    "combine": ["text", "tables_cpu", "vlm", "layout"],
     "chunk": ["combine"],
     "embed": ["chunk"],
 }
@@ -69,6 +72,16 @@ def stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
     """그 단계의 결과를 바꾸는 설정만 고른다. 서버 주소처럼 결과와 무관한 것은 뺀다."""
     from . import embedder, extractor
 
+    if name == "layout":
+        from . import layout as layout_mod
+        if layout_mod.LAYOUT_BACKEND == "off":
+            return {"skipped": True}
+        import importlib.util
+        return {"backend": layout_mod.LAYOUT_BACKEND, "model": layout_mod.LAYOUT_MODEL,
+                "min_score": layout_mod.LAYOUT_MIN_SCORE, "dpi": layout_mod.LAYOUT_DPI,
+                # paddleocr가 없으면 enabled=False 산출물이 만들어진다. 설치 여부를 키에
+                # 넣어야 나중에 의존을 깔았을 때 그 '꺼진' 산출물을 재사용하지 않는다.
+                "installed": importlib.util.find_spec("paddleocr") is not None}
     if name == "tables_cpu":
         return {"use_vision": opts["use_vision"], "backend_off": extractor.VLM_BACKEND == "off",
                 "target": extractor.VLM_TARGET,
@@ -79,8 +92,10 @@ def stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
             return {"skipped": True}
         return {"backend": extractor.VLM_BACKEND, "model": extractor.VLM_MODEL,
                 "dpi": extractor.VLM_DPI, "max_pages": extractor.VISION_MAX_PAGES,
+                "max_crops": extractor.VISION_MAX_CROPS,
                 "fail_streak": extractor.VLM_FAIL_STREAK, "timeout": extractor.VLM_TIMEOUT,
                 "max_tokens": extractor.VLM_MAX_TOKENS,
+                "loop_cells": extractor.VLM_LOOP_CELLS,
                 # 결과는 바꾸지 않지만 시간을 바꾼다. 키에서 빼면 동시도만 바꾼 변형이 기준선의
                 # VLM 산출물(과 그때 잰 시간)을 재사용해 '개선 없음'으로 보인다.
                 "concurrency": extractor.VLM_CONCURRENCY,
@@ -114,6 +129,8 @@ def _pages(rows: list[dict]) -> list[PageResult]:
 
 
 def _dump_output(name: str, output: Any, path: Path) -> Any:
+    if name == "layout":
+        return asdict(output)
     if name == "text":
         pages, page_numbers = output
         return {"pages": [asdict(p) for p in pages], "page_numbers": page_numbers}
@@ -141,6 +158,8 @@ def _dump_output(name: str, output: Any, path: Path) -> Any:
 
 
 def _load_output(name: str, data: Any, path: Path) -> Any:
+    if name == "layout":
+        return stages.LayoutResult(enabled=data["enabled"], boxes=_int_keys(data["boxes"]))
     if name == "text":
         return _pages(data["pages"]), data["page_numbers"]
     if name == "tables_cpu":
@@ -170,16 +189,19 @@ def _load_output(name: str, data: Any, path: Path) -> Any:
 
 def _call(name: str, pdf_path: str, opts: dict[str, Any],
           up: dict[str, Any]) -> stages.StageResult:
+    if name == "layout":
+        return stages.layout(pdf_path)
     if name == "text":
-        return stages.text(pdf_path)
+        return stages.text(pdf_path, layout_result=up["layout"])
     if name == "tables_cpu":
         _, page_numbers = up["text"]
-        return stages.tables_cpu(pdf_path, page_numbers, use_vision=opts["use_vision"])
+        return stages.tables_cpu(pdf_path, page_numbers, use_vision=opts["use_vision"],
+                                 layout_result=up["layout"])
     if name == "vlm":
         return stages.vlm(pdf_path, up["tables_cpu"], use_vision=opts["use_vision"])
     if name == "combine":
         pages, _ = up["text"]
-        return stages.combine(pages, up["tables_cpu"], up["vlm"])
+        return stages.combine(pages, up["tables_cpu"], up["vlm"], layout_result=up["layout"])
     if name == "chunk":
         meta: DocMeta = opts["meta"]
         return stages.chunk(up["combine"], meta,
@@ -259,13 +281,18 @@ def run(
 
 # ── 리포트 ───────────────────────────────────────────────────────────────────
 
-REPORT_CONTRACT = 2  # ingest_many.DRY_RUN_CONTRACT와 같은 형식
+# 2 = ingest_many.DRY_RUN_CONTRACT와 같은 형식. 3 = table_cell_match(표 셀의 텍스트 레이어
+# 일치율, 가드레일용) 추가 — pdf를 다시 열어야 해서 dry-run에는 없다. 필드는 추가만 됐으므로
+# 벤치 비교는 2 리포트와도 짝지을 수 있다(없는 쪽은 판정을 건너뛴다).
+REPORT_CONTRACT = 3
 
 
-def write_report(path: Path, artifacts: Path, meta: DocMeta, records: list[dict]) -> dict:
+def write_report(path: Path, artifacts: Path, meta: DocMeta, records: list[dict],
+                 pdf_path: Optional[str] = None) -> dict:
     """단계 기록 + 페이지별 표 지문 + 청크 요약. 벤치마크는 이 파일만 읽는다.
 
     청크 본문은 싣지 않는다 — 약관 원문을 벤치마크 결과에 복제하지 않기 위해서다.
+    pdf_path를 주면 표 셀의 텍스트 레이어 일치율(table_cell_match)도 싣는다.
     """
     by = {r["stage"]: r for r in records}
     report: dict[str, Any] = {
@@ -280,6 +307,8 @@ def write_report(path: Path, artifacts: Path, meta: DocMeta, records: list[dict]
         cpath = Path(by["combine"]["path"])
         pages = _load_output("combine", json.loads(cpath.read_text())["output"], cpath)
         report["tables_by_page"] = stages.table_fingerprint(pages)
+        if pdf_path:
+            report["table_cell_match"] = stages.table_cell_match(pages, pdf_path)
     if "chunk" in by:
         cpath = Path(by["chunk"]["path"])
         chunked = _load_output("chunk", json.loads(cpath.read_text())["output"], cpath)
@@ -338,7 +367,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                   hard_max=args.hard_max_tokens, ollama_url=args.ollama_url,
                   embed_model=args.embed_model)
     if args.report:
-        write_report(Path(args.report), Path(args.artifacts), meta, records)
+        write_report(Path(args.report), Path(args.artifacts), meta, records,
+                     pdf_path=str(pdf))
     if args.json:
         print(json.dumps(records, ensure_ascii=False, indent=2))
         return

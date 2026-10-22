@@ -12,16 +12,18 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
 ```
 약관.pdf
   │
-  ├─ pdf_parser.py    텍스트 추출 (PyMuPDF, 표 영역 제외)
+  ├─ layout.py        쪽별 표 영역 탐지 (PP-DocLayoutV3, CPU) — 백지는 선필터
+  │                   paddleocr가 없거나 LAYOUT_BACKEND=off면 아래가 전부 기존 경로로
   │
-  ├─ extractor.py     표 추출 — 아래 4가지 방법 중 자동 선택
-  │     ├ PyMuPDF     괘선 표 (빠름)
-  │     ├ pdfplumber  설치 시 자동 사용
-  │     ├ camelot     설치 시 자동 사용 (ghostscript 필요)
-  │     └ VLM         PyMuPDF가 못 닿은 페이지 (VLM_TARGET=gap)
-  │                   local=OpenAI 호환 — 기본은 Ollama qwen3-vl
+  ├─ pdf_parser.py    텍스트 추출 (PyMuPDF, 표 영역 제외 — 기준은 레이아웃 박스,
+  │                   레이아웃이 꺼지면 find_tables)
   │
-  ├─ combine.py       페이지별 best-of 표 선택 (더블스페이스 기준)
+  ├─ extractor.py     표 추출
+  │     ├ VLM         레이아웃 박스를 200 DPI로 crop해 입력 (운영: vLLM의 PaddleOCR-VL)
+  │     │             레이아웃이 꺼지면: gap 페이지 전체 입력 (VLM_TARGET=gap)
+  │     └ PyMuPDF     괘선 표 — VLM이 못 채운 쪽의 폴백
+  │
+  ├─ combine.py       박스 있는 쪽 = VLM, 그 밖 = PyMuPDF (꺼지면 더블스페이스 best-of)
   │
   ├─ boundaries.py    폰트 크기로 약관·별표 경계 감지
   │     └ assess()    신뢰도 판정 (ok / weak) — 조용히 틀린 청크 방지
@@ -50,13 +52,16 @@ pip install -e ".[dev]"
 
 VLM 표 추출은 기본으로 켜져 있고, OpenAI 호환 `/v1/chat/completions`를 쓰는 서버에 붙는다
 (`VLM_URL`). 로컬 개발은 Ollama(`qwen3-vl:8b-instruct`), 운영은 클러스터의 vLLM이다.
-이미지에 추가 의존이 없다.
 
 | 백엔드 | 준비물 |
 |---|---|
 | `local` (기본) | OpenAI 호환 서버 — Ollama에 VLM 모델, 또는 llama-server |
 | `surya` | `pip install ".[ocr]"` |
 | `off` | 없음 (VLM 단계를 건너뛴다) |
+
+표 영역 탐지(레이아웃)는 `pip install ".[layout]"` + paddlepaddle CPU 휠(Dockerfile 참고)이
+있을 때 켜진다. 없으면 자동으로 기존 경로(gap 휴리스틱 + 페이지 전체 입력)로 떨어지므로
+로컬 개발에 필수는 아니다 — 운영 이미지에는 들어 있다.
 
 ```bash
 # 로컬에서 Ollama 없이 청킹만 볼 때
@@ -263,14 +268,19 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VLM_MODEL` | `qwen3-vl:8b-instruct` | Ollama는 필수. llama-server면 비운다. Paddle 전환은 `PaddleOCR-VL-1.6-0.9B` |
 | `VLM_PROMPT` | 모델 따라 자동 | 모델명에 `paddleocr`가 있으면 `Table Recognition:`(태스크 토큰), 아니면 한국어 표 변환 지시. 명시하면 그 값이 이긴다 |
 | `VLM_LOOP_CELLS` | `20` | 같은 셀이 이만큼 연속되면 반복 루프 출력으로 보고 폐기 |
-| `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
-| `VLM_TIMEOUT` | `300` | VLM **읽기** 타임아웃(초). GPU 경로 실측 21~36초 |
+| `VLM_DPI` | `200` | VLM 렌더링 해상도. crop 입력은 원본 해상도가 거의 그대로 들어가 200이 유효하다 |
+| `VLM_TIMEOUT` | `60` | VLM **읽기** 타임아웃(초). 영역 하나 1~3초 기준. `LAYOUT_BACKEND=off`(페이지 전체)로 되돌리면 `300`을 줘야 한다 |
 | `VLM_CONNECT_TIMEOUT` | `5` | 접속 타임아웃(초). 서버가 없으면 즉시 실패해야 한다 |
 | `VLM_FAIL_STREAK` | `3` | 연속 실패 N회면 그 문서의 남은 페이지는 VLM 건너뜀 |
 | `VLM_TARGET` | `gap` | VLM 투입 대상. `gap`=PyMuPDF가 못 닿은 페이지 \| `tables`=표 탐지 페이지(구동작) \| `both` |
 | `TABLE_BORDER_FRAC` | `0.6` | find_tables 박스가 쪽 면적의 이 비율 이상 + 셀 희박이면 본문 테두리로 보고 표에서 뺀다 |
 | `TABLE_BORDER_MAX_CELLS` | `8` | 면적 기준과 함께 쓰는 셀 수 상한. 셀 1~2개는 면적과 무관하게 테두리 |
-| `VISION_MAX_PAGES` | `50` | 문서당 VLM 호출 상한. 넘는 페이지는 PyMuPDF/pdfplumber 결과만 쓴다 |
+| `VISION_MAX_PAGES` | `50` | 문서당 VLM 호출 상한 — 페이지 전체 입력(`LAYOUT_BACKEND=off`) 경로. 넘으면 PyMuPDF 결과만 쓴다 |
+| `VISION_MAX_CROPS` | `300` | 문서당 VLM 호출 상한 — 레이아웃 crop 경로. 단위가 쪽이 아니라 표 박스다 |
+| `LAYOUT_BACKEND` | `paddle` | `paddle` \| `off`. off면 기존 경로(find_tables 제외·gap·페이지 전체). paddleocr 미설치면 자동 off |
+| `LAYOUT_MODEL` | `PP-DocLayoutV3` | 레이아웃 모델. 로드 실패 시 V2 → plus-L 순 폴백 |
+| `LAYOUT_MIN_SCORE` | `0.5` | 표 박스 점수 임계 |
+| `LAYOUT_DPI` | `150` | 레이아웃 입력 렌더 해상도 (crop 렌더는 `VLM_DPI`) |
 | `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
 | `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
 | `INGEST_CONCURRENCY` | `1` | 동시 처리 문서 수 (프로세스). 노드 vCPU 4 기준 2가 현실적 |
@@ -610,9 +620,10 @@ Policy-Chunker/
 │   ├── chunker.py          doc_type별 오케스트레이터
 │   ├── rechunk.py          병합·중복제거·표분할 (clean → merge → finalize)
 │   ├── boundaries.py       폰트 기반 약관 경계 감지
+│   ├── layout.py           쪽별 표 영역 탐지 (PP-DocLayoutV3, CPU)
 │   ├── pdf_parser.py       PDF 텍스트 추출
-│   ├── extractor.py        표 추출 (PyMuPDF/pdfplumber/camelot/VLM)
-│   ├── combine.py          페이지별 best-of 표 선택
+│   ├── extractor.py        표 추출 (레이아웃 crop + VLM, PyMuPDF 폴백)
+│   ├── combine.py          페이지별 표 선택 (VLM 우선, off면 best-of)
 │   ├── embedder.py         Ollama / BGE-M3 임베딩
 │   ├── tokenizer.py        Kiwi 형태소 분리
 │   └── validator.py        청크 품질 검증

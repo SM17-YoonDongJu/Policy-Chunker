@@ -4,5 +4,6 @@ slug: vlm-off
 ref: WORKTREE
 env:
   VLM_BACKEND: "off"
+  LAYOUT_BACKEND: "off"   # 코드 기본이 paddle로 바뀜 — 이 변형은 기존 경로 측정
 status: draft
 note: VLM 기여도 확인용

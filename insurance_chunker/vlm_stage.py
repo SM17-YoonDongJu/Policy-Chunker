@@ -9,7 +9,8 @@ continuous batching으로 여러 요청을 한 번에 디코딩할 수 있는데
 
   - 렌더링은 호출한 스레드(문서를 연 스레드)에서 한다. PyMuPDF 객체는 스레드 간에 안전하지 않다.
     렌더된 PNG만 작업 스레드로 넘기고, 미리 렌더해 두는 양은 동시도 x 2로 묶어 메모리를 제한한다
-  - 호출 상한(VISION_MAX_PAGES)은 대상 목록을 미리 잘라 지킨다. 대상 순서가 곧 우선순위다
+  - 호출 상한(쪽 대상은 VISION_MAX_PAGES, crop 대상은 VISION_MAX_CROPS)은 대상 목록을
+    미리 잘라 지킨다. 대상 순서가 곧 우선순위다
   - 차단기: 연속 VLM_FAIL_STREAK회 실패하면 남은 페이지는 부르지 않는다. 실패 집계와 차단 판정은
     작업 스레드 안에서 락을 잡고 한다 — 동시도 1이면 순차 루프와 정확히 같게 '기준에 닿은 다음
     호출'이 나가지 않는다. 동시도 N이면 이미 날아간 N-1건까지는 끝난다(되돌릴 수 없다)
@@ -89,32 +90,39 @@ class VlmStage:
 
     # ── 호출한 스레드 ────────────────────────────────────────────────────────
 
-    def run(self, doc, targets: list[int]) -> dict[int, str]:
-        """targets(순서 = 우선순위)를 호출해 {page: markdown}을 돌려준다. doc은 열린 fitz 문서."""
+    def run(self, doc, targets: list) -> dict[int, str]:
+        """targets(순서 = 우선순위)를 호출해 {page: markdown}을 돌려준다. doc은 열린 fitz 문서.
+
+        target은 쪽 번호(페이지 전체 입력) 또는 {"page","bbox"}(레이아웃 crop)다. crop은
+        한 쪽에 여럿일 수 있으므로 결과는 쪽마다 박스 순서대로 빈 줄로 잇는다 — 완료
+        순서와 무관하게 대상 목록의 순서가 곧 출력 순서다.
+        """
         total = len(targets)
-        pages = targets[:self.budget]
-        tables: dict[int, str] = {}
+        jobs = [(t["page"], t.get("bbox")) if isinstance(t, dict) else (t, None)
+                for t in targets[:self.budget]]
+        results: dict[int, str] = {}  # 대상 인덱스 → markdown
         pending: dict[Future, int] = {}
 
         def collect(done) -> None:
             for fut in done:
-                pno = pending.pop(fut)
+                idx = pending.pop(fut)
                 if fut.cancelled():
                     continue
                 md = fut.result()
                 if md and md is not _SKIPPED:
-                    tables[pno] = md
+                    results[idx] = md
 
         with ThreadPoolExecutor(max_workers=self.concurrency,
                                 thread_name_prefix="vlm") as pool:
-            for i, pno in enumerate(pages, 1):
+            for i, (pno, clip) in enumerate(jobs):
                 if self.circuit_open:
                     break
                 while len(pending) >= self.concurrency * 2:
                     done, _ = wait(pending, return_when=FIRST_COMPLETED)
                     collect(done)
-                rendered = extractor.render_page(doc[pno - 1], pno)
-                pending[pool.submit(self._task, i, total, pno, rendered)] = pno
+                rendered = (extractor.render_page(doc[pno - 1], pno) if clip is None
+                            else extractor.render_page(doc[pno - 1], pno, clip))
+                pending[pool.submit(self._task, i + 1, total, pno, rendered)] = i
             if self.circuit_open:
                 for fut in pending:
                     fut.cancel()  # 아직 시작 안 한 것만 취소된다
@@ -122,7 +130,11 @@ class VlmStage:
             collect(done)
 
         self._log_stop(total)
-        return tables
+        by_page: dict[int, list[str]] = {}
+        for i, (pno, _clip) in enumerate(jobs):
+            if i in results:
+                by_page.setdefault(pno, []).append(results[i])
+        return {p: "\n\n".join(parts) for p, parts in by_page.items()}
 
     def _log_stop(self, total: int) -> None:
         left = total - self.calls
@@ -130,13 +142,13 @@ class VlmStage:
             return
         if self.circuit_open:
             # 차단 뒤에는 호출도 "처리 중" 로그도 하지 않는다. 남은 수를 한 줄로 남긴다.
-            logger.warning(f"VLM 차단 — 남은 {left}페이지 건너뜀",
+            logger.warning(f"VLM 차단 — 남은 {left}건 건너뜀",
                            extra={"event": "vlm_pages_skipped", "skipped": left,
                                   "total": total})
         else:
             # 품질이 아니라 시간을 위해 접는 것이라 level이 다르다 —
-            # 남은 페이지도 PyMuPDF/pdfplumber 결과는 그대로 쓴다.
-            logger.info(f"VLM 상한 {self.budget}페이지 도달 — 남은 {left}페이지는 "
-                        "PyMuPDF/pdfplumber 결과만 쓴다",
+            # 남은 대상도 PyMuPDF 결과는 그대로 쓴다.
+            logger.info(f"VLM 상한 {self.budget}건 도달 — 남은 {left}건은 "
+                        "PyMuPDF 결과만 쓴다",
                         extra={"event": "vlm_budget_exhausted", "limit": self.budget,
                                "skipped": left, "total": total})

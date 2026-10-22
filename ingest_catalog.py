@@ -67,7 +67,7 @@ _MAX_RETRY = int(os.environ.get("INGEST_MAX_RETRY", "3"))
 
 # 문서를 동시에 몇 개 처리할지. 기본 1 = 기존 순차 동작.
 #
-# parse가 전체 시간의 47.7%이고 CPU 바운드(PyMuPDF·pdfplumber)라, 문서를 겹치면 A가
+# parse가 전체 시간의 47.7%이고 CPU 바운드(PyMuPDF·레이아웃)라, 문서를 겹치면 A가
 # 임베딩을 기다리는 동안 B를 파싱할 수 있다. 스레드가 아니라 프로세스여야 하는 이유가
 # 그것이다(GIL).
 #

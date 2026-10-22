@@ -4,12 +4,17 @@
 `parse` 하나로만 남고, 그 안에서 VLM(GPU)이 얼마를 먹는지 알 수 없었다. 병목을 지목하려면
 단계마다 시간을 재야 하고, 병렬화하려면 단계 경계가 있어야 한다.
 
-  S1 text        PDF → 페이지 텍스트(표 영역 제외)          CPU
-  S2 tables_cpu  PDF → PyMuPDF·pdfplumber·camelot 표 + VLM 대상  CPU
-  S3 vlm         PDF + 대상 → VLM 표                        GPU
-  S4 combine     S1 + S2 + S3 → 페이지별 best-of 표 부착       CPU
-  S5 chunk       S4 → 청크(경계 검출·청킹·검증)               CPU
-  S6 embed       S5 → 벡터                                 GPU
+  S1 layout      PDF → 쪽별 표 박스 (PP-DocLayoutV3, 백지 선필터)   CPU
+  S2 text        PDF → 페이지 텍스트(표 영역 제외 — 레이아웃 박스,
+                 레이아웃이 꺼지면 find_tables)                  CPU
+  S3 tables_cpu  PDF → PyMuPDF 표(폴백) + VLM 대상(박스 또는 gap 쪽)  CPU
+  S4 vlm         PDF + 대상 → VLM 표 (crop 또는 페이지 전체)      GPU
+  S5 combine     박스 쪽은 VLM, 그 밖은 PyMuPDF (off면 best-of)    CPU
+  S6 chunk       청크(경계 검출·청킹·검증)                      CPU
+  S7 embed       벡터                                        GPU
+
+layout이 text보다 앞인 이유: 텍스트의 표 영역 제외 기준이 레이아웃 박스라서다(이슈 #72의
+스케치는 text 다음에 두었지만, 그러면 제외할 박스가 아직 없다).
 
 저장(S7)은 DB 커넥션과 S3 업로드가 CLI 쪽에 있어 호출부(ingest_many._run_one)가 맡는다.
 
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -76,10 +82,26 @@ class StageResult:
 
 
 @dataclass
+class LayoutResult:
+    """S1 출력. enabled=False면 아래 모든 단계가 기존 경로(find_tables 제외·gap·페이지
+    전체)로 동작한다 — LAYOUT_BACKEND=off뿐 아니라 paddleocr 미설치·모델 로드 실패도
+    여기로 수렴하므로, 의존이 빠진 이미지가 'VLM이 조용히 꺼진 상태'가 되지 않는다."""
+    enabled: bool
+    boxes: dict[int, list[dict]]  # 쪽 → [{"bbox_pdf", "bbox_px", "score"}], 읽기 순서
+
+    def pdf_boxes(self) -> Optional[dict[int, list[list[float]]]]:
+        """쪽 → bbox(PDF 포인트) 목록. 꺼져 있으면 None — 호출부가 기존 경로로 간다."""
+        if not self.enabled:
+            return None
+        return {pno: [b["bbox_pdf"] for b in bs] for pno, bs in self.boxes.items()}
+
+
+@dataclass
 class TablesCpu:
-    """S2 출력. sources는 설치된 CPU 소스만, targets는 VLM을 부를 페이지(순서 = 우선순위)."""
+    """S3 출력. sources는 CPU 소스(PyMuPDF), targets는 VLM 대상(순서 = 예산 소진 순서) —
+    레이아웃이 켜져 있으면 {"page","bbox"} crop 목록, 꺼져 있으면 쪽 번호 목록."""
     sources: dict[str, dict[int, str]]
-    targets: list[int]
+    targets: list
     page_numbers: list[int]
     info: dict[str, int]
 
@@ -99,12 +121,31 @@ def _timed(fn, *args, **kwargs) -> tuple[Any, float]:
     return out, round(time.perf_counter() - t0, 2)
 
 
-# ── S1~S4: 파싱 ──────────────────────────────────────────────────────────────
+# ── S1~S5: 파싱 ──────────────────────────────────────────────────────────────
 
-def text(pdf_path: str, use_ocr: bool = True) -> StageResult:
+def layout(pdf_path: str) -> StageResult:
+    """쪽별 표 박스. LAYOUT_BACKEND=off거나 모델을 못 열면 enabled=False(기존 경로)."""
+    from . import layout as layout_mod
+
+    if layout_mod.LAYOUT_BACKEND == "off":
+        return StageResult("layout", LayoutResult(enabled=False, boxes={}), 0.0, CPU,
+                           {"skipped": True, "boxes": 0})
+    (boxes, m), sec = _timed(layout_mod.detect_tables, pdf_path)
+    out = LayoutResult(enabled=layout_mod.available(), boxes=boxes)
+    if not out.enabled:
+        # 박스가 일부 쌓였어도 버린다 — 반쯤 켜진 상태로 내려가면 그 문서만 제외 기준이
+        # 섞여서, 같은 설정의 두 실행이 다른 결과를 낸다.
+        out.boxes = {}
+    return StageResult("layout", out, sec, CPU, {"enabled": out.enabled, **m})
+
+
+def text(pdf_path: str, use_ocr: bool = True,
+         layout_result: Optional[LayoutResult] = None) -> StageResult:
     from .pdf_parser import parse_text
 
-    (pages, page_numbers), sec = _timed(parse_text, pdf_path, use_ocr=use_ocr)
+    table_boxes = layout_result.pdf_boxes() if layout_result else None
+    (pages, page_numbers), sec = _timed(parse_text, pdf_path, use_ocr=use_ocr,
+                                        table_boxes=table_boxes)
     return StageResult("text", (pages, page_numbers), sec, CPU, {
         "pages": len(pages),
         "chars": sum(len(p.text) for p in pages),
@@ -112,11 +153,13 @@ def text(pdf_path: str, use_ocr: bool = True) -> StageResult:
     })
 
 
-def tables_cpu(pdf_path: str, page_numbers: list[int], use_vision: bool = True) -> StageResult:
+def tables_cpu(pdf_path: str, page_numbers: list[int], use_vision: bool = True,
+               layout_result: Optional[LayoutResult] = None) -> StageResult:
     from .extractor import extract_cpu_tables
 
+    layout_boxes = layout_result.pdf_boxes() if layout_result else None
     (sources, targets, info), sec = _timed(
-        extract_cpu_tables, pdf_path, page_numbers, use_vision)
+        extract_cpu_tables, pdf_path, page_numbers, use_vision, layout_boxes)
     out = TablesCpu(sources=sources, targets=targets, page_numbers=page_numbers, info=info)
     return StageResult("tables_cpu", out, sec, CPU, {
         "table_pages": {k: len(v) for k, v in sources.items()},
@@ -186,12 +229,20 @@ def table_sources(cpu: TablesCpu, vlm_tables: dict[int, str]) -> dict[str, dict[
     return sources
 
 
-def combine(pages: list[PageResult], cpu: TablesCpu, vlm_tables: dict[int, str]) -> StageResult:
-    """페이지별 best-of 표를 고르고 PageResult에 붙인다. pages를 제자리에서 고친다."""
-    from .combine import select_best_tables
+def combine(pages: list[PageResult], cpu: TablesCpu, vlm_tables: dict[int, str],
+            layout_result: Optional[LayoutResult] = None) -> StageResult:
+    """페이지별 표를 고르고 PageResult에 붙인다. pages를 제자리에서 고친다.
+
+    레이아웃이 켜져 있으면 VLM(crop) 우선·PyMuPDF 폴백이고, 꺼져 있으면 예전
+    더블스페이스 best-of다.
+    """
+    from .combine import select_best_tables, select_layout_tables
 
     t0 = time.perf_counter()
-    best = select_best_tables(table_sources(cpu, vlm_tables))
+    if layout_result and layout_result.enabled:
+        best = select_layout_tables(cpu.sources.get("pymupdf", {}), vlm_tables)
+    else:
+        best = select_best_tables(table_sources(cpu, vlm_tables))
     chosen: dict[str, int] = {}
     for page in pages:
         entry = best.get(page.page_num)
@@ -228,18 +279,72 @@ def table_fingerprint(pages: list[PageResult]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _markdown_cells(md: str) -> list[str]:
+    """markdown 표에서 대조할 셀 문자열(공백 제거). 빈 칸·구분선은 뺀다.
+
+    셀 안 <br>(항목 줄바꿈)은 조각으로 나눠 따로 센다 — 텍스트 레이어는 줄 단위라
+    여러 항목이 든 셀을 통짜로 대조하면 전부 불일치로 나온다.
+    """
+    out: list[str] = []
+    for line in md.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        for cell in line.strip("|").split("|"):
+            c = cell.strip()
+            if not c or set(c) <= {"-", ":"}:
+                continue
+            for frag in c.split("<br>"):
+                frag = re.sub(r"\s+", "", frag)
+                if frag:
+                    out.append(frag)
+    return out
+
+
+def table_cell_match(pages: list[PageResult], pdf_path: str) -> dict[str, Any]:
+    """최종 채택된 표의 셀이 같은 쪽 텍스트 레이어에 그대로 나타나는 비율. 벤치 가드레일용.
+
+    VLM 오독(실측: 관혈→관협)을 재는 지표다. 공백을 걷어낸 셀 문자열이 같은 쪽 텍스트
+    레이어(공백 제거)의 부분 문자열이면 일치. 텍스트 레이어가 없는 쪽(스캔)은 잴 수 없어
+    뺀다. PyMuPDF 표는 텍스트 레이어에서 나오므로 1.0에 가깝다 — 기준선 구실을 한다.
+    [?] 셀 수는 qwen 프롬프트 전용이라 소스가 바뀌면 무의미해지는 것과 달리, 이 지표는
+    소스와 무관하게 유지된다.
+    """
+    import pymupdf as fitz
+
+    per_page: dict[str, float] = {}
+    total = matched = 0
+    with fitz.open(pdf_path) as doc:
+        for p in pages:
+            if not p.tables:
+                continue
+            hay = re.sub(r"\s+", "", doc[p.page_num - 1].get_text())
+            if not hay:
+                continue
+            cells = _markdown_cells(p.tables[0]["markdown"])
+            if not cells:
+                continue
+            hit = sum(1 for c in cells if c in hay)
+            per_page[str(p.page_num)] = round(hit / len(cells), 3)
+            total += len(cells)
+            matched += hit
+    return {"rate": round(matched / total, 3) if total else None,
+            "cells": total, "per_page": per_page}
+
+
 def parse(pdf_path: str, use_ocr: bool = True,
           use_vision: bool = True) -> tuple[list[PageResult], list[StageResult]]:
-    """S1~S4를 이어 부른다 — parse_pdf와 같은 결과에 단계별 기록이 붙는다."""
-    s1 = text(pdf_path, use_ocr=use_ocr)
-    pages, page_numbers = s1.output
-    s2 = tables_cpu(pdf_path, page_numbers, use_vision=use_vision)
-    s3 = vlm(pdf_path, s2.output, use_vision=use_vision)
-    counts = {k: len(v) for k, v in table_sources(s2.output, s3.output).items()}
+    """S1~S5를 이어 부른다 — parse_pdf와 같은 결과에 단계별 기록이 붙는다."""
+    s1 = layout(pdf_path)
+    s2 = text(pdf_path, use_ocr=use_ocr, layout_result=s1.output)
+    pages, page_numbers = s2.output
+    s3 = tables_cpu(pdf_path, page_numbers, use_vision=use_vision, layout_result=s1.output)
+    s4 = vlm(pdf_path, s3.output, use_vision=use_vision)
+    counts = {k: len(v) for k, v in table_sources(s3.output, s4.output).items()}
     logger.info(f"표 추출 완료: {counts}")
-    s4 = combine(pages, s2.output, s3.output)
-    logger.info(f"표 부착 완료: {s4.metrics['table_pages']}페이지 (best-of)")
-    return s4.output, [s1, s2, s3, s4]
+    s5 = combine(pages, s3.output, s4.output, layout_result=s1.output)
+    logger.info(f"표 부착 완료: {s5.metrics['table_pages']}페이지")
+    return s5.output, [s1, s2, s3, s4, s5]
 
 
 # ── S5~S6 ────────────────────────────────────────────────────────────────────
