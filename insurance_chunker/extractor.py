@@ -90,20 +90,31 @@ VLM_URL = os.environ.get("VLM_URL", "http://localhost:11434")
 # 비워두면 페이로드에서 빼므로 llama-server 호환이 유지된다.
 VLM_MODEL = os.environ.get("VLM_MODEL", "qwen3-vl:8b-instruct")
 # PaddleOCR-VL은 "Table Recognition:"이 태스크 토큰이지만, 범용 instruct VLM(qwen3-vl 등)에는
-# 명시적 지시가 필요하다. 기본값은 후자에 맞추고, PaddleOCR-VL을 쓰면 이 값을 바꾼다.
-# 규칙은 claude 백엔드를 쓰던 시절 쌓인 것을 옮겼다 — 약관 표는 숫자·한자가 많아
-# 의역이 곧 오답이고, 읽기 어려운 셀에서 멈추면 페이지 전체를 잃는다.
+# 명시적 지시가 필요하다. 규칙은 claude 백엔드를 쓰던 시절 쌓인 것을 옮겼다 — 약관 표는
+# 숫자·한자가 많아 의역이 곧 오답이고, 읽기 어려운 셀에서 멈추면 페이지 전체를 잃는다.
+# 병합 규칙은 변환기(_html_table_to_markdown)와 같아야 한다 — 세로만 반복, 가로는 첫 칸.
 _DEFAULT_VLM_PROMPT = (
     "이 페이지 이미지의 표를 GitHub 마크다운 표로만 옮겨라.\n"
     "규칙(엄수):\n"
     "- 셀 텍스트는 원문 그대로(숫자·한자·줄바꿈 보존). 의역·요약 금지.\n"
-    "- 병합된 셀은 값을 반복해 채워라.\n"
+    "- 세로로 병합된 셀은 값을 반복해 채워라. 가로로 병합된 셀은 첫 칸에만 쓰고 "
+    "나머지는 빈 칸으로 두어라.\n"
     "- 읽기 어려운 셀은 [?]로 표기하고 계속 진행하라.\n"
     "- 표가 여러 개면 빈 줄로 구분하라.\n"
     "- 표가 전혀 없으면 아무것도 출력하지 마라.\n"
     "- 설명·머리말·코드펜스 없이 표 마크다운만 출력하라."
 )
-VLM_PROMPT = os.environ.get("VLM_PROMPT", _DEFAULT_VLM_PROMPT)
+_PADDLE_TASK_PROMPT = "Table Recognition:"
+# PaddleOCR-VL은 태스크 토큰이 곧 프롬프트다 — 범용 지시문을 주면 태스크 라우팅이 안 된다.
+# 모델명으로 판별하므로 VLM_MODEL만 바꿔도 프롬프트를 따로 맞출 필요가 없다.
+# VLM_PROMPT를 명시하면 어느 모델이든 그 값이 이긴다.
+VLM_PROMPT = os.environ.get("VLM_PROMPT") or (
+    _PADDLE_TASK_PROMPT if "paddleocr" in VLM_MODEL.lower() else _DEFAULT_VLM_PROMPT)
+# markdown 셀에서 같은 값이 이만큼 연속되면 퇴행(반복 루프) 출력으로 보고 폐기한다.
+# Colab 실험(2026-10-20)에서 백지 입력이 같은 토큰을 수천 번 반복했다 — max_tokens에
+# 닿으면 finish_reason으로 잡히지만, 그 전에 멈춘 루프는 이 검사만이 잡는다.
+# 정상 표의 반복(○/X 열, 세로 병합 반복)은 행마다 다른 셀이 끼어 streak이 끊긴다.
+VLM_LOOP_CELLS = int(os.environ.get("VLM_LOOP_CELLS", "20"))
 LLAMA_CPP_BINARY = os.environ.get(
     "LLAMA_CPP_BINARY",
     os.path.expanduser("~/.local/llama.cpp/llama-b10182/llama-server"),
@@ -250,8 +261,47 @@ def _strip_fences(s: str) -> str:
     return s.strip()
 
 
+# PaddleOCR-VL이 위첨자를 LaTeX 조각으로 낸다: \(^{*}\)·$ ^{*} $ → *.
+# 텍스트 레이어·PyMuPDF 표와 문자 단위로 대조하려면(벤치 가드레일) 같은 기호여야 한다.
+_SUPERSCRIPT = re.compile(r"\\\(\s*\^\{([^{}]*)\}\s*\\\)|\$\s*\^\{([^{}]*)\}\s*\$")
+
+
+def _normalize_superscripts(s: str) -> str:
+    return _SUPERSCRIPT.sub(lambda m: m.group(1) if m.group(1) is not None else m.group(2), s)
+
+
+def _cell_text(raw: str) -> str:
+    """셀 내용 공통 정리. 줄바꿈은 <br>로 보존한다 — PyMuPDF 표와 같은 형식이라
+    소스가 바뀌어도 항목 줄바꿈이 유지되고, 공백으로 뭉개면 목록 셀이 한 문장처럼 붙는다."""
+    s = re.sub(r"<br\s*/?>", "<br>", raw, flags=re.I)
+    s = re.sub(r"<(?!br>)[^>]+>", "", s)  # <br>만 남기고 나머지 태그 제거
+    s = s.strip().replace("|", "／")
+    return re.sub(r"\s*\n+\s*", "<br>", s)  # 날 줄바꿈이 남으면 markdown 행이 깨진다
+
+
+def _grid_to_markdown(grid: list[list[str]]) -> Optional[str]:
+    if not grid:
+        return None
+    width = max(len(r) for r in grid)
+    lines = ["| " + " | ".join(r + [""] * (width - len(r))) + " |" for r in grid]
+    lines.insert(1, "|" + "---|" * width)
+    return "\n".join(lines)
+
+
 def _html_table_to_markdown(html: str) -> Optional[str]:
-    """PaddleOCR-VL의 HTML 표 출력 → 파이프 markdown. 병합셀은 값 복제로 평탄화."""
+    """PaddleOCR-VL의 HTML 표 출력 → 파이프 markdown.
+
+    <table> 블록마다 따로 변환해 빈 줄로 잇는다 — 모든 <tr>을 한 그리드로 합치면
+    좌우로 나란한 두 표가 한 표로 뭉친다(삼성화재 쪽에서 실측).
+    병합셀: 세로(rowspan)는 값 반복, 가로(colspan)는 첫 칸만 값·나머지는 빈 칸 —
+    가로까지 반복하면 전폭 안내 문단이 열 수만큼 복제된다(현대해상 쪽에서 실측).
+    """
+    blocks = re.findall(r"<table[^>]*>(.*?)</table>", html, re.S | re.I) or [html]
+    parts = [md for b in blocks if (md := _html_rows_to_markdown(b))]
+    return "\n\n".join(parts) if parts else None
+
+
+def _html_rows_to_markdown(html: str) -> Optional[str]:
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I)
     if not rows:
         return None
@@ -259,8 +309,9 @@ def _html_table_to_markdown(html: str) -> Optional[str]:
     spans: dict[int, tuple[str, int]] = {}  # col → (rowspan 값, 남은 행 수)
 
     for tr in rows:
-        cells = re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", tr, re.S | re.I)
-        attrs = re.findall(r"<t[hd]([^>]*)>", tr, re.I)
+        # (?![a-zA-Z])가 없으면 <thead>가 <th>+속성 "ead"로 잡혀 attrs·cells의 짝이 어긋난다.
+        cells = re.findall(r"<t[hd](?![a-zA-Z])[^>]*>(.*?)</t[hd]>", tr, re.S | re.I)
+        attrs = re.findall(r"<t[hd](?![a-zA-Z])([^>]*)>", tr, re.I)
         out_row: list[str] = []
         col = 0
 
@@ -275,33 +326,28 @@ def _html_table_to_markdown(html: str) -> Optional[str]:
 
         for attr, cell in zip(attrs, cells):
             fill_pending()
-            text = re.sub(r"<br\s*/?>", " ", cell)
-            text = re.sub(r"<[^>]+>", "", text).strip().replace("|", "／")
+            text = _cell_text(cell)
             rs = re.search(r'rowspan="?(\d+)"?', attr, re.I)
             cs = re.search(r'colspan="?(\d+)"?', attr, re.I)
             n_row = int(rs.group(1)) if rs else 1
             n_col = int(cs.group(1)) if cs else 1
-            for _ in range(n_col):
-                out_row.append(text)
+            for k in range(n_col):
+                val = text if k == 0 else ""  # 가로 병합은 첫 칸만
+                out_row.append(val)
                 if n_row > 1:
-                    spans[col] = (text, n_row - 1)
+                    spans[col] = (val, n_row - 1)
                 col += 1
         fill_pending()
         if out_row:
             grid.append(out_row)
-    if not grid:
-        return None
-    width = max(len(r) for r in grid)
-    lines = ["| " + " | ".join(r + [""] * (width - len(r))) + " |" for r in grid]
-    lines.insert(1, "|" + "---|" * width)
-    return "\n".join(lines)
+    return _grid_to_markdown(grid)
 
 
 def _otsl_to_markdown(otsl: str) -> Optional[str]:
     """PaddleOCR-VL의 OTSL 표 출력 → 파이프 markdown.
 
     <fcel>텍스트 = 셀, <ecel> = 빈 셀, <lcel> = 왼쪽 병합, <ucel>/<xcel> = 위 병합,
-    <nl> = 행 끝. 병합셀은 값 복제로 평탄화.
+    <nl> = 행 끝. 병합 규칙은 HTML 변환과 같다 — 세로만 값 반복, 가로(lcel)는 빈 칸.
     """
     tokens = re.findall(r"<(fcel|ecel|lcel|ucel|xcel|nl)>([^<]*)", otsl)
     if not tokens:
@@ -309,7 +355,7 @@ def _otsl_to_markdown(otsl: str) -> Optional[str]:
     grid: list[list[str]] = []
     row: list[str] = []
     for tag, text in tokens:
-        text = text.replace("\\n", " ").replace("\n", " ").replace("|", "／").strip()
+        text = re.sub(r"\s*(?:\\n|\n)+\s*", "<br>", text.strip()).replace("|", "／")
         if tag == "nl":
             if row:
                 grid.append(row)
@@ -319,18 +365,38 @@ def _otsl_to_markdown(otsl: str) -> Optional[str]:
         elif tag == "ecel":
             row.append("")
         elif tag == "lcel":
-            row.append(row[-1] if row else "")
+            row.append("")  # 가로 병합은 첫 칸만
         else:  # ucel / xcel — 위 행 같은 열 값 복제
             col = len(row)
             row.append(grid[-1][col] if grid and col < len(grid[-1]) else "")
     if row:
         grid.append(row)
-    if not grid:
-        return None
-    width = max(len(r) for r in grid)
-    lines = ["| " + " | ".join(r + [""] * (width - len(r))) + " |" for r in grid]
-    lines.insert(1, "|" + "---|" * width)
-    return "\n".join(lines)
+    return _grid_to_markdown(grid)
+
+
+def _looping_cells(md: str) -> bool:
+    """같은 값의 셀이 VLM_LOOP_CELLS번 연속되는가 — 반복 루프에 빠진 출력의 지문.
+
+    빈 칸(가로 병합·ecel)과 구분선(---)은 세지 않는다. 행이 바뀌어도 연속은 이어진다 —
+    루프 출력은 행 구분조차 반복하기 때문이다.
+    """
+    streak, prev = 0, None
+    for line in md.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            streak, prev = 0, None
+            continue
+        for cell in line.strip("|").split("|"):
+            c = cell.strip()
+            if not c or set(c) <= {"-", ":"}:
+                continue
+            if c == prev:
+                streak += 1
+                if streak >= VLM_LOOP_CELLS:
+                    return True
+            else:
+                streak, prev = 1, c
+    return False
 
 
 def render_page(fitz_page, pno: int) -> Optional[tuple[str, int]]:
@@ -404,6 +470,19 @@ def call_vlm(img_b64: str, pno: int, image_px: int = 0,
                 # 잘린 표는 시간도 품질도 잃는다.
                 finish_reason=choice.get("finish_reason"))
     md = _parse_vlm_output(out)
+    # 퇴행 출력 폐기 — 운영 기준선에서 호출의 28%가 상한에서 잘렸고, Colab 실험에서 그 대부분이
+    # 백지 입력의 반복 루프였다. 잘린 표는 행이 끊겨 구조가 틀리므로 반쪽을 싣는 대신 버리고
+    # 그 쪽은 CPU 소스 폴백에 맡긴다. outcome으로 남겨 비율을 지표에서 본다.
+    if md:
+        reason = ("truncated" if choice.get("finish_reason") == "length"
+                  else "loop" if _looping_cells(md) else None)
+        if reason:
+            stat["outcome"] = reason
+            record(stat)
+            logger.warning(f"p{pno}: VLM 퇴행 출력 폐기 ({reason})",
+                           extra={"event": "vlm_output_discarded", "page": pno,
+                                  "reason": reason})
+            return None
     stat["outcome"] = "table" if md else "empty"
     record(stat)
     return md
@@ -442,6 +521,7 @@ def _record_vlm_call(stat: dict) -> None:
 def _parse_vlm_output(out: str) -> Optional[str]:
     if not out:
         return None
+    out = _normalize_superscripts(out)
     if "<fcel>" in out or "<ecel>" in out:
         return _otsl_to_markdown(out)
     if "<table" in out.lower() or "<tr" in out.lower():

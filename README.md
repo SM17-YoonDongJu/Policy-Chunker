@@ -260,8 +260,9 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
 | `VLM_BACKEND` | `local` | `local` \| `surya` \| `off` |
 | `VLM_URL` | `http://localhost:11434` | `local` 백엔드 서버. 운영은 차트가 `http://vllm-qwen3vl:8000` |
-| `VLM_MODEL` | `qwen3-vl:8b-instruct` | Ollama는 필수. llama-server면 비운다 |
-| `VLM_PROMPT` | (한국어 표 변환 지시) | PaddleOCR-VL이면 `Table Recognition:` 로 |
+| `VLM_MODEL` | `qwen3-vl:8b-instruct` | Ollama는 필수. llama-server면 비운다. Paddle 전환은 `PaddleOCR-VL-1.6-0.9B` |
+| `VLM_PROMPT` | 모델 따라 자동 | 모델명에 `paddleocr`가 있으면 `Table Recognition:`(태스크 토큰), 아니면 한국어 표 변환 지시. 명시하면 그 값이 이긴다 |
+| `VLM_LOOP_CELLS` | `20` | 같은 셀이 이만큼 연속되면 반복 루프 출력으로 보고 폐기 |
 | `VLM_DPI` | `150` | VLM 페이지 렌더링 해상도 |
 | `VLM_TIMEOUT` | `300` | VLM **읽기** 타임아웃(초). GPU 경로 실측 21~36초 |
 | `VLM_CONNECT_TIMEOUT` | `5` | 접속 타임아웃(초). 서버가 없으면 즉시 실패해야 한다 |
