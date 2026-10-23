@@ -567,6 +567,131 @@ def test_page_covering_image_with_sparse_text_is_first(ex, tmp_path):
     assert gaps == [1]
 
 
+# ── PaddleOCR-VL 출력 변환 ────────────────────────────────────────────────────
+# Colab 실험(2026-10-20)에서 확인한 실패 모양을 고정한다 — 좌우 두 표가 한 표로 뭉침,
+# colspan을 값 반복으로 평탄화해 안내 문단이 열 수만큼 복제됨, 백지에서 같은 토큰 무한 반복.
+
+
+def test_each_html_table_becomes_its_own_markdown_table(ex):
+    """좌우로 나란한 두 표는 두 표여야 한다 — 모든 <tr>을 한 그리드로 합치면 행이 어긋난다."""
+    extractor = ex()
+    html = ("<table><tr><td>갑</td><td>1</td></tr></table>"
+            "<table><tr><td>을</td><td>2</td></tr></table>")
+    md = extractor._html_table_to_markdown(html)
+    first, second = md.split("\n\n")
+    assert "갑" in first and "을" not in first and "을" in second
+
+
+def test_colspan_fills_only_the_first_cell(ex):
+    """가로 병합을 값 반복으로 채우면 전폭 안내 문단이 열 수만큼 복제된다(현대해상 쪽 실측)."""
+    extractor = ex()
+    html = ('<table><tr><td>A</td><td>B</td><td>C</td><td>D</td></tr>'
+            '<tr><td colspan="4">안내 문단</td></tr></table>')
+    md = extractor._html_table_to_markdown(html)
+    assert md.count("안내 문단") == 1
+
+
+def test_rowspan_still_repeats_down(ex):
+    """세로 병합은 지금처럼 반복한다 — 표 row 청크가 행 단위로 쪼개져도 값을 잃지 않아야 한다."""
+    extractor = ex()
+    html = ('<table><tr><td rowspan="2">구분</td><td>1</td></tr>'
+            '<tr><td>2</td></tr></table>')
+    md = extractor._html_table_to_markdown(html)
+    rows = [ln for ln in md.splitlines() if "---" not in ln]
+    assert rows[0].startswith("| 구분") and rows[1].startswith("| 구분")
+
+
+def test_otsl_lcel_is_an_empty_cell(ex):
+    """OTSL의 가로 병합(lcel)도 HTML colspan과 같은 규칙이어야 소스 간 표 모양이 같다."""
+    extractor = ex()
+    md = extractor._otsl_to_markdown("<fcel>안내 문단<lcel><nl><fcel>a<fcel>b<nl>")
+    assert md.splitlines()[0].count("안내 문단") == 1
+
+
+def test_br_inside_a_cell_is_preserved(ex):
+    """PyMuPDF 표와 같은 형식(<br>) — 공백으로 뭉개면 목록 셀이 한 문장처럼 붙는다."""
+    extractor = ex()
+    md = extractor._html_table_to_markdown(
+        "<table><tr><td>가<br/>나</td><td><b>강조</b></td></tr></table>")
+    assert "가<br>나" in md
+    assert "<b>" not in md, "<br> 말고 다른 태그는 지금처럼 걷어내야 한다"
+
+
+def test_superscript_latex_is_normalized(ex, monkeypatch):
+    """Paddle이 위첨자를 LaTeX 조각으로 낸다 — 텍스트 레이어와 대조하려면 같은 기호여야 한다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    _capture(monkeypatch, "| 보장\\(^{*}\\) | 한도$ ^{*} $ |\n|---|---|\n| 1 | 2 |")
+    out = extractor.extract_vision_local(_FakePage(), 1)
+    assert "보장*" in out and "한도*" in out and "^{" not in out
+
+
+# ── 퇴행 출력 폐기 ────────────────────────────────────────────────────────────
+# 운영 기준선에서 호출의 28%가 max_tokens에서 잘렸고(이슈 #72), 그 대부분이 백지 입력의
+# 반복 루프였다. 잘린 표는 행이 끊겨 구조가 틀리다 — 반쪽을 싣는 대신 버린다.
+
+
+class _FinishResp(_Resp):
+    def __init__(self, content, finish="stop"):
+        super().__init__(content)
+        self._finish = finish
+
+    def json(self):
+        body = super().json()
+        body["choices"][0]["finish_reason"] = self._finish
+        return body
+
+
+def test_truncated_table_is_discarded(ex, monkeypatch):
+    import requests
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
+    resp = _FinishResp("| a |\n|---|\n| 1 |", finish="length")
+    monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
+    assert extractor.extract_vision_local(_FakePage(), 1) is None
+    assert extractor.vision_page_stats()[-1]["outcome"] == "truncated"
+
+
+def test_looping_cells_are_discarded(ex, monkeypatch):
+    """max_tokens 전에 멈춘 루프는 finish_reason으로 못 잡는다 — 셀 반복이 지문이다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_LOOP_CELLS="5")
+    _capture(monkeypatch, "| " + " | ".join(["1"] * 6) + " |\n|" + "---|" * 6)
+    assert extractor.extract_vision_local(_FakePage(), 1) is None
+    assert extractor.vision_page_stats()[-1]["outcome"] == "loop"
+
+
+def test_a_normal_table_with_repeats_is_kept(ex, monkeypatch):
+    """세로 병합 반복·○ 표시 열은 행마다 다른 셀이 끼므로 루프로 오인하면 안 된다."""
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_LOOP_CELLS="5")
+    rows = "\n".join(f"| 담보{i} | ○ | ○ |" for i in range(10))
+    _capture(monkeypatch, "| 담보 | 가입 | 갱신 |\n|---|---|---|\n" + rows)
+    assert extractor.extract_vision_local(_FakePage(), 1) is not None
+
+
+# ── 모델별 기본 프롬프트 ──────────────────────────────────────────────────────
+
+
+def test_paddle_model_defaults_to_the_task_prompt(ex, monkeypatch):
+    """PaddleOCR-VL은 태스크 토큰이 곧 프롬프트다 — 모델만 바꾸면 프롬프트도 따라와야
+    배포에서 VLM_MODEL 하나만 바꿔도 동작한다."""
+    monkeypatch.delenv("VLM_PROMPT", raising=False)
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="PaddleOCR-VL-1.6-0.9B")
+    assert extractor.VLM_PROMPT == "Table Recognition:"
+
+
+def test_explicit_prompt_beats_the_model_default(ex, monkeypatch):
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="PaddleOCR-VL-1.6-0.9B",
+                   VLM_PROMPT="커스텀")
+    assert extractor.VLM_PROMPT == "커스텀"
+
+
+def test_default_prompt_merge_rule_matches_the_converter(ex, monkeypatch):
+    """qwen 프롬프트의 병합 규칙이 변환기와 다르면 소스마다 표 모양이 달라진다."""
+    monkeypatch.delenv("VLM_PROMPT", raising=False)
+    monkeypatch.delenv("VLM_MODEL", raising=False)
+    extractor = ex()
+    assert "세로로 병합" in extractor.VLM_PROMPT
+    assert "첫 칸" in extractor.VLM_PROMPT
+
+
 def test_max_tokens_comes_from_the_environment(ex, monkeypatch):
     """출력 상한이 최악 페이지의 시간이다 — 재빌드 없이 바꿔 잴 수 있어야 한다."""
     extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_MAX_TOKENS="2048")
