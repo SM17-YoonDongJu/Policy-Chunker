@@ -13,6 +13,7 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
 약관.pdf
   │
   ├─ layout.py        쪽별 표 영역 탐지 (PP-DocLayoutV3, CPU) — 백지는 선필터
+  │                   텍스트 레이어 없는 스캔 쪽도 가려낸다 → VLM OCR로 본문 복구
   │                   paddleocr가 없거나 LAYOUT_BACKEND=off면 아래가 전부 기존 경로로
   │
   ├─ pdf_parser.py    텍스트 추출 (PyMuPDF, 표 영역 제외 — 기준은 레이아웃 박스,
@@ -270,6 +271,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VLM_LOOP_CELLS` | `20` | 같은 셀이 이만큼 연속되면 반복 루프 출력으로 보고 폐기 |
 | `VLM_SNAP_TEXT` | `0` | `1`이면 VLM 표의 짧은 셀(≤40자)을 같은 쪽 텍스트 레이어 줄로 교정 — 해상도로 못 고치는 오독(관혈→관협) 대상. 벤치 `cell_match`로 효과를 재서 기본값을 정한다 |
 | `VLM_SNAP_RATIO` | `0.8` | 스냅 판정 유사도(공백 제거 SequenceMatcher ratio) 하한 |
+| `VLM_OCR_PROMPT` | 모델 따라 자동 | 텍스트 레이어 없는 쪽의 본문 복구 프롬프트. `paddleocr` 모델이면 `OCR:`, 아니면 한국어 지시 |
 | `VLM_DPI` | `200` | VLM 렌더링 해상도. crop 입력은 원본 해상도가 거의 그대로 들어가 200이 유효하다 |
 | `VLM_TIMEOUT` | `60` | VLM **읽기** 타임아웃(초). 영역 하나 1~3초 기준. `LAYOUT_BACKEND=off`(페이지 전체)로 되돌리면 `300`을 줘야 한다 |
 | `VLM_CONNECT_TIMEOUT` | `5` | 접속 타임아웃(초). 서버가 없으면 즉시 실패해야 한다 |

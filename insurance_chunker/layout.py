@@ -78,6 +78,29 @@ def _load_model():
         return None
 
 
+# 이 비율 이상을 그림이 덮는데 텍스트 레이어가 없으면 스캔 쪽으로 본다(본문 복구 후보).
+# 표지 로고처럼 작은 이미지만 있는 쪽을 스캔으로 오인하지 않기 위한 하한이다.
+_OCR_IMG_FRAC = 0.5
+
+
+def needs_ocr(fitz_page) -> bool:
+    """텍스트 레이어가 없는데 그림이 쪽을 덮는다 — 본문 복구(OCR) 후보.
+
+    이런 쪽은 parse_text가 빈 문자열을 내고, 지금까지는 표만 묻는 VLM이 받아 본문이
+    조용히 유실됐다(적재는 OK로 집계된다, 이슈 #74). 커버 이미지 없이 그냥 빈 쪽은
+    복구할 것도 없으므로 해당하지 않는다.
+    """
+    if fitz_page.get_text("words"):
+        return False
+    area = abs(fitz_page.rect.width * fitz_page.rect.height) or 1.0
+    img = 0.0
+    for blk in fitz_page.get_text("dict")["blocks"]:
+        if blk.get("type") == 1:
+            x0, y0, x1, y1 = blk["bbox"]
+            img += abs((x1 - x0) * (y1 - y0)) / area
+    return img >= _OCR_IMG_FRAC
+
+
 def skip_blank(fitz_page) -> bool:
     """텍스트도 이미지도 괘선도 없는 쪽(백지)은 레이아웃을 부를 필요가 없다.
 
@@ -125,8 +148,10 @@ def page_table_boxes(fitz_page) -> list[dict[str, Any]]:
     return boxes
 
 
-def detect_tables(pdf_path: str) -> tuple[dict[int, list[dict[str, Any]]], dict[str, Any]]:
-    """문서 전체의 쪽별 표 박스. (boxes_by_page, 지표) 반환.
+def detect_tables(
+    pdf_path: str,
+) -> tuple[dict[int, list[dict[str, Any]]], list[int], dict[str, Any]]:
+    """문서 전체의 쪽별 표 박스 + 본문 복구(OCR) 대상 쪽. (boxes, ocr_pages, 지표) 반환.
 
     지표에 쪽당 초를 남긴다 — 레이아웃의 쪽당 CPU 시간이 이 전환의 미확인 설계 변수라서
     (Colab 표본은 24쪽뿐), 운영 분포를 보고 모델을 PP-DocLayout-S로 내릴지 정한다.
@@ -134,6 +159,7 @@ def detect_tables(pdf_path: str) -> tuple[dict[int, list[dict[str, Any]]], dict[
     import pymupdf as fitz
 
     boxes_by_page: dict[int, list[dict[str, Any]]] = {}
+    ocr_pages: list[int] = []
     secs: list[float] = []
     blank = 0
     with fitz.open(pdf_path) as doc:
@@ -142,6 +168,8 @@ def detect_tables(pdf_path: str) -> tuple[dict[int, list[dict[str, Any]]], dict[
             if skip_blank(page):
                 blank += 1
                 continue
+            if needs_ocr(page):
+                ocr_pages.append(pno)
             t0 = time.perf_counter()
             boxes = page_table_boxes(page)
             secs.append(round(time.perf_counter() - t0, 3))
@@ -153,10 +181,11 @@ def detect_tables(pdf_path: str) -> tuple[dict[int, list[dict[str, Any]]], dict[
     metrics = {
         "model": LAYOUT_MODEL, "min_score": LAYOUT_MIN_SCORE,
         "blank_skipped": blank, "table_pages": len(boxes_by_page), "boxes": n_boxes,
+        "ocr_pages": len(ocr_pages),
         "page_sec_p50": sorted(secs)[len(secs) // 2] if secs else None,
         "page_sec_max": max(secs) if secs else None,
     }
-    return boxes_by_page, metrics
+    return boxes_by_page, ocr_pages, metrics
 
 
 def reset_for_tests() -> None:

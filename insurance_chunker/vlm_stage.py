@@ -44,6 +44,7 @@ class VlmStage:
         self.streak = 0          # 지금까지의 연속 실패 수
         self.circuit_open = False
         self.stats: list[dict] = []
+        self.ocr_texts: dict[int, str] = {}  # OCR 대상({"page","ocr"})의 복구 본문
         self._lock = threading.Lock()
 
     # ── 작업 스레드 ──────────────────────────────────────────────────────────
@@ -55,7 +56,7 @@ class VlmStage:
                     extra={"event": "vlm_page", **stat})
 
     def _task(self, i: int, total: int, pno: int,
-              rendered: Optional[tuple[str, int]]) -> object:
+              rendered: Optional[tuple[str, int]], task: str = "table") -> object:
         with self._lock:
             if self.circuit_open:
                 return _SKIPPED
@@ -67,7 +68,7 @@ class VlmStage:
             return None
         img_b64, image_px = rendered
         try:
-            md = extractor.call_vlm(img_b64, pno, image_px, record=self._record)
+            md = extractor.call_vlm(img_b64, pno, image_px, record=self._record, task=task)
         except extractor._VLMCallFailed:
             with self._lock:
                 self.streak += 1
@@ -93,14 +94,20 @@ class VlmStage:
     def run(self, doc, targets: list) -> dict[int, str]:
         """targets(순서 = 우선순위)를 호출해 {page: markdown}을 돌려준다. doc은 열린 fitz 문서.
 
-        target은 쪽 번호(페이지 전체 입력) 또는 {"page","bbox"}(레이아웃 crop)다. crop은
+        target은 쪽 번호(페이지 전체 입력), {"page","bbox"}(레이아웃 crop),
+        {"page","ocr":True}(본문 복구 — 쪽 전체를 OCR 프롬프트로) 중 하나다. crop은
         한 쪽에 여럿일 수 있으므로 결과는 쪽마다 박스 순서대로 빈 줄로 잇는다 — 완료
-        순서와 무관하게 대상 목록의 순서가 곧 출력 순서다.
+        순서와 무관하게 대상 목록의 순서가 곧 출력 순서다. OCR 결과는 표가 아니라
+        본문이므로 반환값에 섞지 않고 self.ocr_texts에 쌓는다.
         """
         total = len(targets)
-        jobs = [(t["page"], t.get("bbox")) if isinstance(t, dict) else (t, None)
-                for t in targets[:self.budget]]
-        results: dict[int, str] = {}  # 대상 인덱스 → markdown
+        jobs = []
+        for t in targets[:self.budget]:
+            if isinstance(t, dict):
+                jobs.append((t["page"], t.get("bbox"), "ocr" if t.get("ocr") else "table"))
+            else:
+                jobs.append((t, None, "table"))
+        results: dict[int, str] = {}  # 대상 인덱스 → markdown/본문
         pending: dict[Future, int] = {}
 
         def collect(done) -> None:
@@ -114,7 +121,7 @@ class VlmStage:
 
         with ThreadPoolExecutor(max_workers=self.concurrency,
                                 thread_name_prefix="vlm") as pool:
-            for i, (pno, clip) in enumerate(jobs):
+            for i, (pno, clip, task) in enumerate(jobs):
                 if self.circuit_open:
                     break
                 while len(pending) >= self.concurrency * 2:
@@ -122,7 +129,7 @@ class VlmStage:
                     collect(done)
                 rendered = (extractor.render_page(doc[pno - 1], pno) if clip is None
                             else extractor.render_page(doc[pno - 1], pno, clip))
-                pending[pool.submit(self._task, i + 1, total, pno, rendered)] = i
+                pending[pool.submit(self._task, i + 1, total, pno, rendered, task)] = i
             if self.circuit_open:
                 for fut in pending:
                     fut.cancel()  # 아직 시작 안 한 것만 취소된다
@@ -131,8 +138,12 @@ class VlmStage:
 
         self._log_stop(total)
         by_page: dict[int, list[str]] = {}
-        for i, (pno, _clip) in enumerate(jobs):
-            if i in results:
+        for i, (pno, _clip, task) in enumerate(jobs):
+            if i not in results:
+                continue
+            if task == "ocr":
+                self.ocr_texts[pno] = results[i]
+            else:
                 by_page.setdefault(pno, []).append(results[i])
         return {p: "\n\n".join(parts) for p, parts in by_page.items()}
 
