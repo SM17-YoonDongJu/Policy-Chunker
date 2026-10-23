@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
 
+from .extractor import is_border_box
 from .models import PageResult
 
 logger = logging.getLogger(__name__)
@@ -50,10 +51,12 @@ def parse_text(
             page = doc[pno - 1]
             page_numbers.append(pno)
 
-            # 표 bbox 탐지 (표 영역 텍스트 제외용)
+            # 표 bbox 탐지 (표 영역 텍스트 제외용). 테두리 오탐(is_border_box)은 빼야 한다 —
+            # 테두리 안 본문을 표로 믿고 빼면 그 쪽의 조항이 통째로 유실된다(이슈 #73).
             try:
                 found = page.find_tables()
-                tboxes = [t.bbox for t in (found.tables if found else [])]
+                tboxes = [t.bbox for t in (found.tables if found else [])
+                          if not is_border_box(t, page.rect)]
             except Exception:
                 tboxes = []
 
