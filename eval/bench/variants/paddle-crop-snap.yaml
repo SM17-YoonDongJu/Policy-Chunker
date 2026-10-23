@@ -1,0 +1,18 @@
+# paddle-crop + 텍스트 레이어 스냅(이슈 #72 PR 3). paddle-crop을 base로 비교해
+# cell_match(표 셀의 텍스트 레이어 일치율)가 얼마나 오르는지 재고, 그 결과로
+# VLM_SNAP_TEXT 기본값을 정한다. 스냅은 셀 텍스트만 바꾸므로 표 수·조번호는 같아야 한다.
+slug: paddle-crop-snap
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_MODEL: PaddleOCR-VL-1.6-0.9B
+  VLM_DPI: "200"
+  VLM_TIMEOUT: "60"
+  VLM_CONCURRENCY: "3"
+  VISION_MAX_CROPS: "300"
+  LAYOUT_BACKEND: paddle
+  LAYOUT_MODEL: PP-DocLayoutV3
+  LAYOUT_MIN_SCORE: "0.5"
+  VLM_SNAP_TEXT: "1"
+status: draft
+note: 이슈 #72 PR 3 — 스냅 켜고 끈 차이 측정용

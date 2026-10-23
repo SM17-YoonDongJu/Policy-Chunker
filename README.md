@@ -268,6 +268,8 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VLM_MODEL` | `qwen3-vl:8b-instruct` | Ollama는 필수. llama-server면 비운다. Paddle 전환은 `PaddleOCR-VL-1.6-0.9B` |
 | `VLM_PROMPT` | 모델 따라 자동 | 모델명에 `paddleocr`가 있으면 `Table Recognition:`(태스크 토큰), 아니면 한국어 표 변환 지시. 명시하면 그 값이 이긴다 |
 | `VLM_LOOP_CELLS` | `20` | 같은 셀이 이만큼 연속되면 반복 루프 출력으로 보고 폐기 |
+| `VLM_SNAP_TEXT` | `0` | `1`이면 VLM 표의 짧은 셀(≤40자)을 같은 쪽 텍스트 레이어 줄로 교정 — 해상도로 못 고치는 오독(관혈→관협) 대상. 벤치 `cell_match`로 효과를 재서 기본값을 정한다 |
+| `VLM_SNAP_RATIO` | `0.8` | 스냅 판정 유사도(공백 제거 SequenceMatcher ratio) 하한 |
 | `VLM_DPI` | `200` | VLM 렌더링 해상도. crop 입력은 원본 해상도가 거의 그대로 들어가 200이 유효하다 |
 | `VLM_TIMEOUT` | `60` | VLM **읽기** 타임아웃(초). 영역 하나 1~3초 기준. `LAYOUT_BACKEND=off`(페이지 전체)로 되돌리면 `300`을 줘야 한다 |
 | `VLM_CONNECT_TIMEOUT` | `5` | 접속 타임아웃(초). 서버가 없으면 즉시 실패해야 한다 |
