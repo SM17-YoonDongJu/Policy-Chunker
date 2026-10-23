@@ -1,0 +1,23 @@
+# Paddle 전환 본체(이슈 #72 PR 2) — 레이아웃 crop 입력 + PaddleOCR-VL. baseline과 짝지어
+# 가드레일로 판정한다. 결과가 바뀌는 변경이므로 expect_identical_to는 쓰지 않는다.
+#
+# 완료 기준(이슈 #72): 문서당 VLM 시간 1/10 이하, 알려진 표 쪽의 행 구조 보존,
+# 백지·목차에서 표 0, rss_peak_mb 4Gi 대비 여유, R@5 유지(retrieval_eval 별도).
+# 셀 텍스트 품질은 [?] 셀이 아니라 table_cell_match(텍스트 레이어 일치율)가 본다 —
+# [?]는 qwen 프롬프트 전용 표식이라 Paddle에선 항상 0이다.
+#
+# VLM 서버가 PaddleOCR-VL을 서빙해야 한다(vLLM --dtype half, served-model-name 아래와 일치).
+slug: paddle-crop
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_MODEL: PaddleOCR-VL-1.6-0.9B
+  VLM_DPI: "200"
+  VLM_TIMEOUT: "60"
+  VLM_CONCURRENCY: "3"
+  VISION_MAX_CROPS: "300"
+  LAYOUT_BACKEND: paddle
+  LAYOUT_MODEL: PP-DocLayoutV3
+  LAYOUT_MIN_SCORE: "0.5"
+status: draft
+note: 이슈 #72 PR 2 — 레이아웃 crop + PaddleOCR-VL 전환

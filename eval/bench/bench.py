@@ -269,6 +269,9 @@ def doc_diff(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
         "articles_lost": sorted(arts_a - arts_b),
         "articles_gained": sorted(arts_b - arts_a),
         "boundary": (sa.get("boundary_confidence"), sb.get("boundary_confidence")),
+        # contract 3부터 있다 — 없는 리포트(구버전)와 짝지으면 None이고 가드레일은 건너뛴다.
+        "cell_match": ((a.get("table_cell_match") or {}).get("rate"),
+                       (b.get("table_cell_match") or {}).get("rate")),
     }
 
 
@@ -279,8 +282,12 @@ DEFAULT_GUARDRAIL: dict[str, Any] = {
     "max_articles_lost": 0,            # 빠진 조는 검색되지 않는다
     "boundary_no_downgrade": True,     # weak면 섹션이 안 갈려 조번호가 어긋난다
     "min_table_pages_ratio": 0.95,     # 호출 수를 줄이는 변경이 잃는 표의 폭
-    "unknown_cells_no_increase": True,  # VLM이 읽지 못한 셀([?])
+    "unknown_cells_no_increase": True,  # VLM이 읽지 못한 셀([?]) — qwen 프롬프트 전용 표식
     "cpu_pages_unchanged": True,       # CPU 소스가 읽던 페이지를 VLM이 덮어쓰면 안 된다(ICD 사고)
+    # 표 셀의 텍스트 레이어 정확 일치율(contract 3의 table_cell_match) 하락 허용 폭.
+    # [?] 셀 수는 프롬프트가 바뀌면 무의미해진다 — 엔진을 바꾸는 변형(Paddle 전환)은 이것이
+    # 셀 텍스트 품질을 본다. 어느 한쪽 리포트에 값이 없으면 판정하지 않는다.
+    "cell_match_max_drop": 0.02,
 }
 _CPU_SOURCES = {"pymupdf", "pdfplumber", "camelot"}
 _BOUNDARY_RANK = {"error": 0, "weak": 1, "ok": 2}
@@ -308,6 +315,11 @@ def guardrail_violations(a: dict[str, Any], b: dict[str, Any], d: dict[str, Any]
                       and (p not in tb or tb[p]["sha256"] != v["sha256"])), key=int)
         if hit:
             out.append(f"CPU 소스가 읽던 페이지의 표가 바뀜/사라짐: {', '.join(hit[:8])}")
+    ca, cb = d.get("cell_match", (None, None))
+    if rules.get("cell_match_max_drop") is not None and ca is not None and cb is not None:
+        if cb < ca - rules["cell_match_max_drop"]:
+            out.append(f"표 셀 텍스트 레이어 일치율 하락({ca:.1%}→{cb:.1%}, "
+                       f"허용 -{rules['cell_match_max_drop']:.0%})")
     return out
 
 
@@ -421,14 +433,17 @@ def render(c: dict[str, Any]) -> str:
     for g, s in c["groups"].items():
         lines.append(f"| {g} | {s['n']} | {s['elapsed'][0]}s → {s['elapsed'][1]}s | "
                      f"{s['table_match']:.1%} |")
-    lines += ["", "| 문서 | 시간 | 표 일치 | 바뀐 페이지 | 청크 | 조번호 손실 | 경계 |",
-              "|---|---|---|---|---|---|---|"]
+    lines += ["", "| 문서 | 시간 | 표 일치 | 셀일치 | 바뀐 페이지 | 청크 | 조번호 손실 | 경계 |",
+              "|---|---|---|---|---|---|---|---|"]
     for i, d in c["docs"].items():
         t = d["tables"]
         changed = t["changed"] + [f"-{p}" for p in t["only_base"]] + \
             [f"+{p}" for p in t["only_variant"]]
+        ca, cb = d.get("cell_match", (None, None))
+        cm = "-" if ca is None and cb is None else \
+            f"{_rate(ca) if ca is not None else '-'}→{_rate(cb) if cb is not None else '-'}"
         lines.append(
-            f"| {i} | {d['elapsed'][0]}→{d['elapsed'][1]}s | {t['match_rate']:.0%} | "
+            f"| {i} | {d['elapsed'][0]}→{d['elapsed'][1]}s | {t['match_rate']:.0%} | {cm} | "
             f"{', '.join(map(str, changed[:8])) or '-'} | {d['chunks'][0]}→{d['chunks'][1]} | "
             f"{', '.join(d['articles_lost'][:5]) or '-'} | {d['boundary'][0]}→{d['boundary'][1]} |")
     return "\n".join(lines) + "\n"
@@ -450,7 +465,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def main(argv: Optional[list[str]] = None) -> None:
-    stages = ["text", "tables_cpu", "vlm", "combine", "chunk", "embed"]
+    stages = ["layout", "text", "tables_cpu", "vlm", "combine", "chunk", "embed"]
     p = argparse.ArgumentParser(description="고정 문서셋 × 변형 벤치마크")
     sub = p.add_subparsers(dest="cmd", required=True)
 

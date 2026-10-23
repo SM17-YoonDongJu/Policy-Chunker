@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "보험 약관 RAG 청킹 파이프라인 (Policy-Chunker 구조 + rag/ 메타데이터 보완)"
 requires-python = ">=3.12"
 dependencies = [
-    # PDF 파싱
-    "pdfplumber>=0.11",
+    # PDF 파싱 — pdfplumber는 제거했다(#72). 표는 레이아웃 crop + VLM이 뽑고 PyMuPDF가
+    # 폴백이다. pdfplumber의 쪽 글자 캐시(OOM 111회 재시작, #71)가 벡터째 사라진다.
     "pymupdf>=1.24",          # fitz: 폰트 기반 경계 감지 + 표 추출
     # 토크나이저
     "kiwipiepy>=0.18",
@@ -32,6 +32,10 @@ dependencies = [
 [project.optional-dependencies]
 st  = ["sentence-transformers>=3.0"]
 ocr = ["surya-ocr>=0.22"]  # 스캔본 PDF 전처리용 (가중치 라이선스: 매출/투자 $5M 미만 무료)
+# 레이아웃 모델(PP-DocLayoutV3) — 운영 이미지 전용. paddlepaddle(CPU 휠)은 자체 인덱스에만
+# 있어 여기 못 적는다. Dockerfile이 이 extra 설치 뒤 paddlepaddle을 따로 깐다.
+# 로컬에서 레이아웃 없이 돌리면 자동으로 기존 경로(gap + 페이지 전체)로 떨어진다.
+layout = ["paddleocr[doc-parser]>=3.6.0"]
 # tests/test_search_contract.py가 db/search.py를 fake-pool로 검증한다. asyncpg·pydantic은
 # db/search.py의 의존인데 base dependencies에는 없다 — 그 모듈은 파트너(AI) 레포가 import해
 # 쓰는 계약 코드라 우리 런타임(worker/ingest)은 쓰지 않기 때문. 테스트에는 필요하므로 여기 둔다.

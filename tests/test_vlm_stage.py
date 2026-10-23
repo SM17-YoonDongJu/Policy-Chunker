@@ -103,7 +103,7 @@ def _install(monkeypatch, server):
 def _run(extractor, pdf):
     from insurance_chunker import stages
     pages, results = stages.parse(pdf)
-    return pages, results[2]
+    return pages, results[3]
 
 
 # ── 결과 동일성 ───────────────────────────────────────────────────────────────

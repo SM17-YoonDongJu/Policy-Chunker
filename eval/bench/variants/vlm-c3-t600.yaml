@@ -11,6 +11,7 @@ env:
   VISION_MAX_PAGES: "50"
   VLM_CONCURRENCY: "3"
   VLM_TIMEOUT: "600"
+  LAYOUT_BACKEND: "off"   # 코드 기본이 paddle로 바뀜 — 이 변형은 기존 경로 측정
 expect_identical_to: baseline
 status: draft
 note: vlm-c3 타임아웃 FAIL 재측정

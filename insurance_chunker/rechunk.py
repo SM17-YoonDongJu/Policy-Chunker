@@ -706,7 +706,7 @@ def finalize(
                     section=m["section"] or None,
                     page_number=m["page_start"],
                     caption=m.get("article_title") or None,
-                    extractor=m.get("table_source", "pdfplumber"),
+                    extractor=m.get("table_source", "pymupdf"),
                     row_count=len(data_rows),
                     col_count=col_count,
                     markdown=m["body"],

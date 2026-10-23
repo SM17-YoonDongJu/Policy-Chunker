@@ -1,13 +1,12 @@
-"""표 추출: PyMuPDF + pdfplumber + camelot + VLM(비전).
+"""표 추출: PyMuPDF(폴백) + VLM(비전).
 
-Policy-Chunker(main) extract.py와 동일한 전략:
-  - PyMuPDF    : fitz.find_tables() (괘선 있는 표, 빠름)
-  - pdfplumber : 설치돼 있으면 자동 사용
-  - camelot    : 설치돼 있으면 자동 사용 (ghostscript 필요)
-  - VLM        : OpenAI 호환 VLM(기본: 같은 호스트 Ollama의 qwen3-vl),
-                 PyMuPDF가 표를 감지한 페이지에만 실행
+  - PyMuPDF : fitz.find_tables() (괘선 있는 표, 빠름). VLM이 못 채운 쪽의 폴백
+  - VLM     : OpenAI 호환 서버(운영은 vLLM의 PaddleOCR-VL, 로컬은 Ollama).
+              레이아웃(layout.py)이 잡은 표 영역을 crop해 넣는 것이 기본 경로이고,
+              LAYOUT_BACKEND=off면 예전처럼 gap 휴리스틱 + 페이지 전체 입력이다
 
-combine.py가 페이지별로 더블스페이스 가장 적은 소스를 선택한다.
+pdfplumber·camelot 경로는 제거했다 — Paddle crop이 역할을 대신하고, pdfplumber의
+쪽 글자 캐시(OOM 111회 재시작의 원인, #71)가 벡터째 사라진다.
 """
 from __future__ import annotations
 
@@ -21,20 +20,23 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-# 문서당 VLM 호출 상한. 9999는 사실상 상한이 없다는 뜻이었고, 그게 처리 시간의 꼬리를
-# 만들었다 — 실측에서 문서 20건(6.4%)이 전체 parse 시간의 53.4%를 먹었고, parse p50은
-# 131초인데 p90이 2,879초로 22배다. 표 403페이지 중 214페이지가 표인 문서가 실재하는데,
-# VLM이 완전히 건강해도 페이지당 11~25초라 그것만 40~90분이다.
-#
-# 50은 시간 예산에서 나온 값이다: 50 x 25초 = 약 20분이 문서당 VLM 상한이 된다.
-# 상한을 넘는 페이지는 VLM을 안 거칠 뿐 표가 사라지지는 않는다 — PyMuPDF/pdfplumber
-# 결과가 남고 combine.py가 페이지별 best-of를 고른다. 전부 잃는 게 아니라 일부가 열화된다.
+# 문서당 VLM 호출 상한 — 페이지 전체 입력(LAYOUT_BACKEND=off) 경로의 예산.
+# 9999는 사실상 상한이 없다는 뜻이었고, 그게 처리 시간의 꼬리를 만들었다 — 실측에서
+# 문서 20건(6.4%)이 전체 parse 시간의 53.4%를 먹었고, parse p50은 131초인데 p90이
+# 2,879초로 22배다. 50 x 25초 = 약 20분이 문서당 VLM 상한이 된다.
+# 상한을 넘는 페이지는 VLM을 안 거칠 뿐 표가 사라지지는 않는다 — PyMuPDF 결과가 남는다.
 VISION_MAX_PAGES = int(os.environ.get("VISION_MAX_PAGES", "50"))
-VLM_DPI = int(os.environ.get("VLM_DPI", "150"))
-# 읽기 타임아웃. GPU 경로 실측이 페이지당 21~36초이고, max_tokens가 4096이라 최악의
-# 페이지(토큰을 끝까지 쓰는 경우)도 200초 안쪽이다. 300초를 넘기면 느린 게 아니라
-# 고장난 것이다 — 실제로 Ollama가 CPU로 떨어졌을 때 600초로도 한 장을 못 끝냈다.
-VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "300"))
+# 레이아웃 crop 경로의 예산 — 상한의 단위는 쪽이 아니라 박스다. 674쪽 문서에 표 208쪽이면
+# 박스 300개 안팎이고, 영역당 1~3초라 300개여도 10분 안쪽이다.
+VISION_MAX_CROPS = int(os.environ.get("VISION_MAX_CROPS", "300"))
+# crop 렌더 해상도. 200이 기본인 이유: 모델이 쪽 전체를 약 1MP로 줄여 받아 페이지 전체
+# 입력에서는 150↔200이 무의미했지만(입력 토큰 1,273으로 동일), 영역 입력은 원본 해상도가
+# 거의 그대로 들어가 200 DPI의 글자가 실제로 더 선명하다(Colab 실험 C).
+VLM_DPI = int(os.environ.get("VLM_DPI", "200"))
+# 읽기 타임아웃. 영역 하나는 1~3초(Colab 실측)라 60초를 넘기면 느린 게 아니라 고장이다.
+# LAYOUT_BACKEND=off(페이지 전체 + qwen3-vl)로 되돌릴 때는 예전 값 300을 env로 줘야 한다 —
+# 그 경로는 페이지당 p50 88.6초였다.
+VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "60"))
 # 페이지당 출력 토큰 상한. 생성이 VLM 시간의 대부분이라(vLLM 단일 요청 18.7토큰/초) 상한이 곧
 # 최악 페이지의 시간이다. smoke 벤치마크(2026-10-14)에서 50건 중 7건이 4096까지 생성했고 그 7건이
 # VLM 시간의 약 53%였다 — 상한까지 가는 응답은 대개 반복 폭주라 끝까지 받아도 쓸 수 없다. 줄이면
@@ -206,78 +208,6 @@ def extract_pymupdf(fitz_page) -> Optional[str]:
         return None
 
 
-# ── pdfplumber (선택) ─────────────────────────────────────────────────────────
-
-def _rows_to_md(rows) -> str:
-    rows = [[("" if c is None else str(c)).replace("\n", " ").strip() for c in r]
-            for r in rows if r]
-    if not rows:
-        return ""
-    width = max(len(r) for r in rows)
-    rows = [r + [""] * (width - len(r)) for r in rows]
-    head = rows[0]
-    out = ["| " + " | ".join(head) + " |",
-           "| " + " | ".join(["---"] * width) + " |"]
-    for r in rows[1:]:
-        out.append("| " + " | ".join(r) + " |")
-    return "\n".join(out)
-
-
-def extract_pdfplumber_tables(pdf_path: str, pages: list[int]) -> dict[int, str]:
-    try:
-        import pdfplumber
-    except ImportError:
-        logger.debug("pdfplumber 미설치 — 건너뜀")
-        return {}
-    out: dict[int, str] = {}
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for p in pages:
-                if p - 1 >= len(pdf.pages):
-                    continue
-                page = pdf.pages[p - 1]
-                try:
-                    tabs = page.extract_tables() or []
-                finally:
-                    # pdfplumber는 건드린 쪽의 글자·선 객체를 문서를 닫을 때까지 캐시에 들고 있다.
-                    # 한국어 약관은 쪽당 글자 2천 개 안팎이고 글자 하나가 2KB짜리 dict라 쪽당
-                    # 3~5MB다. 434쪽 문서에서 표·gap 356쪽을 한 번에 돌자 2GB를 넘겨 파드 한도
-                    # 4Gi에서 죽었다(OOM 111회 재시작, 2026-10-15~20). 쪽마다 캐시를 풀면
-                    # 최고점이 한 쪽 분량으로 내려간다. close()는 캐시만 비우고 문서는 안 닫는다.
-                    page.close()
-                mds = [_rows_to_md(t) for t in tabs]
-                mds = [m for m in mds if m]
-                if mds:
-                    out[p] = "\n\n".join(mds)
-    except Exception:
-        pass
-    return out
-
-
-# ── camelot (선택) ────────────────────────────────────────────────────────────
-
-def extract_camelot_tables(pdf_path: str, pages: list[int]) -> dict[int, str]:
-    try:
-        import camelot
-    except ImportError:
-        logger.debug("camelot 미설치 — 건너뜀")
-        return {}
-    out: dict[int, str] = {}
-    for p in pages:
-        for flavor in ("lattice", "stream"):
-            try:
-                tl = camelot.read_pdf(pdf_path, pages=str(p), flavor=flavor)
-            except Exception:
-                continue
-            if tl and tl.n:
-                mds = [_rows_to_md(t.df.values.tolist()) for t in tl]
-                mds = [m for m in mds if m]
-                if mds:
-                    out[p] = "\n\n".join(mds)
-                    break
-    return out
-
-
 # ── VLM Vision (OpenAI 호환) ──────────────────────────────────────────────────
 
 def _strip_fences(s: str) -> str:
@@ -425,8 +355,16 @@ def _looping_cells(md: str) -> bool:
     return False
 
 
-def render_page(fitz_page, pno: int) -> Optional[tuple[str, int]]:
-    """페이지 → (PNG base64, 픽셀 수). 렌더링 실패면 None.
+# crop 여백(렌더 픽셀). 레이아웃 박스가 괘선에 딱 붙으면 바깥 선이 반쯤 잘려 표 테두리를
+# 잃는 경우가 있다 — 박스 둘레에 이만큼을 더해 자른다.
+_CLIP_PAD_PX = 8
+
+
+def render_page(fitz_page, pno: int,
+                clip: Optional[list[float]] = None) -> Optional[tuple[str, int]]:
+    """페이지(또는 clip 영역) → (PNG base64, 픽셀 수). 렌더링 실패면 None.
+
+    clip은 PDF 포인트 bbox(레이아웃 박스). 여백 _CLIP_PAD_PX를 두고 쪽 경계로 자른다.
 
     PyMuPDF 객체는 스레드 간에 안전하지 않다. VLM 호출을 병렬로 보내더라도 렌더링은 문서를 연
     스레드에서 해서 바이트로 넘긴다 — 그래서 호출(call_vlm)과 나눠 둔다.
@@ -434,7 +372,13 @@ def render_page(fitz_page, pno: int) -> Optional[tuple[str, int]]:
     import base64
 
     try:
-        pix = fitz_page.get_pixmap(dpi=VLM_DPI)
+        kwargs: dict = {"dpi": VLM_DPI}
+        if clip is not None:
+            import pymupdf
+            pad = _CLIP_PAD_PX * 72.0 / VLM_DPI
+            kwargs["clip"] = pymupdf.Rect(clip[0] - pad, clip[1] - pad,
+                                          clip[2] + pad, clip[3] + pad) & fitz_page.rect
+        pix = fitz_page.get_pixmap(**kwargs)
         img_b64 = base64.b64encode(pix.tobytes("png")).decode()
     except Exception as e:
         logger.warning(f"p{pno}: 이미지 렌더링 실패: {e}")
@@ -670,8 +614,8 @@ def gap_pages(doc, page_numbers: list[int], pymupdf_tables: dict[int, str]) -> l
     """PyMuPDF가 닿지 못한 페이지를 우선순위 순으로 돌려준다.
 
     1순위 텍스트 레이어가 내용을 담고 있지 않은 페이지 — 아예 비었거나, 페이지를 덮는
-          이미지가 있는데 텍스트가 희박하다(OCR이 못 읽은 스캔 페이지). PyMuPDF도
-          pdfplumber도 손댈 게 없으므로 VLM만이 유일한 수단이다. 예산을 여기부터 쓴다.
+          이미지가 있는데 텍스트가 희박하다(OCR이 못 읽은 스캔 페이지). 텍스트 기반
+          소스는 손댈 게 없으므로 VLM만이 유일한 수단이다. 예산을 여기부터 쓴다.
     2순위 괘선이 많은데 표로 인식되지 않은 페이지 — 괘선이 끊겼거나 PyMuPDF가 놓친 표.
 
     '이미지가 있다'를 신호로 쓰지 않는 이유는 _HINT_IMG_FRAC 주석 참고.
@@ -703,23 +647,29 @@ def vlm_target_pages(pymupdf_pages: list[int], gaps: list[int]) -> list[int]:
 
 
 # ── 문서 단위 추출 ────────────────────────────────────────────────────────────
-# CPU 단계(PyMuPDF·pdfplumber·camelot + VLM 대상 선정)와 GPU 단계(VLM)를 따로 부를 수
-# 있게 나눠 둔다. 한 함수에 묶여 있으면 VLM 시간이 표 추출 전체에 묻혀 따로 잴 수 없고,
-# VLM만 설정을 바꿔 다시 돌리는 실험도 못 한다. extract_tables_for_doc은 둘을 이어 부르는
-# 예전 진입점으로 남긴다(호출부가 eval 스크립트까지 여럿이다).
+# CPU 단계(PyMuPDF + VLM 대상 선정)와 GPU 단계(VLM)를 따로 부를 수 있게 나눠 둔다.
+# 한 함수에 묶여 있으면 VLM 시간이 표 추출 전체에 묻혀 따로 잴 수 없고, VLM만 설정을
+# 바꿔 다시 돌리는 실험도 못 한다. extract_tables_for_doc은 둘을 이어 부르는 예전
+# 진입점으로 남긴다(호출부가 eval 스크립트까지 여럿이다 — 레이아웃 없는 경로로 돈다).
 
 def extract_cpu_tables(
     pdf_path: str,
     page_numbers: list[int],
     use_vision: bool = True,
-) -> tuple[dict[str, dict[int, str]], list[int], dict]:
-    """CPU 소스로 표를 뽑고 VLM 투입 대상을 정한다.
+    layout_boxes: Optional[dict[int, list[list[float]]]] = None,
+) -> tuple[dict[str, dict[int, str]], list, dict]:
+    """CPU 소스(PyMuPDF)로 표를 뽑고 VLM 투입 대상을 정한다.
+
+    layout_boxes(쪽 → 표 bbox 목록, PDF 포인트)가 있으면 VLM 대상은 쪽이 아니라 박스다 —
+    {"page", "bbox"} dict 목록을 쪽 순서로 돌려주고, gap 휴리스틱은 쓰지 않는다(레이아웃이
+    그 역할을 대신한다). None이면(LAYOUT_BACKEND=off) 예전 그대로 gap 휴리스틱 + 쪽 목록.
+    PyMuPDF 표는 두 경로 모두 뽑는다 — 박스 쪽에서 VLM이 실패하면 폴백이다.
 
     Returns:
         (table_sources, vlm_targets, info)
-        table_sources: {"pymupdf": {...}, "pdfplumber": {...}, "camelot": {...}} — 설치된 것만
-        vlm_targets:   VLM을 부를 페이지. 순서가 곧 예산 소진 순서. VLM을 안 쓰면 빈 목록
-        info:          {"pymupdf_pages": int, "gap_pages": int} — 로그·계측용
+        table_sources: {"pymupdf": {page: md}}
+        vlm_targets:   [{"page", "bbox"}] 또는 [page]. 순서가 곧 예산 소진 순서
+        info:          {"pymupdf_pages", "gap_pages", "crops"} — 로그·계측용
     """
     import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
 
@@ -733,42 +683,32 @@ def extract_cpu_tables(
                 pymupdf_tables[pno] = md
 
         table_pages = sorted(pymupdf_tables.keys())
-        gaps = gap_pages(doc, page_numbers, pymupdf_tables)
+        gaps = [] if layout_boxes is not None else gap_pages(doc, page_numbers, pymupdf_tables)
 
     table_sources: dict[str, dict[int, str]] = {"pymupdf": pymupdf_tables}
 
-    # CPU 소스는 후보를 넓혀도 싸다. 괘선 없는 표는 PyMuPDF가 못 보지만
-    # pdfplumber는 보기도 하므로, GPU를 쓰기 전에 여기서 먼저 건진다.
-    cpu_pages = sorted(set(table_pages) | set(gaps))
-
-    # pdfplumber (선택)
-    pp = extract_pdfplumber_tables(pdf_path, cpu_pages)
-    if pp:
-        table_sources["pdfplumber"] = pp
-
-    # camelot (선택)
-    cm = extract_camelot_tables(pdf_path, cpu_pages)
-    if cm:
-        table_sources["camelot"] = cm
-
-    # VLM — 기본은 PyMuPDF가 닿지 못한 페이지(gap)
-    targets: list[int] = []
+    targets: list = []
     if use_vision and VLM_BACKEND != "off":
-        targets = vlm_target_pages(table_pages, gaps)
-    info = {"pymupdf_pages": len(table_pages), "gap_pages": len(gaps)}
+        if layout_boxes is not None:
+            targets = [{"page": pno, "bbox": list(bbox)}
+                       for pno in sorted(layout_boxes) for bbox in layout_boxes[pno]]
+        else:
+            targets = vlm_target_pages(table_pages, gaps)
+    info = {"pymupdf_pages": len(table_pages), "gap_pages": len(gaps),
+            "crops": len(targets) if layout_boxes is not None else 0}
     return table_sources, targets, info
 
 
 def extract_vlm_tables(
     pdf_path: str,
-    targets: list[int],
+    targets: list,
     total_pages: int,
     info: Optional[dict] = None,
 ) -> dict[int, str]:
-    """VLM 대상 페이지의 표를 뽑는다 → {page: markdown}. 백엔드가 off면 빈 dict.
+    """VLM 대상(쪽 번호 또는 {"page","bbox"} crop)의 표를 뽑는다 → {page: markdown}.
 
-    문서 경계이므로 호출 상한과 차단기를 여기서 되돌린다.
-    total_pages·info는 로그에만 쓴다.
+    crop 대상이면 예산이 VISION_MAX_PAGES(쪽)가 아니라 VISION_MAX_CROPS(박스)다.
+    문서 경계이므로 호출 상한과 차단기를 여기서 되돌린다. total_pages·info는 로그에만 쓴다.
     """
     reset_vision_counter()
     if VLM_BACKEND == "off":
@@ -776,22 +716,25 @@ def extract_vlm_tables(
 
     info = info or {}
     total = len(targets)
+    crops = bool(targets) and isinstance(targets[0], dict)
+    unit = "영역" if crops else "페이지"
     logger.info(
-        f"VLM 대상: {total}페이지 (전체 {total_pages}페이지 중 "
-        f"target={VLM_TARGET}, PyMuPDF표 {info.get('pymupdf_pages', 0)}쪽/"
-        f"미탐지 {info.get('gap_pages', 0)}쪽, "
+        f"VLM 대상: {total}{unit} (전체 {total_pages}페이지, "
+        f"{'layout crop' if crops else f'target={VLM_TARGET}'}, "
+        f"PyMuPDF표 {info.get('pymupdf_pages', 0)}쪽/미탐지 {info.get('gap_pages', 0)}쪽, "
         f"backend={VLM_BACKEND}{f', model={VLM_MODEL}' if VLM_MODEL else ''})",
-        extra={"event": "vlm_targets", "target": VLM_TARGET, "pages": total,
-               "pymupdf_pages": info.get("pymupdf_pages", 0),
+        extra={"event": "vlm_targets", "target": "crop" if crops else VLM_TARGET,
+               "pages": total, "pymupdf_pages": info.get("pymupdf_pages", 0),
                "gap_pages": info.get("gap_pages", 0)})
     if VLM_BACKEND == "surya":
-        return extract_surya_tables(pdf_path, targets)
+        pages = sorted({t["page"] for t in targets}) if crops else targets
+        return extract_surya_tables(pdf_path, pages)
 
     import pymupdf as fitz
 
     from .vlm_stage import VlmStage
 
-    stage = VlmStage()
+    stage = VlmStage(budget=VISION_MAX_CROPS if crops else None)
     with fitz.open(pdf_path) as doc:
         vlm_tables = stage.run(doc, targets)
     _publish(stage)

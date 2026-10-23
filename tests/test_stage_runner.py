@@ -115,7 +115,7 @@ def test_from_reruns_that_stage_and_below_only(runner, fake_vlm, mixed_pdf, tmp_
     fake_vlm["n"] = 0
     recs = sr.run(mixed_pdf, tmp_path, _meta(mixed_pdf), from_stage="vlm", to_stage="chunk")
     cached = {r["stage"]: r["cached"] for r in recs}
-    assert cached == {"text": True, "tables_cpu": True, "vlm": False,
+    assert cached == {"layout": True, "text": True, "tables_cpu": True, "vlm": False,
                       "combine": False, "chunk": False}
     assert fake_vlm["n"] > 0
 
@@ -182,8 +182,8 @@ def test_cli_prints_stage_records(runner, fake_vlm, mixed_pdf, tmp_path, capsys)
     sr.main(["--pdf", mixed_pdf, "--artifacts", str(tmp_path), "--to", "combine",
              "--doc-type", "plain", "--json"])
     recs = json.loads(capsys.readouterr().out)
-    assert [r["stage"] for r in recs] == ["text", "tables_cpu", "vlm", "combine"]
-    assert recs[2]["resource"] == "gpu"
+    assert [r["stage"] for r in recs] == ["layout", "text", "tables_cpu", "vlm", "combine"]
+    assert recs[3]["resource"] == "gpu"
 
 
 def test_report_follows_the_dry_run_contract(runner, fake_vlm, mixed_pdf, tmp_path):  # noqa: F811
@@ -193,9 +193,9 @@ def test_report_follows_the_dry_run_contract(runner, fake_vlm, mixed_pdf, tmp_pa
     sr.main(["--pdf", mixed_pdf, "--artifacts", str(tmp_path / "a"), "--to", "chunk",
              "--doc-type", "plain", "--report", str(report_path)])
     rep = json.loads(report_path.read_text())
-    import ingest_many
-    assert rep["contract"] == ingest_many.DRY_RUN_CONTRACT
+    assert rep["contract"] == sr.REPORT_CONTRACT == 3
     assert {"doc_hash", "stages", "tables_by_page", "summary", "elapsed_s"} <= rep.keys()
+    assert "table_cell_match" in rep and "rate" in rep["table_cell_match"]
     assert "chunks" not in rep and "content" not in json.dumps(rep["summary"])
     assert rep["elapsed_s"] == pytest.approx(sum(s["seconds"] for s in rep["stages"].values()),
                                              abs=0.05)

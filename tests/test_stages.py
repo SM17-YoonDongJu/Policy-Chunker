@@ -161,7 +161,8 @@ def test_stages_are_recorded_in_order_with_resources(ex, fake_vlm, mixed_pdf):
 
     _, results = stages.parse(mixed_pdf)
     assert [(r.name, r.resource) for r in results] == [
-        ("text", "cpu"), ("tables_cpu", "cpu"), ("vlm", "gpu"), ("combine", "cpu")]
+        ("layout", "cpu"), ("text", "cpu"), ("tables_cpu", "cpu"),
+        ("vlm", "gpu"), ("combine", "cpu")]
     assert all(r.seconds >= 0 for r in results)
 
 
@@ -171,7 +172,7 @@ def test_vlm_stage_is_measured_on_its_own(ex, fake_vlm, mixed_pdf):
     from insurance_chunker import stages
 
     _, results = stages.parse(mixed_pdf)
-    s2, s3 = results[1], results[2]
+    s2, s3 = results[2], results[3]
     assert s3.metrics["targets"] == s2.metrics["vlm_targets"] > 0
     assert s3.metrics["calls"] == fake_vlm["n"]
     assert s3.metrics["tables"] == len(s3.output)
@@ -183,7 +184,7 @@ def test_vlm_stage_is_recorded_even_when_skipped(ex, fake_vlm, mixed_pdf):
     from insurance_chunker import stages
 
     _, results = stages.parse(mixed_pdf)
-    s3 = results[2]
+    s3 = results[3]
     assert s3.name == "vlm" and s3.metrics["skipped"] is True
     assert s3.output == {} and fake_vlm["n"] == 0
 
@@ -217,11 +218,12 @@ def test_run_one_keeps_phase_names_and_adds_stages(ex, fake_vlm, mixed_pdf, tmp_
 
     assert result["status"] == "OK"
     assert set(result["phases"]) == {"hash", "parse", "chunk"}
-    assert list(result["stages"]) == ["hash", "text", "tables_cpu", "vlm", "combine", "chunk"]
+    assert list(result["stages"]) == ["hash", "layout", "text", "tables_cpu", "vlm",
+                                      "combine", "chunk"]
     assert result["stages"]["vlm"]["resource"] == "gpu"
     # 단계 합이 parse 구간을 넘으면 어딘가 이중으로 재고 있는 것이다.
     parse_stages = sum(result["stages"][k]["seconds"]
-                       for k in ("text", "tables_cpu", "vlm", "combine"))
+                       for k in ("layout", "text", "tables_cpu", "vlm", "combine"))
     assert parse_stages <= result["phases"]["parse"] + 0.05
 
 
@@ -248,7 +250,7 @@ def test_vlm_stage_carries_per_call_stats(ex, monkeypatch, mixed_pdf):
 
     monkeypatch.setattr(requests, "post", _post)
     _, results = stages.parse(mixed_pdf)
-    v = results[2].metrics
+    v = results[3].metrics
     assert len(v["latencies"]) == v["calls"] == n["i"]
     assert v["outcomes"]["table"] + v["outcomes"]["empty"] == n["i"]
     assert v["prompt_tokens_p50"] == 1200 and v["completion_tokens_p50"] == 80
@@ -272,7 +274,7 @@ def test_timeout_is_told_apart_from_other_failures(ex, monkeypatch, mixed_pdf):
 
     monkeypatch.setattr(requests, "post", _post)
     _, results = stages.parse(mixed_pdf)
-    outcomes = results[2].metrics["outcomes"]
+    outcomes = results[3].metrics["outcomes"]
     assert outcomes["timeout"] == 1
     assert outcomes["error"] == n["i"] - 1
 
@@ -283,7 +285,7 @@ def test_vlm_stats_reset_per_document(ex, fake_vlm, mixed_pdf):
 
     _, first = stages.parse(mixed_pdf)
     _, second = stages.parse(mixed_pdf)
-    assert len(second[2].metrics["latencies"]) == len(first[2].metrics["latencies"])
+    assert len(second[3].metrics["latencies"]) == len(first[3].metrics["latencies"])
 
 
 def test_table_fingerprint_has_source_and_hash_but_no_text(ex, fake_vlm, mixed_pdf):
@@ -342,4 +344,4 @@ def test_truncated_responses_are_counted(ex, monkeypatch, mixed_pdf):
 
     monkeypatch.setattr(requests, "post", _post)
     _, results = stages.parse(mixed_pdf)
-    assert results[2].metrics["truncated"] == 1
+    assert results[3].metrics["truncated"] == 1

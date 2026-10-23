@@ -470,7 +470,7 @@ def test_default_target_is_the_gap_not_the_tables(ex, mixed_pdf):
 
 
 def test_pages_without_a_text_layer_come_first(ex, mixed_pdf):
-    """텍스트 레이어가 없으면 PyMuPDF도 pdfplumber도 못 한다 — 예산을 여기부터 쓴다."""
+    """텍스트 레이어가 없으면 텍스트 기반 소스는 못 한다 — 예산을 여기부터 쓴다."""
     extractor = ex(VLM_BACKEND="local", VLM_MODEL="m")
     _, gaps, targets = _targets(extractor, mixed_pdf)
     assert 3 in gaps, "이미지만 있는 페이지는 gap이어야 한다"
@@ -496,21 +496,6 @@ def test_both_mode_spends_the_gap_first(ex, mixed_pdf):
     pm, gaps, targets = _targets(extractor, mixed_pdf)
     assert targets[:len(gaps)] == gaps
     assert set(targets) == set(gaps) | set(pm)
-
-
-def test_cpu_sources_also_cover_the_gap(ex, monkeypatch, mixed_pdf):
-    """pdfplumber는 CPU만 쓴다. GPU를 쓰기 전에 넓은 후보에서 먼저 건져야 한다."""
-    extractor = ex(VLM_BACKEND="off", VLM_MODEL="m")
-    seen = {}
-    orig = extractor.extract_pdfplumber_tables
-
-    def _spy(path, pages):
-        seen["pages"] = list(pages)
-        return orig(path, pages)
-
-    monkeypatch.setattr(extractor, "extract_pdfplumber_tables", _spy)
-    extractor.extract_tables_for_doc(mixed_pdf, [1, 2, 3, 4], use_vision=False)
-    assert 4 in seen["pages"], "PyMuPDF가 놓친 괘선 페이지도 pdfplumber에 넘겨야 한다"
 
 
 def test_a_mere_logo_is_not_a_table_signal(ex, tmp_path):
