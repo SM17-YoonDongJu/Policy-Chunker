@@ -31,7 +31,7 @@ jobs:
         # 배포 대상 코드 + 벤치마크(eval/bench)에 한정. 나머지 eval/는 실험 스크립트라 제외.
         # 규칙은 pyproject의 [tool.ruff.lint] select로 고정돼 있다 — ruff 버전이 올라도
         # 검사 범위가 저절로 넓어지지 않으므로 블로킹으로 둘 수 있다.
-        run: ruff check insurance_chunker db tests eval/bench ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py runlog.py notify.py healthcheck.py metrics.py logging_setup.py exporter.py slo.py deploy_check.py shutdown.py
+        run: ruff check insurance_chunker db tests eval/bench ingest.py ingest_many.py ingest_catalog.py rebuild_search_terms.py worker.py runlog.py notify.py healthcheck.py metrics.py logging_setup.py exporter.py slo.py deploy_check.py shutdown.py stage_diagram.py
 
       - name: Import smoke
         # 패키지 import + CLI 엔트리포인트가 실제로 로드되는지 확인(의존성 해상도 검증).
@@ -45,6 +45,12 @@ jobs:
           # 데몬 경로도 확인 — 이미지 CMD가 worker.py라 여기서 깨지면 배포 후 크래시루프가 된다.
           python -c "import worker, runlog, notify, healthcheck, metrics, logging_setup, exporter, slo, shutdown; print('daemon modules import OK')"
           python metrics.py --help > /dev/null
+
+      - name: 단계 DAG 그림
+        # stage_dag.md는 stage_runner.ORDER/UPSTREAM과 stages.py의 자원 태그에서 생성한다.
+        # 단계를 끼워 넣거나 의존을 바꾸면 그림이 조용히 틀리므로 여기서 막는다 —
+        # 실제로 손으로 그렸을 때 combine의 fan-in 4개를 일직선으로 잘못 그린 적이 있다.
+        run: python stage_diagram.py --check stage_dag.md
 
       - name: Pytest
         # db/search.py 계약(파트너 레포와 맞춘 시그니처)과 운영 계측(runlog/healthcheck,
