@@ -12,7 +12,7 @@
 # 필요 시크릿:  AWS_ROLE_ARN(OIDC), AWS_REGION, AWS_ECR_REGISTRY,
 #              MANIFESTS_CI_APP_PRIVATE_KEY, DISCORD_WEBHOOK_DEPLOYMENT
 # 필요 변수(vars):  MANIFESTS_CI_CLIENT_ID
-# 사전 준비:  ECR 레포 soma/insurance_chunker,
+# 사전 준비:  ECR 레포 brbs/insurance_chunker,
 #            brbs-manifests-ci GitHub App이 K8s-manifests에 설치돼 있고 contents 쓰기 권한 보유
 #            (backend·report·chatbot이 쓰는 것과 같은 앱 — 자격증명만 이 레포에 있으면 된다)
 name: Deploy
@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 env:
-  ECR_REPOSITORY: soma/insurance_chunker
+  ECR_REPOSITORY: brbs/insurance_chunker
   # Argo CD가 보는 매니페스트 레포. 이 파일의 image.tag 한 줄이 배포 트리거다.
   MANIFESTS_REPOSITORY: K8s-manifests
   MANIFESTS_VALUES_FILE: envs/dev/etl-chunker.values.yaml

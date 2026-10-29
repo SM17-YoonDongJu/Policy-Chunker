@@ -454,7 +454,7 @@ GitOps다. **이 레포의 CI는 클러스터에 손을 대지 않는다** — �
 main 머지
   └─ deploy.yml
        ├─ ci.yml 재사용 (ruff · import 스모크 · pytest)
-       ├─ ECR push  soma/insurance_chunker:<sha7>  (+ :latest)
+       ├─ ECR push  brbs/insurance_chunker:<sha7>  (+ :latest)
        └─ K8s-manifests의 envs/dev/etl-chunker.values.yaml 의
           image.tag 를 <sha7> 로 커밋                 ← 여기까지가 CI
                 │
