@@ -73,10 +73,10 @@ def _capture(monkeypatch, content="| a | b |\n|---|---|\n| 1 | 2 |"):
 def test_model_is_sent_when_configured(ex, monkeypatch):
     """Ollama는 model이 없으면 400을 낸다 — 이게 빠져서 여태 안 붙었다."""
     extractor = ex(VLM_BACKEND="local", VLM_URL="http://localhost:11434",
-                   VLM_MODEL="qwen3-vl:8b-instruct")
+                   VLM_MODEL="PaddleOCR-VL-1.6-0.9B")
     seen = _capture(monkeypatch)
     extractor.extract_vision_local(_FakePage(), 1)
-    assert seen["payload"]["model"] == "qwen3-vl:8b-instruct"
+    assert seen["payload"]["model"] == "PaddleOCR-VL-1.6-0.9B"
     assert seen["url"] == "http://localhost:11434/v1/chat/completions"
 
 
@@ -101,8 +101,12 @@ def test_image_is_sent_as_a_data_uri(ex, monkeypatch):
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
 
 def test_default_prompt_targets_a_general_vlm(ex, monkeypatch):
-    """PaddleOCR-VL의 'Table Recognition:'은 태스크 토큰이라 qwen3-vl에는 안 먹는다."""
-    extractor = ex(VLM_BACKEND="local", VLM_MODEL="qwen3-vl:8b-instruct")
+    """PaddleOCR-VL의 'Table Recognition:'은 태스크 토큰이라 범용 instruct VLM에는 안 먹는다.
+
+    모델명에 paddleocr이 없으면 한국어 지시문으로 갈라진다 — 어떤 범용 모델을 올리든
+    프롬프트가 따라오게 하는 게 이 분기의 목적이다.
+    """
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="general-vlm:8b-instruct")
     seen = _capture(monkeypatch)
     extractor.extract_vision_local(_FakePage(), 1)
     prompt = seen["payload"]["messages"][0]["content"][1]["text"]
@@ -113,7 +117,7 @@ def test_default_prompt_targets_a_general_vlm(ex, monkeypatch):
 
 
 def test_prompt_is_overridable(ex, monkeypatch):
-    """PaddleOCR-VL로 되돌릴 수 있어야 한다."""
+    """VLM_PROMPT를 주면 모델명 판별을 덮는다 — 어느 방향으로든 고정할 수 있어야 한다."""
     extractor = ex(VLM_BACKEND="local", VLM_PROMPT="Table Recognition:")
     seen = _capture(monkeypatch)
     extractor.extract_vision_local(_FakePage(), 1)
@@ -174,18 +178,19 @@ def test_page_budget_is_respected(ex, monkeypatch):
 
 # ── 기본값 · off 스위치 ───────────────────────────────────────────────────────
 
-def test_defaults_point_at_the_host_ollama(ex, monkeypatch):
-    """claude CLI를 걷어내고 같은 호스트 Ollama의 qwen3-vl로 대체했다.
+def test_defaults_match_the_production_vlm(ex, monkeypatch):
+    """기본 모델명은 운영 vLLM의 --served-model-name과 같아야 한다.
 
-    기본값이 어긋나면 아무도 설정을 안 건드린 채 VLM이 또 조용히 죽는다
-    (이전에 surya가 기본이라 273회 건너뛴 그대로).
+    둘이 어긋나면 서버가 모르는 모델이라고 거절하고, VLM 단계가 조용히 비어 버린다
+    (이전에 surya가 기본이라 273회 건너뛴 그대로). URL 기본값은 로컬 서버를 띄워
+    맞추는 값이라 그대로 두고, 운영에서는 차트가 Service 주소를 넣는다.
     """
     for k in ("VLM_BACKEND", "VLM_URL", "VLM_MODEL"):
         monkeypatch.delenv(k, raising=False)
     extractor = ex()
     assert extractor.VLM_BACKEND == "local"
     assert extractor.VLM_URL == "http://localhost:11434"
-    assert extractor.VLM_MODEL == "qwen3-vl:8b-instruct"
+    assert extractor.VLM_MODEL == "PaddleOCR-VL-1.6-0.9B"
 
 
 def test_off_backend_skips_without_calling(ex, monkeypatch):
@@ -669,10 +674,9 @@ def test_explicit_prompt_beats_the_model_default(ex, monkeypatch):
 
 
 def test_default_prompt_merge_rule_matches_the_converter(ex, monkeypatch):
-    """qwen 프롬프트의 병합 규칙이 변환기와 다르면 소스마다 표 모양이 달라진다."""
+    """범용 프롬프트의 병합 규칙이 변환기와 다르면 소스마다 표 모양이 달라진다."""
     monkeypatch.delenv("VLM_PROMPT", raising=False)
-    monkeypatch.delenv("VLM_MODEL", raising=False)
-    extractor = ex()
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="general-vlm:8b-instruct")
     assert "세로로 병합" in extractor.VLM_PROMPT
     assert "첫 칸" in extractor.VLM_PROMPT
 

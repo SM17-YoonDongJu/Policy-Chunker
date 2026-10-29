@@ -198,8 +198,7 @@ def test_paddle_model_uses_the_ocr_task_token(ex, monkeypatch):  # noqa: F811
 
 def test_general_vlm_gets_an_instruct_ocr_prompt(ex, monkeypatch):  # noqa: F811
     monkeypatch.delenv("VLM_OCR_PROMPT", raising=False)
-    monkeypatch.delenv("VLM_MODEL", raising=False)
-    extractor = ex()
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="general-vlm:8b-instruct")
     assert "원문 그대로" in extractor.VLM_OCR_PROMPT
 
 

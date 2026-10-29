@@ -41,7 +41,7 @@ VLM_TIMEOUT = int(os.environ.get("VLM_TIMEOUT", "60"))
 # 최악 페이지의 시간이다. smoke 벤치마크(2026-10-14)에서 50건 중 7건이 4096까지 생성했고 그 7건이
 # VLM 시간의 약 53%였다 — 상한까지 가는 응답은 대개 반복 폭주라 끝까지 받아도 쓸 수 없다. 줄이면
 # 결과가 바뀌는 변경이라 벤치마크 가드레일로 판정한 뒤 바꾼다. 프롬프트(비전 토큰 포함, p50 약
-# 2,300)와 합쳐 vLLM max-model-len(운영 6,144)을 넘지 않게 둔다.
+# 2,300)와 합쳐 vLLM max-model-len(운영 8,192)을 넘지 않게 둔다.
 VLM_MAX_TOKENS = int(os.environ.get("VLM_MAX_TOKENS", "4096"))
 # 접속 타임아웃은 따로 짧게 둔다. 같은 호스트의 Ollama라 붙는 건 즉시여야 하고,
 # 서버가 아예 없으면 밀리초 안에 알아야지 읽기 타임아웃까지 기다릴 이유가 없다.
@@ -90,8 +90,13 @@ VLM_URL = os.environ.get("VLM_URL", "http://localhost:11434")
 # local 백엔드가 부르는 /v1/chat/completions는 OpenAI 호환 규격이라 Ollama도 그대로 받는다.
 # 다만 Ollama는 model 필드가 필수다(llama-server는 모델 하나만 서빙해 생략 가능).
 # 비워두면 페이로드에서 빼므로 llama-server 호환이 유지된다.
-VLM_MODEL = os.environ.get("VLM_MODEL", "qwen3-vl:8b-instruct")
-# PaddleOCR-VL은 "Table Recognition:"이 태스크 토큰이지만, 범용 instruct VLM(qwen3-vl 등)에는
+#
+# 기본값은 운영이 서빙하는 모델이다(vLLM의 --served-model-name과 같아야 한다). 로컬에서 쓰려면
+# 그 모델을 띄우고 VLM_URL을 맞춘다 — vLLM이나 llama-server(PaddleOCR-VL GGUF)로 뜬다.
+# Ollama에 받아 둔 범용 VLM을 쓰려면 VLM_MODEL에 그 이름을 주면 되고, 프롬프트는 아래에서
+# 모델명에 따라 자동으로 갈린다.
+VLM_MODEL = os.environ.get("VLM_MODEL", "PaddleOCR-VL-1.6-0.9B")
+# PaddleOCR-VL은 "Table Recognition:"이 태스크 토큰이지만, 범용 instruct VLM에는
 # 명시적 지시가 필요하다. 규칙은 claude 백엔드를 쓰던 시절 쌓인 것을 옮겼다 — 약관 표는
 # 숫자·한자가 많아 의역이 곧 오답이고, 읽기 어려운 셀에서 멈추면 페이지 전체를 잃는다.
 # 병합 규칙은 변환기(_html_table_to_markdown)와 같아야 한다 — 세로만 반복, 가로는 첫 칸.
@@ -505,7 +510,7 @@ def render_page(fitz_page, pno: int,
     except Exception as e:
         logger.warning(f"p{pno}: 이미지 렌더링 실패: {e}")
         return None
-    # 비전 토큰 수는 입력 픽셀 수에 비례한다(Qwen 계열은 28px 패치). 가짜 페이지엔 크기가 없다.
+    # 비전 토큰 수는 입력 픽셀 수에 비례한다(패치 크기는 모델별). 가짜 페이지엔 크기가 없다.
     image_px = (getattr(pix, "width", 0) or 0) * (getattr(pix, "height", 0) or 0)
     return img_b64, image_px
 

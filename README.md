@@ -52,7 +52,9 @@ pip install -e ".[dev]"
 ```
 
 VLM 표 추출은 기본으로 켜져 있고, OpenAI 호환 `/v1/chat/completions`를 쓰는 서버에 붙는다
-(`VLM_URL`). 로컬 개발은 Ollama(`qwen3-vl:8b-instruct`), 운영은 클러스터의 vLLM이다.
+(`VLM_URL`). 운영은 클러스터의 vLLM이 `PaddleOCR-VL-1.6-0.9B`를 서빙하고, 기본값도 그 조합이다.
+로컬에서 돌리려면 vLLM이나 llama-server로 같은 모델을 띄우고 `VLM_URL`을 맞춘다 — Ollama에
+받아 둔 범용 VLM을 쓸 거면 `VLM_MODEL`에 그 이름을 주면 프롬프트가 따라 바뀐다.
 
 | 백엔드 | 준비물 |
 |---|---|
@@ -265,8 +267,8 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `EMBED_BACKEND` | `ollama` | `ollama` \| `sentence_transformers` (BGE-M3 전환) |
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
 | `VLM_BACKEND` | `local` | `local` \| `surya` \| `off` |
-| `VLM_URL` | `http://localhost:11434` | `local` 백엔드 서버. 운영은 차트가 `http://vllm-qwen3vl:8000` |
-| `VLM_MODEL` | `qwen3-vl:8b-instruct` | Ollama는 필수. llama-server면 비운다. Paddle 전환은 `PaddleOCR-VL-1.6-0.9B` |
+| `VLM_URL` | `http://localhost:11434` | `local` 백엔드 서버. 운영은 차트가 `http://vllm:8000` |
+| `VLM_MODEL` | `PaddleOCR-VL-1.6-0.9B` | vLLM의 `--served-model-name`과 같아야 한다. Ollama는 필수, llama-server면 비운다 |
 | `VLM_PROMPT` | 모델 따라 자동 | 모델명에 `paddleocr`가 있으면 `Table Recognition:`(태스크 토큰), 아니면 한국어 표 변환 지시. 명시하면 그 값이 이긴다 |
 | `VLM_LOOP_CELLS` | `20` | 같은 셀이 이만큼 연속되면 반복 루프 출력으로 보고 폐기 |
 | `VLM_SNAP_TEXT` | `0` | `1`이면 VLM 표의 짧은 셀(≤40자)을 같은 쪽 텍스트 레이어 줄로 교정 — 해상도로 못 고치는 오독(관혈→관협) 대상. 벤치 `cell_match`로 효과를 재서 기본값을 정한다 |
@@ -424,7 +426,7 @@ ETL 워크로드만 들어온다. 모두 `default` 네임스페이스다.
 |---|---|---|---|
 | `insurance-chunker` | 이 레포 | S3 → pgvector 인덱싱 (7일 주기 데몬) | 없음 — HTTP로 아래 둘을 쓴다 |
 | `ollama` | — | 임베딩(`qwen3-embedding:0.6b`) | `nvidia.com/gpu: 1` |
-| `vllm-qwen3vl` | — | 표 추출 VLM(`qwen3-vl:8b-instruct`) | `nvidia.com/gpu: 1` |
+| `vllm` | — | 표 추출 VLM(`PaddleOCR-VL-1.6-0.9B`) | `nvidia.com/gpu: 1` |
 | `corpus-worker` | SM17-YoonDongJu/AI | Notion → S3 약관 스테이징 | 없음 |
 
 물리 GPU는 한 장이고 device plugin의 time-slicing으로 2개로 광고해 ollama와 vLLM이 나눠 쓴다.
@@ -435,7 +437,7 @@ ETL 워크로드만 들어온다. 모두 `default` 네임스페이스다.
 
 ```
 OLLAMA_URL = http://ollama:11434            임베딩
-VLM_URL    = http://vllm-qwen3vl:8000       표 추출
+VLM_URL    = http://vllm:8000               표 추출
 ```
 
 적재 진행 상태(`/data/state`)는 `chunker-state` PVC(local-path, 1Gi)에 있다. 증분 처리의
