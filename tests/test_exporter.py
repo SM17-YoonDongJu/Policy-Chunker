@@ -117,8 +117,7 @@ def test_start_failure_does_not_raise(exp, monkeypatch):
     """포트 충돌 같은 실패가 데몬을 죽이면 안 된다."""
     monkeypatch.setenv("METRICS_PORT", "9101")
     monkeypatch.setattr(exp, "_max_retry", lambda: 3)
-    import prometheus_client
-    monkeypatch.setattr(prometheus_client, "start_http_server",
+    monkeypatch.setattr(exp, "_serve",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("address in use")))
     assert exp.start() is False
 

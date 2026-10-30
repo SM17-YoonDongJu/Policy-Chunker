@@ -120,6 +120,26 @@ def test_last_run_reads_the_most_recent_line(rl):
     assert rl.last_run()["ok"] == 7
 
 
+def test_items_read_newest_first_across_block_boundaries(rl):
+    """/status가 파일 끝만 읽는다 — 블록 경계에 걸린 줄도 빠짐없이, 순서대로 나와야 한다."""
+    for i in range(3000):  # 64KB 블록 여러 개에 걸치는 분량
+        rl._append("items.jsonl", {"sha256": f"s{i}", "name": f"문서{i}.pdf", "status": "OK"})
+    assert [r["sha256"] for r in rl.iter_items_reverse(3)] == ["s2999", "s2998", "s2997"]
+    every = [r["sha256"] for r in rl.iter_items_reverse(10**6)]
+    assert every == [f"s{i}" for i in range(2999, -1, -1)]
+
+
+def test_reverse_read_skips_a_half_written_last_line(rl):
+    rl._append("items.jsonl", {"sha256": "a", "status": "OK"})
+    with open(rl.state_dir() / "items.jsonl", "a", encoding="utf-8") as f:
+        f.write('{"sha256": "b", "sta')  # 기록 도중 종료된 줄
+    assert [r["sha256"] for r in rl.iter_items_reverse(10)] == ["a"]
+
+
+def test_reverse_read_without_a_file_yields_nothing(rl):
+    assert list(rl.iter_items_reverse(10)) == []
+
+
 # ── healthcheck ───────────────────────────────────────────────────────────────
 
 def _health(rl, monkeypatch, interval="100"):

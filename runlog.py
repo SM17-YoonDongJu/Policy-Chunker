@@ -17,6 +17,8 @@
                  처리를 시작할 때 STARTED로 먼저 적는다(write-ahead) — OOM처럼 프로세스가
                  통째로 죽어 결과 기록이 안 남는 시도도 세어야 같은 문서로 영원히 돌아오지 않는다.
   daemon.json    데몬 기동 시각과 마지막 사이클 성패. healthcheck가 읽는다.
+  progress.json  지금(또는 마지막) 실행의 처리 대상 수·시작 시각·pid. /status가 "N/M건 처리"와
+                 "진짜 처리 중인 문서"를 가르는 기준이다(exporter.status_snapshot).
 
 환경변수:
   INGEST_STATE_DIR  상태 디렉터리. 기본 /data/state (쓰기 불가면 ./.state로 폴백).
@@ -44,6 +46,9 @@ _RUNS = "runs.jsonl"
 _ITEMS = "items.jsonl"
 _ATTEMPTS = "attempts.json"
 _DAEMON = "daemon.json"
+_PROGRESS = "progress.json"
+
+_TAIL_BLOCK = 64 * 1024
 
 _dir_cache: Optional[Path] = None
 
@@ -250,3 +255,79 @@ def record_start() -> None:
 
 def daemon_state() -> dict[str, Any]:
     return _read_json(_DAEMON, {})
+
+
+# ── 진행 중인 실행 ────────────────────────────────────────────────────────────
+
+def record_progress_start(*, total: int, pending: int, skipped: int, quarantined: int,
+                          concurrency: int) -> None:
+    """실제 처리(2단계)에 들어가는 순간을 남긴다.
+
+    attempts.json의 STARTED만으로는 지금 처리 중인 문서와 지난 시도가 끝을 못 본 문서(OOM·
+    강제 종료)가 구분되지 않는다. 실행 시작 시각과 pid를 같이 두면, 그 뒤에 시작했고 그
+    프로세스가 살아 있는 것만 '처리 중'으로 셀 수 있다. pending은 진행률(N/M)의 분모다.
+    """
+    _write_json(_PROGRESS, {"started_at": now_iso(), "pid": os.getpid(), "total": total,
+                            "pending": pending, "skipped": skipped,
+                            "quarantined": quarantined, "concurrency": concurrency,
+                            "finished_at": None, "stopped": False})
+
+
+def record_progress_end(*, stopped: bool) -> None:
+    """실행이 끝났음을 남긴다. 이 기록 없이 pid가 사라졌으면 중간에 죽은 실행이다."""
+    state = _read_json(_PROGRESS, {})
+    if not state:
+        return
+    state["finished_at"] = now_iso()
+    state["stopped"] = stopped
+    _write_json(_PROGRESS, state)
+
+
+def progress() -> dict[str, Any]:
+    return _read_json(_PROGRESS, {})
+
+
+def all_attempts() -> dict[str, Any]:
+    return _read_json(_ATTEMPTS, {})
+
+
+def iter_items_reverse(max_lines: int) -> Iterator[dict[str, Any]]:
+    """items.jsonl을 끝에서부터(최신 → 과거) 최대 max_lines줄 읽는다.
+
+    매 주기 카탈로그 전체가 SKIPPED로 한 줄씩 쌓이므로 파일은 계속 커진다. /status는 뷰어가
+    몇 초마다 부르므로 전체를 읽지 않고 필요한 만큼만 뒤에서 읽는다. 쓰다 만 줄은 건너뛴다.
+    """
+    path = state_dir() / _ITEMS
+    if not path.exists():
+        return
+    seen = 0
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        head = b""  # 블록 경계에 걸린 줄의 앞부분 — 다음(앞쪽) 블록과 합친다
+        while pos > 0:
+            step = min(_TAIL_BLOCK, pos)
+            pos -= step
+            f.seek(pos)
+            lines = (f.read(step) + head).split(b"\n")
+            head = lines[0]
+            for raw in reversed(lines[1:]):
+                rec = _parse_line(raw)
+                if rec is None:
+                    continue
+                yield rec
+                seen += 1
+                if seen >= max_lines:
+                    return
+        rec = _parse_line(head)
+        if rec is not None:
+            yield rec
+
+
+def _parse_line(raw: bytes) -> Optional[dict[str, Any]]:
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None

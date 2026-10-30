@@ -374,6 +374,10 @@ kubectl exec deploy/insurance-chunker -- \
 curl -s localhost:9101/metrics | grep insurance_chunker
 ```
 
+같은 포트의 `GET /status`는 청크 뷰어용 JSON이다 — 지금 처리 중인 문서, 이번 실행의 진행률
+(N/M), 끝을 못 본 시도, 최근 처리 결과. 실행 시작 기록(`progress.json`)과 pid로 "진짜 처리 중"과
+"지난 시도가 OOM 등으로 끝을 못 봄"을 가른다. 형식은 `tests/test_status.py`가 고정한다.
+
 ### 로그
 
 운영에서는 JSON 한 줄 = 로그 하나다(`LOG_FORMAT=json`, 차트가 지정). 클러스터의 Alloy가
@@ -616,7 +620,7 @@ Policy-Chunker/
 ├── healthcheck.py          마지막 성공 시각 기반 좀비 판정
 ├── notify.py               사이클 결과 Discord 알림
 ├── logging_setup.py        평문/JSON 로깅 설정
-├── exporter.py             Prometheus /metrics (runlog를 읽는 커스텀 컬렉터)
+├── exporter.py             Prometheus /metrics + 뷰어용 /status (runlog를 읽는다)
 ├── slo.py                  인덱스 SLO 점검 (사이클 끝마다)
 │
 ├── insurance_chunker/
