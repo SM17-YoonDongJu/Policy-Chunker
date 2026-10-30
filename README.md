@@ -378,6 +378,12 @@ curl -s localhost:9101/metrics | grep insurance_chunker
 (N/M), 끝을 못 본 시도, 최근 처리 결과. 실행 시작 기록(`progress.json`)과 pid로 "진짜 처리 중"과
 "지난 시도가 OOM 등으로 끝을 못 봄"을 가른다. 형식은 `tests/test_status.py`가 고정한다.
 
+### 청크 뷰어
+
+처리한 약관을 원본 페이지와 청크로 나란히 보고 운영 검색을 재현하는 읽기 전용 Streamlit 앱이다
+(`viewer/`, #75). 클러스터에서는 `kubectl port-forward svc/chunk-viewer 8501:8501`로 연다.
+구성·권한·로컬 실행은 [viewer/README.md](viewer/README.md).
+
 ### 로그
 
 운영에서는 JSON 한 줄 = 로그 하나다(`LOG_FORMAT=json`, 차트가 지정). 클러스터의 Alloy가
@@ -622,6 +628,12 @@ Policy-Chunker/
 ├── logging_setup.py        평문/JSON 로깅 설정
 ├── exporter.py             Prometheus /metrics + 뷰어용 /status (runlog를 읽는다)
 ├── slo.py                  인덱스 SLO 점검 (사이클 끝마다)
+│
+├── viewer/                 청크 뷰어 (Streamlit, 읽기 전용 — Dockerfile.viewer)
+│   ├── app.py              진입점: 처리 현황 · 문서 보기 · 검색
+│   ├── queries.py          DB 조회 (읽기 전용 연결)
+│   ├── files.py            원본 PDF·표 원문 (S3 또는 로컬) + 쪽 렌더링
+│   └── prod_search.py      운영 검색 재현 (AI 레포 rag.search, 커밋 고정)
 │
 ├── insurance_chunker/
 │   ├── models.py           InsuranceChunk, TableMeta, DocMeta dataclass 정의

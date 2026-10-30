@@ -47,10 +47,19 @@ dev = [
     "pydantic>=2",
     "ruff>=0.4",
 ]
+# 청크 뷰어(viewer/) — Dockerfile.viewer 전용이다. 청커 이미지에는 넣지 않는다(의존이 섞이면
+# 뷰어 때문에 적재가 깨질 수 있다).
+# 운영 검색 재현은 AI 레포의 rag.search를 그대로 부른다. 커밋은 그 함수를 쓰는 리포트 워커가
+# 실제로 돌고 있는 이미지 태그(K8s-manifests envs/dev/report.values.yaml의 image.tag)와
+# 맞춘다 — 어긋나면 뷰어의 검색 결과가 운영과 달라진다. git이 없는 slim 이미지에서도 받도록 tarball URL로 둔다.
+viewer = [
+    "streamlit>=1.45",
+    "ai-engine @ https://github.com/SM17-YoonDongJu/AI/archive/d4e3742dda0954a536263df610d1df736615ede2.tar.gz",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["insurance_chunker*", "db*", "eval*"]
+include = ["insurance_chunker*", "db*", "eval*", "viewer*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
