@@ -1,0 +1,39 @@
+# chunk-viewer — 청크 뷰어(viewer/) 이미지. 청커와 같은 커밋에서 따로 빌드한다.
+#
+# 청커 이미지에 넣지 않는 이유: Streamlit·ai-engine(운영 검색 코드) 의존이 섞이면 뷰어 때문에
+# 적재가 깨질 수 있다. 레이아웃 모델(paddle)도 필요 없어서 가볍고, GPU·ETL 노드가 아닌 일반
+# 워커에 뜬다. 태그는 같은 ECR 레포에 viewer-<sha7> — 청커와 같은 커밋이라 청크·이력 형식이 맞는다.
+#
+# 클러스터에서는 ClusterIP Service 뒤에 있고 port-forward로 연다(K8s-manifests charts/chunk-viewer):
+#   kubectl port-forward svc/chunk-viewer 8501:8501   → http://localhost:8501
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app
+
+# ca-certificates: RDS·S3 TLS 검증용. 나머지는 휠로 충족한다.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 의존 먼저 — 코드만 바뀐 빌드는 이 층을 캐시로 건너뛴다. ai-engine은 pyproject의 viewer extra가
+# 커밋을 고정한 tarball이라 git이 없어도 받는다.
+COPY pyproject.toml ./
+COPY viewer ./viewer
+RUN pip install ".[viewer]"
+
+RUN useradd --create-home --uid 1000 app && chown -R app:app /app
+USER app
+
+EXPOSE 8501
+
+# toolbarMode=viewer: 배포·설정 메뉴를 숨긴다(읽기 전용 내부 도구).
+CMD ["streamlit", "run", "viewer/app.py", \
+     "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true", \
+     "--server.fileWatcherType=none", "--browser.gatherUsageStats=false", \
+     "--client.toolbarMode=viewer"]

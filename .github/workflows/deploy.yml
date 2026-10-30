@@ -12,7 +12,7 @@
 # 필요 시크릿:  AWS_ROLE_ARN(OIDC), AWS_REGION, AWS_ECR_REGISTRY,
 #              MANIFESTS_CI_APP_PRIVATE_KEY, DISCORD_WEBHOOK_DEPLOYMENT
 # 필요 변수(vars):  MANIFESTS_CI_CLIENT_ID
-# 사전 준비:  ECR 레포 brbs/insurance_chunker,
+# 사전 준비:  ECR 레포 brbs/insurance_chunker(청크 뷰어도 같은 레포에 viewer-<sha7> 태그로 올린다),
 #            brbs-manifests-ci GitHub App이 K8s-manifests에 설치돼 있고 contents 쓰기 권한 보유
 #            (backend·report·chatbot이 쓰는 것과 같은 앱 — 자격증명만 이 레포에 있으면 된다)
 name: Deploy
@@ -41,6 +41,8 @@ env:
   # Argo CD가 보는 매니페스트 레포. 이 파일의 image.tag 한 줄이 배포 트리거다.
   MANIFESTS_REPOSITORY: K8s-manifests
   MANIFESTS_VALUES_FILE: envs/dev/etl-chunker.values.yaml
+  # 청크 뷰어(Dockerfile.viewer). 파일이 아직 없으면(차트 도입 전) 건너뛴다.
+  VIEWER_VALUES_FILE: envs/dev/chunk-viewer.values.yaml
 
 jobs:
   # 1) 검사 게이트 — ci.yml 재사용. 실패하면 아래 잡들은 시작되지 않는다.
@@ -60,6 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       deploy_tag: ${{ steps.meta.outputs.deploy_tag }}
+      viewer_built: ${{ steps.viewer.outcome == 'success' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -99,6 +102,23 @@ jobs:
             ${{ secrets.AWS_ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.deploy_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # 청크 뷰어 — 의존이 달라 이미지를 따로 만든다(Dockerfile.viewer 머리말). 같은 커밋 태그라
+      # 뷰어가 늘 청커와 같은 청크·이력 형식을 본다. 캐시는 청커와 섞이지 않게 scope를 나눈다.
+      - name: Build & push (viewer)
+        id: viewer
+        if: steps.meta.outputs.build == 'true'
+        # 뷰어 빌드가 깨져도 청커 배포는 막지 않는다 — 그때는 뷰어 태그만 이번 커밋으로 안 올라간다.
+        continue-on-error: true
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.viewer
+          push: true
+          tags: |
+            ${{ secrets.AWS_ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:viewer-${{ steps.meta.outputs.deploy_tag }}
+          cache-from: type=gha,scope=viewer
+          cache-to: type=gha,mode=max,scope=viewer
 
   # 3) K8s-manifests의 dev 이미지 태그를 바꿔 커밋한다. 클러스터 권한은 쓰지 않는다.
   #
@@ -142,12 +162,21 @@ jobs:
         working-directory: manifests
         env:
           DEPLOY_TAG: ${{ needs.build-and-push.outputs.deploy_tag }}
+          VIEWER_BUILT: ${{ needs.build-and-push.outputs.viewer_built }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           # 0809509처럼 숫자로만 된 해시는 따옴표가 없으면 YAML이 숫자로 읽어 이미지 주소가 깨진다.
           yq -i '.image.tag = strenv(DEPLOY_TAG) | .image.tag style="double"' "$MANIFESTS_VALUES_FILE"
+          # 청크 뷰어는 이번에 빌드에 성공했을 때만 올린다. 롤백(빌드 생략)이면 그 커밋에 뷰어
+          # 이미지가 없을 수 있고, 청커를 되돌린다고 뷰어까지 되돌릴 이유도 없다.
+          SUBJECT="insurance-chunker 이미지를 ${DEPLOY_TAG}로 갱신"
+          if [ "$VIEWER_BUILT" = "true" ] && [ -f "$VIEWER_VALUES_FILE" ]; then
+            export VIEWER_TAG="viewer-${DEPLOY_TAG}"
+            yq -i '.image.tag = strenv(VIEWER_TAG) | .image.tag style="double"' "$VIEWER_VALUES_FILE"
+            SUBJECT="insurance-chunker·chunk-viewer 이미지를 ${DEPLOY_TAG}로 갱신"
+          fi
           if git diff --quiet; then
             echo "이미 $DEPLOY_TAG 태그라 커밋하지 않습니다."
             exit 0
@@ -156,7 +185,7 @@ jobs:
           BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git commit -am "chore(dev): insurance-chunker 이미지를 ${DEPLOY_TAG}로 갱신" \
+          git commit -am "chore(dev): ${SUBJECT}" \
             -m "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
             -m "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
