@@ -374,6 +374,12 @@ def main() -> None:
             logger.info(f"처리 대상 {len(tasks)}건 (동시 {concurrency})",
                         extra={"event": "ingest_start", "pending": len(tasks),
                                "concurrency": concurrency})
+        if not args.dry_run:
+            # 뷰어의 "처리 중" 패널이 이걸 기준으로 진행률과 진짜 처리 중인 문서를 가른다.
+            runlog.record_progress_start(
+                total=len(rows), pending=len(tasks), concurrency=concurrency,
+                skipped=sum(1 for r in results if r["status"] == "SKIPPED"),
+                quarantined=sum(1 for r in results if r["status"] == "QUARANTINED"))
         def _mark_started(task: dict) -> None:
             # 처리를 시작하기 전에 시도를 먼저 센다. OOM으로 프로세스가 통째로 죽으면 아래
             # record_item이 불리지 않아 흔적이 없고, 다음 기동이 같은 문서에서 또 죽는다.
@@ -461,6 +467,7 @@ def main() -> None:
             "skipped_non_pdf": sum(skipped_ext.values()), "elapsed_s": elapsed,
             "concurrency": concurrency, "stopped": stopped, "left": left if stopped else 0,
         })
+        runlog.record_progress_end(stopped=stopped)
     if err:
         sys.exit(1)
 
