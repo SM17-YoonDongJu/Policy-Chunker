@@ -19,10 +19,16 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# ca-certificates: Ollama/DB/외부 TLS 검증용. 그 외 시스템 의존은 wheel로 충족
-# (pymupdf·kiwipiepy·psycopg2-binary·paddleocr 모두 manylinux 휠 제공).
+# ca-certificates: Ollama/DB/외부 TLS 검증용.
+# libgl1·libglib2.0-0: paddlex가 GUI판 opencv-contrib-python을 버전까지 고정해 끌어오고, 그
+# cv2가 import 시점에 libGL.so.1·libgthread를 연다. headless판으로 바꾸면 paddlex의 고정과
+# 충돌하므로 라이브러리를 깐다.
+# libgomp1: paddle 코어(libpaddle.so)가 OpenMP 런타임을 연다. 모델을 만들 때 로드된다.
+# slim에는 셋 다 없다. 빠지면 layout.py가 레이아웃을 끈 채 페이지 전체 경로로 간다 — 적재는
+# 계속되므로 로그 한 줄 말고는 드러나지 않는다.
+# 그 외 시스템 의존은 wheel로 충족(pymupdf·kiwipiepy·psycopg2-binary·paddleocr 모두 manylinux 휠).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates libgl1 libglib2.0-0 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -51,8 +57,12 @@ EXPOSE 9101
 # paddle 인덱스에서는 paddlepaddle 휠 하나만 받는다. chunker 파드는 GPU가 없다.
 # 주의: paddle 런타임+모델 의존으로 이미지가 수백 MB 늘어난다 — 첫 CI 빌드에서
 # 이미지 크기와 빌드 시간을 재서 여기에 기록할 것.
+# 마지막 줄은 빌드 시점 import 검사다 — 레이아웃 의존이 깨진 이미지는 런타임에 조용히
+# 폴백하므로 여기서 빌드를 실패시킨다. paddleocr만 import하면 paddle 코어는 안 열리므로
+# paddle도 같이 연다. 모델은 받지 않는다.
 RUN pip install ".[layout]" \
-    && pip install paddlepaddle==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+    && pip install paddlepaddle==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
+    && python -c "import paddle; from paddleocr import LayoutDetection"
 
 # 비루트 실행. uid를 1000으로 못박는다 — /data는 chunker-state PVC가 마운트되는 자리이고
 # 쓰기 권한이 uid에 달려 있어서, 여기가 바뀌면 /data/state에 이력을 못 써 로컬 폴백으로
