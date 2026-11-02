@@ -48,7 +48,8 @@ kubectl port-forward svc/chunk-viewer 8501:8501
 | `RDS_CA_PATH` | — | 있으면 `verify-full`로 RDS TLS 검증. 클러스터는 `rds-ca-bundle` ConfigMap |
 | `S3_BUCKET`, `AWS_REGION` | — | 원본 PDF·표 원문. 자격증명은 노드 롤(`aws-metadata: allow`) |
 | `CHUNKER_STATUS_URL` | `http://insurance-chunker-metrics:9101/status` | 청커 `/status` |
-| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIM` | AI 기본값 | 운영 검색의 쿼리 임베딩(AI `core.config`가 읽는다) |
+| `EMBEDDING_PROVIDER`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIM` | AI 기본값 | 운영 검색의 쿼리 임베딩(AI `core.config`가 읽는다). 리포트 워커와 같은 값을 준다 |
+| `EMBEDDING_API_KEY` | — | `EMBEDDING_PROVIDER=voyage`일 때 Voyage 키(시크릿) |
 | `AI_TIMEOUT_SECONDS` | 60 | 임베딩 서버가 죽었을 때 키워드 검색으로 떨어지기까지 기다리는 시간 |
 | `VIEWER_PDF_DIR` | — | S3 대신 로컬 디렉터리에서 원본을 해시로 찾는다(개발용) |
 | `VIEWER_TABLE_DIR` | `.table_cache` | S3 없이 적재했을 때 표 원문 위치(ingest.py가 쓰는 곳) |

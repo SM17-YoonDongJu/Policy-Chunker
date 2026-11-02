@@ -54,7 +54,7 @@ dev = [
 # 맞춘다 — 어긋나면 뷰어의 검색 결과가 운영과 달라진다. git이 없는 slim 이미지에서도 받도록 tarball URL로 둔다.
 viewer = [
     "streamlit>=1.45",
-    "ai-engine @ https://github.com/SM17-YoonDongJu/AI/archive/d4e3742dda0954a536263df610d1df736615ede2.tar.gz",
+    "ai-engine @ https://github.com/SM17-YoonDongJu/AI/archive/407977dcfec4557d116be701f8a036e35882999f.tar.gz",
 ]
 
 [tool.setuptools.packages.find]
