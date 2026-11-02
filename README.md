@@ -33,7 +33,7 @@ PDF를 받아 텍스트·표를 추출하고, 조항 단위로 청킹한 뒤 임
   │
   ├─ chunker.py       오케스트레이터 → InsuranceChunk + TableMeta 출력
   │
-  ├─ embedder.py      임베딩 (Ollama qwen3-embedding:0.6b / BGE-M3)
+  ├─ embedder.py      임베딩 (Ollama qwen3-embedding:0.6b / Voyage voyage-4-large / BGE-M3)
   │
   ├─ db/storage.py    pgvector upsert (policy_chunks 테이블)
   │
@@ -260,11 +260,13 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 |---|---|---|
 | `DATABASE_URL` | — | PostgreSQL 연결 문자열 (필수, dry-run 제외) |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama 서버 주소 |
-| `EMBED_MODEL` | `qwen3-embedding:0.6b` | Ollama 임베딩 모델 |
+| `EMBED_MODEL` | `qwen3-embedding:0.6b` | 임베딩 모델. `voyage`면 기본 `voyage-4-large`. 검색 쪽(AI 레포 report 워커)과 같아야 한다 |
 | `EMBED_BATCH_SIZE` | `32` | 배치 크기 (키우면 `EMBED_BATCH_TIMEOUT`도 함께) |
-| `EMBED_BATCH_TIMEOUT` | `120` | 배치 요청 타임아웃(초). 초과 시 건별 폴백 |
-| `EMBED_MAX_CHARS` | `1800` | 장문 절단 상한 — **eval과 같은 값이어야 수치가 재현된다** |
-| `EMBED_BACKEND` | `ollama` | `ollama` \| `sentence_transformers` (BGE-M3 전환) |
+| `EMBED_BATCH_TIMEOUT` | `120` | 배치 요청 타임아웃(초). 초과 시 Ollama는 건별 폴백, Voyage는 같은 묶음 재시도 |
+| `EMBED_MAX_CHARS` | `1800` | 장문 절단 상한(ollama·BGE-M3) — **eval과 같은 값이어야 수치가 재현된다**. Voyage는 자르지 않는다 |
+| `EMBED_BACKEND` | `ollama` | `ollama` \| `voyage` \| `sentence_transformers` (BGE-M3 전환) |
+| `VOYAGE_API_KEY` | — | `voyage`면 필수(시크릿) |
+| `VOYAGE_BASE_URL` | `https://ai.mongodb.com/v1` | Voyage 엔드포인트 |
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
 | `VLM_BACKEND` | `local` | `local` \| `surya` \| `off` |
 | `VLM_URL` | `http://localhost:11434` | `local` 백엔드 서버. 운영은 차트가 `http://vllm:8000` |
@@ -449,6 +451,11 @@ ETL 워크로드만 들어온다. 모두 `default` 네임스페이스다.
 OLLAMA_URL = http://ollama:11434            임베딩
 VLM_URL    = http://vllm:8000               표 추출
 ```
+
+`EMBED_BACKEND=voyage`면 임베딩은 ollama를 거치지 않고 Voyage(외부 API)로 나간다. 키는
+`VOYAGE_API_KEY`(시크릿)다. 문서 벡터와 질의 벡터는 같은 모델이어야 한다 — 바꿀 때는 검색 쪽
+(report 워커의 `EMBEDDING_PROVIDER`·`EMBEDDING_MODEL`)과 함께 바꾸고, 이미 적재된 벡터가 있으면
+다시 임베딩한다. 둘 다 1024차원이라 섞여도 오류 없이 검색 결과만 틀어진다.
 
 적재 진행 상태(`/data/state`)는 `chunker-state` PVC(local-path, 1Gi)에 있다. 증분 처리의
 근거라 유실되면 전체 재적재가 되므로, 이 앱의 Argo CD Application은 `prune`을 켜지 않는다.
@@ -646,7 +653,7 @@ Policy-Chunker/
 │   ├── pdf_parser.py       PDF 텍스트 추출
 │   ├── extractor.py        표 추출 (레이아웃 crop + VLM, PyMuPDF 폴백)
 │   ├── combine.py          페이지별 표 선택 (VLM 우선, off면 best-of)
-│   ├── embedder.py         Ollama / BGE-M3 임베딩
+│   ├── embedder.py         Ollama / Voyage / BGE-M3 임베딩
 │   ├── tokenizer.py        Kiwi 형태소 분리
 │   └── validator.py        청크 품질 검증
 │
