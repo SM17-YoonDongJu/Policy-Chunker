@@ -44,7 +44,7 @@ kubectl port-forward svc/chunk-viewer 8501:8501
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `DATABASE_URL` | — | 읽기 전용 롤 권장(아래). 필수 |
+| `DATABASE_URL` | — | 필수. 클러스터는 `corpus_owner`에 읽기 전용 기본값을 건 접속 문자열(아래 "DB 접속") |
 | `RDS_CA_PATH` | — | 있으면 `verify-full`로 RDS TLS 검증. 클러스터는 `rds-ca-bundle` ConfigMap |
 | `S3_BUCKET`, `AWS_REGION` | — | 원본 PDF·표 원문. 자격증명은 노드 롤(`aws-metadata: allow`) |
 | `CHUNKER_STATUS_URL` | `http://insurance-chunker-metrics:9101/status` | 청커 `/status` |
@@ -58,9 +58,21 @@ kubectl port-forward svc/chunk-viewer 8501:8501
 | `VIEWER_RENDER_DPI` | 144 | 쪽 이미지 해상도 |
 | `VIEWER_STATUS_REFRESH_SECONDS` | 10 | 처리 현황 자동 새로고침 주기 |
 
-## 읽기 전용 DB 롤
+## DB 접속
 
-뷰어 전용 롤을 둔다. 롤·스키마 정본은 AI 레포 `deploy/schema_split.sql`이므로 거기에 같이 넣는다.
+전용 롤을 따로 만들지 않고 청커와 같은 `corpus_owner`로 붙는다(2026-11-02 결정). 뷰어가 읽는 것
+(corpus 네 테이블과 `ai.corpus_file`·`ai.corpus_file_part`)을 이 롤이 이미 읽을 수 있고, 새 롤을
+만들려면 RDS 마스터 계정이 필요하기 때문이다. 대신 접속 문자열에 읽기 전용 기본값을 건다.
+
+```
+postgresql://corpus_owner:...@<RDS>:5432/brbs_dev?options=-cdefault_transaction_read_only%3Don
+```
+
+- 값은 Secrets Manager `app/chunk-viewer-dev`의 `DATABASE_URL`이다(ESO가 내린다).
+- 읽기 전용은 세션 기본값이라 강제는 아니다. 뷰어 코드는 쓰지 않으므로 실수로 쓰는 것만 막는다.
+  쓰기를 시도하면 `cannot execute ... in a read-only transaction`으로 거부된다.
+- 최소 권한이 필요해지면 아래 롤을 만들고 시크릿의 접속 문자열만 바꾼다. 롤·스키마 정본은 AI 레포
+  `deploy/schema_split.sql`이므로 거기에 같이 넣는다.
 
 ```sql
 CREATE ROLE chunk_viewer LOGIN PASSWORD '...';
@@ -74,7 +86,6 @@ ALTER ROLE chunk_viewer SET default_transaction_read_only = on;
 ALTER ROLE chunk_viewer SET search_path = corpus, public;
 ```
 
-접속 문자열은 Secrets Manager `app/chunk-viewer-dev`의 `DATABASE_URL`에 넣는다(ESO가 내린다).
 AI 코드는 `policy_chunks`·`search_terms`를 스키마 없이 부르므로, 뷰어는 운영 검색 연결에
 `search_path=corpus,public`을 직접 붙인다 — 롤에 설정이 빠져 있어도 같은 테이블을 본다.
 
