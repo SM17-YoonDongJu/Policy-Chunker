@@ -242,3 +242,27 @@ def test_stage_runner_reports_wall_time_and_keeps_caches_apart(ex, monkeypatch, 
     assert stage_runner._elapsed(ovl) == pytest.approx(
         wall + by["text"]["seconds"] + by["combine"]["seconds"], abs=0.01)
     assert stage_runner._elapsed(ovl) < sum(r["seconds"] for r in ovl)
+
+
+def test_stage_runner_reruns_the_whole_group_when_only_vlm_changes(ex, monkeypatch, doc_pdf,  # noqa: F811
+                                                                   fake_layout, tmp_path):
+    """동시도만 바꾼 겹치기 변형은 vlm 키만 다르다. 레이아웃·PyMuPDF 표를 캐시에서 읽고 VLM만
+    순차로 돌리면 '겹치기'라는 이름으로 순차 시간을 잰다 — 셋 다 다시 돌아야 한다."""
+    from insurance_chunker import stage_runner, stages
+    from insurance_chunker.models import DocMeta, compute_doc_hash
+    meta = DocMeta(source_pdf="overlap.pdf", doc_hash=compute_doc_hash(doc_pdf),
+                   doc_type="plain", insurer="t", product_name="p")
+    monkeypatch.setattr(stages, "PIPELINE_OVERLAP", True)
+
+    ex(VLM_BACKEND="local", VLM_MODEL="PaddleOCR-VL-1.6-0.9B", VLM_CONCURRENCY="1")
+    fake_layout()
+    _server(monkeypatch)
+    stage_runner.run(doc_pdf, tmp_path, meta, to_stage="combine")
+
+    ex(VLM_CONCURRENCY="4")
+    calls = fake_layout()
+    _server(monkeypatch)
+    recs = {r["stage"]: r for r in stage_runner.run(doc_pdf, tmp_path, meta, to_stage="combine")}
+    assert not recs["layout"]["cached"] and not recs["tables_cpu"]["cached"]
+    assert calls["n"] > 0, "레이아웃이 다시 돌아야 한다"
+    assert recs["vlm"]["metrics"].get("overlap_wall_s") is not None

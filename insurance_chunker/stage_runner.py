@@ -262,8 +262,6 @@ def run(
     # 다시 돈다 — 레이아웃만 캐시에서 읽고 VLM만 따로 돌리면 겹치기가 아니라 순차로 잰 셈이다.
     overlap = (stages.overlap_applicable(use_vision)
                and ORDER.index(to_stage) >= ORDER.index("vlm"))
-    if overlap and force_from <= ORDER.index("vlm"):
-        force_from = 0
     group: dict[str, stages.StageResult] = {}
 
     opts = {"use_vision": use_vision, "meta": meta, "target": target, "hard_max": hard_max,
@@ -275,6 +273,16 @@ def run(
     outputs: dict[str, Any] = {}
     records: list[dict] = []
     recomputed = False
+    if overlap:
+        # 키는 상위 키로만 정해지므로 미리 다 셀 수 있다. 묶음 중 하나라도 캐시가 없으면(예:
+        # 동시도만 바꿔 vlm 키만 달라진 변형) 셋 다 레이아웃부터 다시 돈다 — 레이아웃·PyMuPDF
+        # 표만 캐시에서 읽고 VLM을 따로 돌리면 겹치기가 아니라 순차로 잰 시간이 남는다.
+        pre: dict[str, str] = {}
+        for name in ORDER[:ORDER.index("vlm") + 1]:
+            pre[name] = stage_key(name, meta.doc_hash, opts, [pre[u] for u in UPSTREAM[name]])
+        if force_from <= ORDER.index("vlm") or not all(
+                (doc_dir / f"{n}-{pre[n]}.json").exists() for n in _OVERLAP_GROUP):
+            force_from = 0
     for i, name in enumerate(ORDER[:ORDER.index(to_stage) + 1]):
         key = stage_key(name, meta.doc_hash, opts, [keys[u] for u in UPSTREAM[name]])
         keys[name] = key
