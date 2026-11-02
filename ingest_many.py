@@ -72,6 +72,18 @@ def _load_manifest(path: str) -> list[dict]:
     return docs
 
 
+def _check_embed(args: argparse.Namespace) -> None:
+    """임베딩 설정 오류(키 없음·인증 실패)면 문서를 하나도 처리하기 전에 멈춘다."""
+    if args.no_embed:
+        return
+    from insurance_chunker.embedder import EmbedConfigError, preflight
+    try:
+        preflight()
+    except EmbedConfigError as e:
+        logger.error(f"임베딩 설정 오류 — 적재를 시작하지 않는다: {e}")
+        sys.exit(1)
+
+
 def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     """문서 1건 처리. 구간별 소요 시간(phases)까지 담아 돌려준다.
 
@@ -220,6 +232,7 @@ def main() -> None:
     # 배포가 컨테이너를 재생성할 때 문서 경계에서 접기 위한 것(worker.py가 SIGTERM을 전달한다).
     shutdown.install()
     docs = _load_manifest(args.manifest)
+    _check_embed(args)
     dry_run_dir = Path(args.dry_run_dir)
     if args.dry_run:
         dry_run_dir.mkdir(parents=True, exist_ok=True)

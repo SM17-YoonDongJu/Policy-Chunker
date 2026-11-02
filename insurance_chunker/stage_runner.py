@@ -126,8 +126,10 @@ def _stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
                 "hard_max": opts["hard_max"]}
     if name == "embed":
         return {"backend": embedder.EMBED_BACKEND,
-                "model": opts.get("embed_model") or embedder.OLLAMA_MODEL,
-                "max_chars": embedder._MAX_CHARS}
+                "model": embedder.model_name(opts.get("embed_model")),
+                # voyage는 자르지 않고 차원을 요청에 싣는다(embedder.embed_texts)
+                "max_chars": None if embedder.EMBED_BACKEND == "voyage" else embedder._MAX_CHARS,
+                "dim": embedder.get_embed_dim()}
     return {}
 
 

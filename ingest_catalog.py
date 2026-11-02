@@ -298,7 +298,9 @@ def main() -> None:
         sys.exit(1)
 
     from db.storage import doc_already_ingested, get_connection, init_schema
-    from ingest_many import _fmt_phases  # run_one_safe는 워커에서 직접 import
+    from ingest_many import _check_embed, _fmt_phases  # run_one_safe는 워커에서 직접 import
+
+    _check_embed(args)
 
     conn = get_connection(args.db_url)
     init_schema(conn, skip=args.no_init_schema)
