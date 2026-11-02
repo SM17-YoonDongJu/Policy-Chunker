@@ -33,7 +33,7 @@ kubectl port-forward svc/chunk-viewer 8501:8501
 - **표 원문**: S3 `policy-tables/{table_id}.md`.
 - **처리 중·최근 결과**: 청커의 `GET /status`(메트릭 포트 9101, `exporter.status_snapshot`). 실행 이력은
   청커 파드의 PVC에만 있어서 뷰어가 직접 읽지 못한다. 청커가 없으면 그 영역만 비고 나머지는 돈다.
-- **운영 검색**: AI 레포 `rag.search`를 pyproject의 `viewer` extra가 고정한 커밋으로 import한다.
+- **운영 검색**: AI 레포 `rag.search`를 리포트 워커와 같은 코드·같은 설정으로 import한다(아래 "운영 검색 코드").
   라우팅·오타 교정·RRF·임베딩 폴백까지 리포트 워커와 같다. 화면에 보이는 교정 결과와 벡터 사용
   여부는 운영 함수를 감싸 반환값만 엿본 것이다(다시 부르지 않는다).
 
@@ -44,11 +44,12 @@ kubectl port-forward svc/chunk-viewer 8501:8501
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `DATABASE_URL` | — | 읽기 전용 롤 권장(아래). 필수 |
+| `DATABASE_URL` | — | 필수. 클러스터는 `corpus_owner`에 읽기 전용 기본값을 건 접속 문자열(아래 "DB 접속") |
 | `RDS_CA_PATH` | — | 있으면 `verify-full`로 RDS TLS 검증. 클러스터는 `rds-ca-bundle` ConfigMap |
 | `S3_BUCKET`, `AWS_REGION` | — | 원본 PDF·표 원문. 자격증명은 노드 롤(`aws-metadata: allow`) |
 | `CHUNKER_STATUS_URL` | `http://insurance-chunker-metrics:9101/status` | 청커 `/status` |
-| `EMBEDDING_PROVIDER`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIM` | AI 기본값 | 운영 검색의 쿼리 임베딩(AI `core.config`가 읽는다). 리포트 워커와 같은 값을 준다 |
+| `EMBEDDING_PROVIDER`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIM` | AI 기본값 | 운영 검색의 쿼리 임베딩(AI `core.config`가 읽는다). 클러스터에서는 report ConfigMap에서 그대로 온다 |
+| `AI_ENGINE_SRC` | — | report 이미지에서 받은 운영 검색 소스 경로(차트가 `/ai-src`로 준다). 화면의 커밋 표시가 이걸 본다 |
 | `EMBEDDING_API_KEY` | — | `EMBEDDING_PROVIDER=voyage`일 때 Voyage 키(시크릿) |
 | `AI_TIMEOUT_SECONDS` | 60 | 임베딩 서버가 죽었을 때 키워드 검색으로 떨어지기까지 기다리는 시간 |
 | `VIEWER_PDF_DIR` | — | S3 대신 로컬 디렉터리에서 원본을 해시로 찾는다(개발용) |
@@ -57,9 +58,21 @@ kubectl port-forward svc/chunk-viewer 8501:8501
 | `VIEWER_RENDER_DPI` | 144 | 쪽 이미지 해상도 |
 | `VIEWER_STATUS_REFRESH_SECONDS` | 10 | 처리 현황 자동 새로고침 주기 |
 
-## 읽기 전용 DB 롤
+## DB 접속
 
-뷰어 전용 롤을 둔다. 롤·스키마 정본은 AI 레포 `deploy/schema_split.sql`이므로 거기에 같이 넣는다.
+전용 롤을 따로 만들지 않고 청커와 같은 `corpus_owner`로 붙는다(2026-11-02 결정). 뷰어가 읽는 것
+(corpus 네 테이블과 `ai.corpus_file`·`ai.corpus_file_part`)을 이 롤이 이미 읽을 수 있고, 새 롤을
+만들려면 RDS 마스터 계정이 필요하기 때문이다. 대신 접속 문자열에 읽기 전용 기본값을 건다.
+
+```
+postgresql://corpus_owner:...@<RDS>:5432/brbs_dev?options=-cdefault_transaction_read_only%3Don
+```
+
+- 값은 Secrets Manager `app/chunk-viewer-dev`의 `DATABASE_URL`이다(ESO가 내린다).
+- 읽기 전용은 세션 기본값이라 강제는 아니다. 뷰어 코드는 쓰지 않으므로 실수로 쓰는 것만 막는다.
+  쓰기를 시도하면 `cannot execute ... in a read-only transaction`으로 거부된다.
+- 최소 권한이 필요해지면 아래 롤을 만들고 시크릿의 접속 문자열만 바꾼다. 롤·스키마 정본은 AI 레포
+  `deploy/schema_split.sql`이므로 거기에 같이 넣는다.
 
 ```sql
 CREATE ROLE chunk_viewer LOGIN PASSWORD '...';
@@ -73,18 +86,25 @@ ALTER ROLE chunk_viewer SET default_transaction_read_only = on;
 ALTER ROLE chunk_viewer SET search_path = corpus, public;
 ```
 
-접속 문자열은 Secrets Manager `app/chunk-viewer-dev`의 `DATABASE_URL`에 넣는다(ESO가 내린다).
 AI 코드는 `policy_chunks`·`search_terms`를 스키마 없이 부르므로, 뷰어는 운영 검색 연결에
 `search_path=corpus,public`을 직접 붙인다 — 롤에 설정이 빠져 있어도 같은 테이블을 본다.
 
-## 운영 검색 커밋 맞추기
+## 운영 검색 코드
 
-뷰어의 검색이 운영과 같으려면 `ai-engine` 커밋이 `rag.search`를 쓰는 리포트 워커의 이미지 태그와
-같아야 한다.
+뷰어의 검색이 운영과 같으려면 코드와 설정이 리포트 워커와 같아야 한다. 클러스터에서는 둘 다
+리포트 워커에서 그대로 받으므로 맞출 일이 없다(K8s-manifests `charts/chunk-viewer`).
 
-1. K8s-manifests `envs/dev/report.values.yaml`의 `image.tag`(sha7)를 본다.
-2. 그 커밋의 전체 해시로 `pyproject.toml`의 `viewer` extra URL을 바꾼다.
-3. 화면 사이드바의 `ai-engine@xxxxxxx`가 그 태그와 같은지 확인한다.
+- **코드**: 파드가 뜰 때 initContainer가 report 이미지(`aiEngine.tag`)의 `/app/src`를 `/ai-src`로
+  복사하고, 그 커밋을 `/ai-src/GIT_COMMIT`에 남긴다. 뷰어는 `PYTHONPATH=/ai-src:/app`이라 그쪽을
+  먼저 import한다. `aiEngine.tag`는 AI CI가 report 태그를 올리는 커밋에서 같이 올린다.
+- **설정**: report ConfigMap을 먼저 읽고 뷰어 ConfigMap이 덮는다(`AI_TIMEOUT_SECONDS`·DB 풀 등).
+  그래서 `EMBEDDING_*` 같은 검색 설정이 report와 같다. report ConfigMap이 바뀌면 Reloader가 뷰어를
+  다시 띄운다.
+- **확인**: 사이드바의 `ai-engine@xxxxxxx`가 report 이미지 태그와 같아야 한다. 받은 소스를 못 쓰고
+  이미지에 깔린 ai-engine으로 돌면 `(report 소스를 못 읽어 내장 코드)`가 붙는다.
+- **pyproject의 `viewer` extra**: 의존 패키지 기준선이다. AI가 core·rag에 새 외부 패키지를 쓰기
+  시작하면 뷰어가 import 오류로 뜨는데, 그때만 그 커밋으로 올린다. 로컬 실행에서는 이 커밋의 코드가
+  그대로 쓰인다.
 
 ## 로컬에서 돌리기
 
