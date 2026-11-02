@@ -10,8 +10,9 @@ PaddleOCR 공식 파이프라인(PaddleOCRVL)은 들이지 않는다 — 레이�
 쓰고 인식은 기존 VLM 경로(vLLM의 PaddleOCR-VL)가 한다. 결과는 실험에서 공식 파이프라인과
 동일했고, 공식 파이프라인은 vLLM 쪽 추가 플래그(trust-request-mm-kwargs)까지 요구한다.
 
-chunker 파드에는 GPU가 없으므로 device="cpu"다. 모델은 프로세스당 한 번 lazy 로드한다 —
-paddle 런타임+모델이 수백 MB라 임포트 시점에 열면 레이아웃을 안 쓰는 실행도 그 값을 낸다.
+chunker 파드에는 GPU가 없으므로 기본은 device="cpu"다(LAYOUT_DEVICE로 바꾼다). 모델은
+프로세스당 한 번 lazy 로드한다 — paddle 런타임+모델이 수백 MB라 임포트 시점에 열면 레이아웃을
+안 쓰는 실행도 그 값을 낸다.
 """
 from __future__ import annotations
 
@@ -32,6 +33,9 @@ _MODEL_FALLBACKS = ("PP-DocLayoutV2", "PP-DocLayout_plus-L")
 LAYOUT_MIN_SCORE = float(os.environ.get("LAYOUT_MIN_SCORE", "0.5"))
 # 레이아웃 입력 렌더 해상도. 탐지는 박스만 내면 되므로 crop 렌더(VLM_DPI)보다 낮아도 된다.
 LAYOUT_DPI = int(os.environ.get("LAYOUT_DPI", "150"))
+# "cpu"(기본) | "gpu:0" 등. T4에서 V3가 쪽당 0.14초로 CPU(x86 4vCPU, 4.77초)의 34배였고 표 박스는
+# CPU와 193/193 같았다(2026-11-02, smoke 296쪽). GPU를 쓰려면 paddlepaddle-gpu가 깔려 있어야 한다.
+LAYOUT_DEVICE = os.environ.get("LAYOUT_DEVICE", "cpu")
 
 _model = None
 _load_failed = False
@@ -64,7 +68,7 @@ def _load_model():
         names = [LAYOUT_MODEL] + [m for m in _MODEL_FALLBACKS if m != LAYOUT_MODEL]
         for name in names:
             try:
-                _model = LayoutDetection(model_name=name, device="cpu")
+                _model = LayoutDetection(model_name=name, device=LAYOUT_DEVICE)
             except Exception as e:  # noqa: BLE001 - 모델 하나의 실패가 다음 후보를 막으면 안 된다
                 logger.warning(f"레이아웃 모델 {name} 로드 실패: {e}")
                 continue
@@ -179,7 +183,7 @@ def detect_tables(
                 break  # 모델이 없다 — 남은 쪽을 돌아도 전부 빈손이다
     n_boxes = sum(len(v) for v in boxes_by_page.values())
     metrics = {
-        "model": LAYOUT_MODEL, "min_score": LAYOUT_MIN_SCORE,
+        "model": LAYOUT_MODEL, "min_score": LAYOUT_MIN_SCORE, "device": LAYOUT_DEVICE,
         "blank_skipped": blank, "table_pages": len(boxes_by_page), "boxes": n_boxes,
         "ocr_pages": len(ocr_pages),
         "page_sec_p50": sorted(secs)[len(secs) // 2] if secs else None,

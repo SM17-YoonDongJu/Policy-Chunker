@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from typing import Optional
+from typing import Iterable, Optional
 
 from . import extractor
 
@@ -45,6 +46,8 @@ class VlmStage:
         self.circuit_open = False
         self.stats: list[dict] = []
         self.ocr_texts: dict[int, str] = {}  # OCR 대상({"page","ocr"})의 복구 본문
+        self.total_targets = 0               # 받은 대상 수(상한 밖 포함) — 흘려 받으면 끝나야 안다
+        self._spans: list[tuple[float, float]] = []  # 호출마다 (시작, 끝) — busy_seconds 계산용
         self._lock = threading.Lock()
 
     # ── 작업 스레드 ──────────────────────────────────────────────────────────
@@ -67,9 +70,12 @@ class VlmStage:
                 self.streak = 0
             return None
         img_b64, image_px = rendered
+        t0 = time.perf_counter()
         try:
             md = extractor.call_vlm(img_b64, pno, image_px, record=self._record, task=task)
         except extractor._VLMCallFailed:
+            with self._lock:
+                self._spans.append((t0, time.perf_counter()))
             with self._lock:
                 self.streak += 1
                 opened = not self.circuit_open and self.streak >= self.fail_streak
@@ -85,13 +91,15 @@ class VlmStage:
         # 호출이 성공했으면 표가 있든 없든 서버는 살아 있다 — 연속 카운터를 푼다.
         with self._lock:
             self.streak = 0
+            self._spans.append((t0, time.perf_counter()))
         if md:
             logger.info(f"VLM [{i}/{total}] p{pno} 완료 (표 추출됨)")
         return md
 
     # ── 호출한 스레드 ────────────────────────────────────────────────────────
 
-    def run(self, doc, targets: list) -> dict[int, str]:
+    def run(self, doc, targets: Iterable, total: Optional[int] = None,
+            window: Optional[int] = None) -> dict[int, str]:
         """targets(순서 = 우선순위)를 호출해 {page: markdown}을 돌려준다. doc은 열린 fitz 문서.
 
         target은 쪽 번호(페이지 전체 입력), {"page","bbox"}(레이아웃 crop),
@@ -99,16 +107,24 @@ class VlmStage:
         한 쪽에 여럿일 수 있으므로 결과는 쪽마다 박스 순서대로 빈 줄로 잇는다 — 완료
         순서와 무관하게 대상 목록의 순서가 곧 출력 순서다. OCR 결과는 표가 아니라
         본문이므로 반환값에 섞지 않고 self.ocr_texts에 쌓는다.
+
+        targets는 목록이 아니어도 된다 — 레이아웃이 쪽마다 박스를 찾는 대로 내놓는
+        제너레이터면 그 쪽의 crop이 바로 호출된다(레이아웃·VLM 겹치기, stages의 겹치기 경로).
+        이때 제너레이터는 이 메서드가 도는 스레드(문서를 연 스레드)에서 소비된다. 상한을
+        넘은 대상과 차단기가 열린 뒤의 대상도 끝까지 소비한다 — 레이아웃 결과가 뒤 단계에
+        필요해서다. 호출은 하지 않는다. total은 로그용이고 모르면 비워 둔다.
+
+        window는 렌더해 두고 기다리게 하는 호출 수의 상한이다(메모리). 기본은 동시도 x 2.
+        흘려 받을 때는 크게 준다 — 작으면 표 없는 쪽이 이어지는 동안 VLM이 놀게 된다.
         """
-        total = len(targets)
-        jobs = []
-        for t in targets[:self.budget]:
-            if isinstance(t, dict):
-                jobs.append((t["page"], t.get("bbox"), "ocr" if t.get("ocr") else "table"))
-            else:
-                jobs.append((t, None, "table"))
+        if total is None and isinstance(targets, (list, tuple)):
+            total = len(targets)
+        shown = total if total is not None else "?"
+        window = window or self.concurrency * 2
+        jobs: list[tuple[int, Optional[list], str]] = []
         results: dict[int, str] = {}  # 대상 인덱스 → markdown/본문
         pending: dict[Future, int] = {}
+        consumed = 0
 
         def collect(done) -> None:
             for fut in done:
@@ -121,21 +137,31 @@ class VlmStage:
 
         with ThreadPoolExecutor(max_workers=self.concurrency,
                                 thread_name_prefix="vlm") as pool:
-            for i, (pno, clip, task) in enumerate(jobs):
-                if self.circuit_open:
-                    break
-                while len(pending) >= self.concurrency * 2:
+            for t in targets:
+                consumed += 1
+                if len(jobs) >= self.budget or self.circuit_open:
+                    continue  # 호출은 안 하지만 대상(=레이아웃 진행)은 끝까지 받는다
+                if isinstance(t, dict):
+                    job = (t["page"], t.get("bbox"), "ocr" if t.get("ocr") else "table")
+                else:
+                    job = (t, None, "table")
+                jobs.append(job)
+                i = len(jobs) - 1
+                pno, clip, task = job
+                while len(pending) >= window:
                     done, _ = wait(pending, return_when=FIRST_COMPLETED)
                     collect(done)
                 rendered = (extractor.render_page(doc[pno - 1], pno) if clip is None
                             else extractor.render_page(doc[pno - 1], pno, clip))
-                pending[pool.submit(self._task, i + 1, total, pno, rendered, task)] = i
+                pending[pool.submit(self._task, i + 1, shown, pno, rendered, task)] = i
             if self.circuit_open:
                 for fut in pending:
                     fut.cancel()  # 아직 시작 안 한 것만 취소된다
             done, _ = wait(pending)
             collect(done)
 
+        self.total_targets = consumed
+        total = consumed if total is None else total
         self._log_stop(total)
         by_page: dict[int, list[str]] = {}
         for i, (pno, _clip, task) in enumerate(jobs):
@@ -146,6 +172,23 @@ class VlmStage:
             else:
                 by_page.setdefault(pno, []).append(results[i])
         return {p: "\n\n".join(parts) for p, parts in by_page.items()}
+
+    def busy_seconds(self) -> float:
+        """호출이 하나라도 진행 중이던 시간의 합(구간 합집합). GPU가 일한 시간의 근사다.
+
+        순차 경로에선 VLM 단계 벽시계와 거의 같다. 겹치기 경로에선 단계 벽시계가 레이아웃과
+        겹쳐 의미를 잃으므로, T_bound의 GPU 몫으로는 이 값을 쓴다.
+        """
+        total = 0.0
+        end = None
+        for a, b in sorted(self._spans):
+            if end is None or a > end:
+                total += b - a
+                end = b
+            elif b > end:
+                total += b - end
+                end = b
+        return round(total, 2)
 
     def _log_stop(self, total: int) -> None:
         left = total - self.calls

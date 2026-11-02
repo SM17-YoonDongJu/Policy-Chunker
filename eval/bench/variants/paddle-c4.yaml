@@ -1,0 +1,14 @@
+# 동시도 4. paddle-c1과 가드레일로 비교한다(동시도가 1보다 크면 vLLM 배치 비결정성으로 완전 일치는 안 된다).
+slug: paddle-c4
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_MODEL: PaddleOCR-VL-1.6-0.9B
+  VLM_DPI: "200"
+  VLM_TIMEOUT: "60"
+  VLM_CONCURRENCY: "4"
+  VISION_MAX_CROPS: "300"
+  LAYOUT_BACKEND: paddle
+  LAYOUT_MODEL: PP-DocLayoutV3
+  LAYOUT_MIN_SCORE: "0.5"
+status: draft

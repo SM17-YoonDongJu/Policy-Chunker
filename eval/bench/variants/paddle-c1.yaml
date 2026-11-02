@@ -1,0 +1,16 @@
+# Paddle 경로 동시도 스윕의 기준(동시도 1). 동시도 1은 결정적이라 겹치기의 결과 동일성 기준으로도 쓴다.
+# 모델이 0.9B로 가벼워져(가중치 ~1.8GB, gpu-memory-utilization 0.5) KV 여유가 8B 때보다 크다 —
+# 동시도를 3보다 높일 여지가 있는지 c4·c8로 잰다.
+slug: paddle-c1
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_MODEL: PaddleOCR-VL-1.6-0.9B
+  VLM_DPI: "200"
+  VLM_TIMEOUT: "60"
+  VLM_CONCURRENCY: "1"
+  VISION_MAX_CROPS: "300"
+  LAYOUT_BACKEND: paddle
+  LAYOUT_MODEL: PP-DocLayoutV3
+  LAYOUT_MIN_SCORE: "0.5"
+status: draft

@@ -69,8 +69,24 @@ def code_fingerprint() -> str:
     return h.hexdigest()[:12]
 
 
+def _overlap_on(opts: dict[str, Any]) -> bool:
+    return stages.overlap_applicable(opts["use_vision"])
+
+
 def stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
     """그 단계의 결과를 바꾸는 설정만 고른다. 서버 주소처럼 결과와 무관한 것은 뺀다."""
+    cfg = _stage_config(name, opts)
+    # 겹치기(레이아웃·PyMuPDF 표·VLM을 함께 돌림)는 결과를 바꾸지 않지만 세 단계의 시간을 바꾼다.
+    # 키에서 빼면 겹치기 변형이 순차 실행의 산출물과 그때 잰 시간을 재사용한다.
+    if name in _OVERLAP_GROUP and _overlap_on(opts):
+        cfg = {**cfg, "overlap": True}
+    return cfg
+
+
+_OVERLAP_GROUP = ("layout", "tables_cpu", "vlm")
+
+
+def _stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
     from . import embedder, extractor
 
     if name == "layout":
@@ -80,6 +96,7 @@ def stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
         import importlib.util
         return {"backend": layout_mod.LAYOUT_BACKEND, "model": layout_mod.LAYOUT_MODEL,
                 "min_score": layout_mod.LAYOUT_MIN_SCORE, "dpi": layout_mod.LAYOUT_DPI,
+                "device": layout_mod.LAYOUT_DEVICE,
                 # paddleocr가 없으면 enabled=False 산출물이 만들어진다. 설치 여부를 키에
                 # 넣어야 나중에 의존을 깔았을 때 그 '꺼진' 산출물을 재사용하지 않는다.
                 "installed": importlib.util.find_spec("paddleocr") is not None}
@@ -242,6 +259,11 @@ def run(
     if from_stage is not None and ORDER.index(from_stage) > ORDER.index(to_stage):
         raise ValueError(f"--from {from_stage}가 --to {to_stage}보다 뒤다")
     force_from = ORDER.index(from_stage) if from_stage else len(ORDER)
+    # 겹치기면 레이아웃·PyMuPDF 표·VLM이 한 번에 돈다. 그중 하나라도 다시 돌려야 하면 셋 다
+    # 다시 돈다 — 레이아웃만 캐시에서 읽고 VLM만 따로 돌리면 겹치기가 아니라 순차로 잰 셈이다.
+    overlap = (stages.overlap_applicable(use_vision)
+               and ORDER.index(to_stage) >= ORDER.index("vlm"))
+    group: dict[str, stages.StageResult] = {}
 
     opts = {"use_vision": use_vision, "meta": meta, "target": target, "hard_max": hard_max,
             "ollama_url": ollama_url, "embed_model": embed_model}
@@ -252,6 +274,16 @@ def run(
     outputs: dict[str, Any] = {}
     records: list[dict] = []
     recomputed = False
+    if overlap:
+        # 키는 상위 키로만 정해지므로 미리 다 셀 수 있다. 묶음 중 하나라도 캐시가 없으면(예:
+        # 동시도만 바꿔 vlm 키만 달라진 변형) 셋 다 레이아웃부터 다시 돈다 — 레이아웃·PyMuPDF
+        # 표만 캐시에서 읽고 VLM을 따로 돌리면 겹치기가 아니라 순차로 잰 시간이 남는다.
+        pre: dict[str, str] = {}
+        for name in ORDER[:ORDER.index("vlm") + 1]:
+            pre[name] = stage_key(name, meta.doc_hash, opts, [pre[u] for u in UPSTREAM[name]])
+        if force_from <= ORDER.index("vlm") or not all(
+                (doc_dir / f"{n}-{pre[n]}.json").exists() for n in _OVERLAP_GROUP):
+            force_from = 0
     for i, name in enumerate(ORDER[:ORDER.index(to_stage) + 1]):
         key = stage_key(name, meta.doc_hash, opts, [keys[u] for u in UPSTREAM[name]])
         keys[name] = key
@@ -266,7 +298,13 @@ def run(
             rec = {**saved["record"], "cached": True}
         else:
             up = {u: outputs[u] for u in UPSTREAM[name]}
-            res = _call(name, pdf_path, opts, up)
+            if overlap and name == "layout":
+                try:
+                    g = stages.overlapped(pdf_path, use_vision=use_vision)
+                    group = {"layout": g[0], "tables_cpu": g[1], "vlm": g[2]}
+                except stages.OverlapUnavailable:
+                    overlap = False  # 모델을 못 열었다 — 순차로(거기서 기존 경로로 떨어진다)
+            res = group.pop(name) if name in group else _call(name, pdf_path, opts, up)
             outputs[name] = res.output
             rec = {"stage": name, "key": key, "seconds": res.seconds,
                    "resource": res.resource, "metrics": res.metrics, "path": str(path)}
@@ -292,6 +330,18 @@ def run(
 REPORT_CONTRACT = 3
 
 
+def _elapsed(records: list[dict]) -> float:
+    """문서 처리 시간. 캐시에서 읽은 단계도 그 산출물을 만들 때 잰 시간이 들어 있으므로 합이
+    곧 처리 시간이다 — 단, 겹친 단계(레이아웃·PyMuPDF 표·VLM)는 각자 일한 시간이 겹치므로
+    그 묶음은 벽시계(vlm 지표의 overlap_wall_s) 한 번으로 센다."""
+    wall = next((r["metrics"].get("overlap_wall_s") for r in records
+                 if r["stage"] == "vlm" and r["metrics"].get("overlap_wall_s") is not None), None)
+    if wall is None:
+        return round(sum(r["seconds"] for r in records), 2)
+    rest = sum(r["seconds"] for r in records if r["stage"] not in _OVERLAP_GROUP)
+    return round(rest + wall, 2)
+
+
 def write_report(path: Path, artifacts: Path, meta: DocMeta, records: list[dict],
                  pdf_path: Optional[str] = None) -> dict:
     """단계 기록 + 페이지별 표 지문 + 청크 요약. 벤치마크는 이 파일만 읽는다.
@@ -305,8 +355,7 @@ def write_report(path: Path, artifacts: Path, meta: DocMeta, records: list[dict]
         "code": code_fingerprint(),
         "stages": {r["stage"]: {"seconds": r["seconds"], "resource": r["resource"],
                                 "cached": r["cached"], **r["metrics"]} for r in records},
-        # 캐시에서 읽은 단계도 그 산출물을 만들 때 잰 시간이 들어 있으므로 합이 곧 처리 시간이다.
-        "elapsed_s": round(sum(r["seconds"] for r in records), 2),
+        "elapsed_s": _elapsed(records),
     }
     if "combine" in by:
         cpath = Path(by["combine"]["path"])
