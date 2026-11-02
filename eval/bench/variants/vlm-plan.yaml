@@ -5,6 +5,7 @@ slug: vlm-plan
 ref: WORKTREE
 env:
   VLM_BACKEND: local
+  VLM_MODEL: qwen3-vl:8b-instruct   # baseline과 맞춘다. 호출은 안 하므로 서버는 없어도 된다
   VLM_TARGET: gap
   VISION_MAX_PAGES: "0"
   LAYOUT_BACKEND: "off"   # 코드 기본이 paddle로 바뀜 — 이 변형은 기존 경로 측정

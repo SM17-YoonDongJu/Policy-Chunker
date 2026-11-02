@@ -6,6 +6,7 @@ slug: vlm-c3
 ref: WORKTREE
 env:
   VLM_BACKEND: local
+  VLM_MODEL: qwen3-vl:8b-instruct   # qwen 시절 측정 — 서버가 이 모델을 서빙해야 한다(bench가 먼저 확인)
   VLM_TARGET: gap
   VLM_DPI: "150"
   VISION_MAX_PAGES: "50"

@@ -12,15 +12,21 @@
 # 0. 문서셋에 sha256을 채우고 PDF를 받는다 (DATABASE_URL·S3_BUCKET·AWS 자격증명)
 python eval/bench/bench.py fetch --docset core
 
-# 1. 기준선
-python eval/bench/bench.py run --docset core --variant baseline
+# 1. 기준선 — 지금 운영 구성(PaddleOCR-VL + 레이아웃 crop)
+python eval/bench/bench.py run --docset core --variant paddle-crop
 
 # 2. 변형을 정의하고 돌린다 (variants/<slug>.yaml)
 python eval/bench/bench.py run --docset core --variant vlm-c2
 
 # 3. 짝지어 비교 — 마크다운을 PR 본문에 붙인다
-python eval/bench/bench.py compare --docset core --base baseline --variant vlm-c2 --out r.md
+python eval/bench/bench.py compare --docset core --base paddle-crop --variant vlm-c2 --out r.md
 ```
+
+`baseline`을 비롯해 `LAYOUT_BACKEND: "off"`로 VLM을 쓰는 변형들은 qwen3-vl + 페이지 전체 입력
+시절의 측정이라
+`VLM_MODEL: qwen3-vl:8b-instruct`로 고정돼 있다. `run`은 VLM을 부르는 변형이면 먼저 VLM 서버의
+`/v1/models`에 그 모델이 있는지 보고, 없으면 돌기 전에 멈춘다 — 모르는 모델로 돌면 페이지마다
+거절당해 표가 빠진 결과가 그 변형 이름으로 덮어써지기 때문이다.
 
 `run`은 기본으로 `chunk`까지 돈다. 임베딩까지 재려면 `--to embed`(Ollama 필요).
 
