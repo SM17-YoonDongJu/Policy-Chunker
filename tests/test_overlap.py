@@ -176,7 +176,12 @@ def test_layout_and_vlm_really_overlap(ex, monkeypatch, doc_pdf, fake_layout):  
     assert lay == pytest.approx(6 * 0.15, abs=0.15), "레이아웃은 백지 빼고 6쪽"
     assert vlm >= 6 * 0.2 * 0.9, "VLM 단계 시간은 호출이 진행 중이던 구간의 합이다"
     assert ovl_wall < seq_wall - 0.4, f"겹치지 않았다: 순차 {seq_wall:.2f}s 대 {ovl_wall:.2f}s"
-    assert ovl["vlm"].metrics["overlap_wall_s"] < lay + vlm, "겹친 만큼 벽시계가 단계 합보다 짧다"
+    # 묶음 벽시계에는 레이아웃·VLM 말고도 PyMuPDF 표·렌더 같은 CPU 구간이 들어 있다. 느린
+    # 러너에서는 그 구간만 1초를 넘어 lay + vlm과 비교하면 겹쳐도 깨진다(CI 2026-11-02:
+    # 2.41초 대 0.9 + 1.21초). 같은 CPU 구간을 담은 순차 경로의 묶음 합과 비교한다.
+    seq_group = sum(seq[n].seconds for n in ("layout", "tables_cpu", "vlm"))
+    assert ovl["vlm"].metrics["overlap_wall_s"] < seq_group - 0.4, \
+        f"겹친 만큼 묶음 벽시계가 순차 묶음 합보다 짧다: {seq_group:.2f}s"
 
 
 def test_layout_runs_on_the_calling_thread(ex, monkeypatch, doc_pdf, fake_layout):  # noqa: F811
