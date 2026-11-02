@@ -271,3 +271,34 @@ def test_voyage_model_is_the_default_unless_overridden(voy, monkeypatch):
     importlib.reload(voy)
     assert voy.VOYAGE_MODEL == "voyage-4-lite"
 
+
+# ── 적재 전 사전 확인 ─────────────────────────────────────────────────────────
+
+def test_preflight_stops_on_config_error(voy, monkeypatch):
+    """키가 틀린 채 사이클을 돌면 문서마다 VLM까지 돌고 실패해 격리 카운터만 쌓인다."""
+    monkeypatch.setattr(voy.requests, "post", lambda *a, **k: _Resp(401, text="bad key"))
+    with pytest.raises(voy.EmbedConfigError):
+        voy.preflight()
+
+
+def test_preflight_lets_transient_errors_through(voy, monkeypatch, caplog):
+    monkeypatch.setattr(voy.requests, "post", lambda *a, **k: _Resp(503, text="busy"))
+    with caplog.at_level("WARNING"):
+        voy.preflight()
+    assert "일시 오류로 보고 계속" in caplog.text
+
+
+def test_preflight_skips_ollama(emb, monkeypatch):
+    """ollama는 청커보다 늦게 뜰 수 있다 — 사전 확인으로 사이클을 막지 않는다(기존 동작)."""
+    monkeypatch.setattr(emb.requests, "post", lambda *a, **k: pytest.fail("요청하면 안 된다"))
+    emb.preflight()
+
+
+def test_ingest_exits_before_any_document_on_config_error(voy, monkeypatch):
+    import argparse
+
+    import ingest_many
+    monkeypatch.setattr(voy.requests, "post", lambda *a, **k: _Resp(401, text="bad key"))
+    with pytest.raises(SystemExit):
+        ingest_many._check_embed(argparse.Namespace(no_embed=False))
+    ingest_many._check_embed(argparse.Namespace(no_embed=True))  # 임베딩을 안 하면 보지 않는다

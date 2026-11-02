@@ -306,6 +306,28 @@ def embed_query(query: str, ollama_url: Optional[str] = None,
     return embed_texts([QUERY_INSTRUCT + query], ollama_url=ollama_url, model=model)[0]
 
 
+def preflight() -> None:
+    """적재를 시작하기 전에 임베딩 설정을 확인한다. voyage만 본다.
+
+    키가 없거나 틀리면 문서마다 레이아웃·VLM을 다 돌린 뒤 임베딩에서 실패하고, 그 실패가
+    재시도 상한(INGEST_MAX_RETRY)에 쌓여 멀쩡한 문서까지 격리된다. 짧은 입력 하나를 먼저
+    보내 설정 오류면 사이클을 시작하지 않는다. 일시 오류는 문서 단계의 재시도에 맡긴다.
+    ollama는 같은 노드에서 청커보다 늦게 뜰 수 있어 여기서 막지 않는다(기존 동작 그대로).
+
+    Raises:
+        EmbedConfigError: 키가 없거나 Voyage가 키·모델을 거절했다.
+    """
+    if EMBED_BACKEND != "voyage":
+        return
+    try:
+        embed_texts(["보험약관"])
+    except EmbedConfigError:
+        raise
+    except Exception as e:  # noqa: BLE001 - 일시 오류는 막지 않고 문서 단계로 넘긴다
+        logger.warning(f"임베딩 사전 확인 실패 — 일시 오류로 보고 계속한다 ({e})",
+                       extra={"event": "embed_preflight_failed", "backend": "voyage"})
+
+
 def embed_chunks(chunks: list[InsuranceChunk], ollama_url: Optional[str] = None,
                  model: Optional[str] = None) -> list[InsuranceChunk]:
     """boilerplate 청크는 임베딩 생략 (저장은 되지만 벡터 검색 대상 아님)."""

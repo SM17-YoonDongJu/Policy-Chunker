@@ -265,7 +265,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `EMBED_BATCH_TIMEOUT` | `120` | 배치 요청 타임아웃(초). 초과 시 Ollama는 건별 폴백, Voyage는 같은 묶음 재시도 |
 | `EMBED_MAX_CHARS` | `1800` | 장문 절단 상한(ollama·BGE-M3) — **eval과 같은 값이어야 수치가 재현된다**. Voyage는 자르지 않는다 |
 | `EMBED_BACKEND` | `ollama` | `ollama` \| `voyage` \| `sentence_transformers` (BGE-M3 전환) |
-| `VOYAGE_API_KEY` | — | `voyage`면 필수(시크릿) |
+| `VOYAGE_API_KEY` | — | `voyage`면 필수(시크릿). 없거나 Voyage가 거절하면 문서를 하나도 처리하지 않고 멈춘다 |
 | `VOYAGE_BASE_URL` | `https://ai.mongodb.com/v1` | Voyage 엔드포인트 |
 | `S3_BUCKET` | — | 대형 표 markdown 저장용 S3 버킷 (없으면 `.table_cache/` 로컬 저장) |
 | `VLM_BACKEND` | `local` | `local` \| `surya` \| `off` |
