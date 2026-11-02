@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 CPU, GPU, IO = "cpu", "gpu", "io"
 
 
+def _layout_resource() -> str:
+    """레이아웃은 LAYOUT_DEVICE에 따라 CPU 또는 GPU 단계다 — 하한 계산이 병목 자원을 고르는 근거."""
+    from . import layout as layout_mod
+    return GPU if layout_mod.LAYOUT_DEVICE.startswith("gpu") else CPU
+
+
 def rss_mb() -> Optional[float]:
     """이 프로세스의 현재 상주 메모리(MB). Linux는 /proc, 그 밖은 최고점(ru_maxrss)으로 대신한다.
 
@@ -148,7 +154,7 @@ def layout(pdf_path: str) -> StageResult:
         # 섞여서, 같은 설정의 두 실행이 다른 결과를 낸다.
         out.boxes = {}
         out.ocr_pages = []
-    return StageResult("layout", out, sec, CPU, {"enabled": out.enabled, **m})
+    return StageResult("layout", out, sec, _layout_resource(), {"enabled": out.enabled, **m})
 
 
 def text(pdf_path: str, use_ocr: bool = True,
@@ -478,7 +484,7 @@ def overlapped(pdf_path: str, use_vision: bool = True
                 extra={"event": "vlm_targets", "target": "crop", "pages": len(targets),
                        "pymupdf_pages": len(pymupdf_tables), "gap_pages": 0, "overlap": True})
     lay = LayoutResult(enabled=True, boxes=boxes_by_page, ocr_pages=ocr_pages)
-    s_layout = StageResult("layout", lay, round(sum(layout_secs), 2), CPU, {
+    s_layout = StageResult("layout", lay, round(sum(layout_secs), 2), _layout_resource(), {
         "enabled": True, "model": layout_mod.LAYOUT_MODEL, "min_score": layout_mod.LAYOUT_MIN_SCORE,
         "device": layout_mod.LAYOUT_DEVICE, "blank_skipped": blank,
         "table_pages": len(boxes_by_page), "boxes": n_boxes,

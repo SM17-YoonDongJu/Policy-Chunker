@@ -211,6 +211,24 @@ def test_overlap_is_off_by_default(monkeypatch):
     assert stages.PIPELINE_OVERLAP is False
 
 
+@pytest.mark.parametrize("overlap", [False, True])
+def test_layout_on_gpu_is_counted_as_a_gpu_stage(ex, monkeypatch, doc_pdf, fake_layout,  # noqa: F811
+                                                 overlap):
+    """레이아웃을 GPU에 올리면 하한 계산에서도 GPU 단계다 — CPU로 남으면 병목을 잘못 고른다."""
+    from insurance_chunker import layout as layout_mod
+    ex(VLM_BACKEND="local", VLM_MODEL="PaddleOCR-VL-1.6-0.9B", VLM_CONCURRENCY="2")
+    fake_layout()
+    _server(monkeypatch)
+    _, cpu, _ = _parse(doc_pdf, overlap, monkeypatch)
+    monkeypatch.setattr(layout_mod, "LAYOUT_DEVICE", "gpu:0")
+    fake_layout()
+    _server(monkeypatch)
+    _, gpu, _ = _parse(doc_pdf, overlap, monkeypatch)
+    assert cpu["layout"].resource == "cpu"
+    assert gpu["layout"].resource == "gpu"
+    assert gpu["layout"].metrics["device"] == "gpu:0"
+
+
 # ── 단계 실행 CLI ─────────────────────────────────────────────────────────────
 
 def test_stage_runner_reports_wall_time_and_keeps_caches_apart(ex, monkeypatch, doc_pdf,  # noqa: F811
