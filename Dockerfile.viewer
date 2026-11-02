@@ -22,7 +22,8 @@ RUN apt-get update \
 WORKDIR /app
 
 # 의존 먼저 — 코드만 바뀐 빌드는 이 층을 캐시로 건너뛴다. ai-engine은 pyproject의 viewer extra가
-# 커밋을 고정한 tarball이라 git이 없어도 받는다.
+# 커밋을 고정한 tarball이라 git이 없어도 받는다. 클러스터에서는 이 ai-engine의 코드 대신 report
+# 이미지에서 받은 소스(/ai-src)를 먼저 import한다 — 여기서 깔리는 건 사실상 의존 패키지다.
 COPY pyproject.toml ./
 COPY viewer ./viewer
 RUN pip install ".[viewer]"

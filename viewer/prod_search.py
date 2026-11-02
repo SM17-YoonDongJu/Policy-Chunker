@@ -2,7 +2,11 @@
 
 리포트 워커(report_worker)가 실제로 부르는 함수 그대로라 라우팅·오타 교정·RRF·임베딩 폴백까지 같다.
 설정(EMBEDDING_BASE_URL·EMBEDDING_MODEL·AI_TIMEOUT_SECONDS 등)은 AI의 core.config가 환경변수에서
-읽고, 차트가 리포트 워커와 같은 모델을 넣는다. 커밋은 pyproject의 viewer extra가 고정한다.
+읽는다. 클러스터에서는 차트가 report ConfigMap을 먼저 읽혀 리포트 워커와 같은 값이 된다.
+
+코드도 리포트 워커와 같은 것을 쓴다. 클러스터에서는 파드가 뜰 때 report 이미지의 소스를
+AI_ENGINE_SRC(/ai-src)에 복사하고, PYTHONPATH가 그쪽을 먼저 본다. 이미지에 설치된 ai-engine
+(pyproject의 viewer extra)은 의존 패키지를 깔기 위한 기준선이고, 로컬 실행에서만 코드로도 쓰인다.
 
 AI 코드는 asyncpg 풀을 모듈 전역으로 들고 있고 풀은 만든 이벤트 루프에 묶인다. Streamlit은
 세션마다 스레드가 달라서 호출마다 asyncio.run을 쓰면 풀이 다른 루프에 붙는다. 그래서 루프
@@ -16,13 +20,16 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import importlib.util
 import json
+import os
 import re
 import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from importlib import metadata
+from pathlib import Path
 from typing import Any, Optional
 
 # 요청 하나 동안 운영 함수가 낸 값을 모은다. search()가 create_task로 띄운 임베딩 태스크도
@@ -62,10 +69,42 @@ def prod_dsn(dsn: str) -> str:
 
 
 def ai_engine_ref() -> str:
-    """설치된 ai-engine의 커밋(7자리).
+    """지금 import한 운영 검색 코드의 커밋(7자리). 운영(리포트 워커 이미지 태그)과 같은지 보려는 것.
 
-    운영(리포트 워커 이미지 태그)과 같은지 화면에서 확인하려는 것.
+    AI_ENGINE_SRC가 있으면 report 이미지에서 받은 소스의 커밋(그 디렉터리의 GIT_COMMIT)이다.
+    경로를 받았는데 그 소스를 못 썼으면 내장 코드로 검색하고 있다는 걸 그대로 드러낸다 —
+    조용히 운영과 다른 코드로 돌게 두지 않는다.
     """
+    src = os.environ.get("AI_ENGINE_SRC", "")
+    if src:
+        commit = _injected_commit(Path(src))
+        if commit:
+            return commit
+        return f"{_installed_ref()} (report 소스를 못 읽어 내장 코드)"
+    return _installed_ref()
+
+
+def _injected_commit(src: Path) -> Optional[str]:
+    """src의 GIT_COMMIT(7자리). rag를 실제로 src에서 import하는 경우에만 돌려준다."""
+    try:
+        commit = (src / "GIT_COMMIT").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{7,40}", commit):
+        return None
+    mod = sys.modules.get("rag")
+    if mod is not None:
+        origin = getattr(mod, "__file__", None)
+    else:
+        spec = importlib.util.find_spec("rag")
+        origin = spec.origin if spec else None
+    if not origin or not Path(origin).resolve().is_relative_to(src.resolve()):
+        return None
+    return commit[:7]
+
+
+def _installed_ref() -> str:
+    """이미지에 설치된 ai-engine의 커밋(7자리)."""
     try:
         raw = metadata.distribution("ai-engine").read_text("direct_url.json")
     except metadata.PackageNotFoundError:

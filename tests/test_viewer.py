@@ -298,6 +298,59 @@ def test_ai_engine_ref_reports_the_pinned_commit(monkeypatch):
     assert ps.ai_engine_ref() == "설치 안 됨"
 
 
+def _fake_installed(monkeypatch, ps, sha="407977dcfec4557d116be701f8a036e35882999f"):
+    class Dist:
+        def read_text(self, name):
+            return json.dumps({"url": f"https://github.com/x/AI/archive/{sha}.tar.gz"})
+
+    monkeypatch.setattr(ps.metadata, "distribution", lambda name: Dist())
+
+
+def _report_src(tmp_path, commit="09ef9e0fa11f7806b10916e2f012ec22b45e73a3"):
+    """파드의 initContainer가 report 이미지에서 복사해 둔 모양(/ai-src)을 흉내 낸다."""
+    (tmp_path / "rag").mkdir()
+    (tmp_path / "rag" / "__init__.py").write_text("")
+    (tmp_path / "GIT_COMMIT").write_text(commit)
+    return tmp_path
+
+
+def test_ai_engine_ref_reports_the_report_image_source(monkeypatch, tmp_path):
+    """클러스터에서는 report 이미지에서 받은 소스의 커밋이다 — 운영과 같은지가 화면의 요점."""
+    from viewer import prod_search as ps
+
+    src = _report_src(tmp_path)
+    _fake_installed(monkeypatch, ps)
+    monkeypatch.setenv("AI_ENGINE_SRC", str(src))
+    monkeypatch.setitem(sys.modules, "rag",
+                        types.SimpleNamespace(__file__=str(src / "rag" / "__init__.py")))
+    assert ps.ai_engine_ref() == "09ef9e0"
+
+
+def test_ai_engine_ref_flags_when_the_report_source_is_not_used(monkeypatch, tmp_path):
+    """소스를 받았는데 내장 ai-engine을 import했다면(PYTHONPATH 누락 등) 운영과 다른 코드다."""
+    from viewer import prod_search as ps
+
+    (tmp_path / "ai-src").mkdir()
+    src = _report_src(tmp_path / "ai-src")
+    _fake_installed(monkeypatch, ps)
+    monkeypatch.setenv("AI_ENGINE_SRC", str(src))
+    monkeypatch.setitem(sys.modules, "rag",
+                        types.SimpleNamespace(__file__="/usr/lib/site-packages/rag/__init__.py"))
+    assert ps.ai_engine_ref() == "407977d (report 소스를 못 읽어 내장 코드)"
+
+    (src / "GIT_COMMIT").unlink()  # initContainer가 돌지 않은 경우
+    assert ps.ai_engine_ref() == "407977d (report 소스를 못 읽어 내장 코드)"
+
+
+def test_ai_engine_ref_without_injected_source_is_the_installed_one(monkeypatch):
+    """로컬 실행은 주입 경로가 없다 — 설치된 ai-engine 그대로."""
+    from viewer import prod_search as ps
+
+    _fake_installed(monkeypatch, ps)
+    monkeypatch.delenv("AI_ENGINE_SRC", raising=False)
+    assert ps.ai_engine_ref() == "407977d"
+
+
 # ── 원본 파일·조회 헬퍼 ───────────────────────────────────────────────────────
 
 def test_local_pdf_is_found_by_its_hash(tmp_path, monkeypatch):
