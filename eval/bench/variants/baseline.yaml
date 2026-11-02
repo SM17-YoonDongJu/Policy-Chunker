@@ -1,10 +1,15 @@
 # 기준 변형. 다른 변형은 이것과 짝지어 비교한다.
 # ref: git ref(커밋·브랜치·태그) 또는 WORKTREE(커밋 안 된 변경 포함 현재 트리).
 # 단계 분리 CLI(stage_runner)가 들어간 커밋 이후만 돌릴 수 있다. main에 머지되면 그 커밋으로 고정한다.
+#
+# qwen3-vl + 페이지 전체 입력 시절의 기준선이다. 운영이 PaddleOCR-VL + 레이아웃 crop으로 바뀐 뒤로는
+# 이 변형을 다시 돌리려면 qwen3-vl을 서빙하는 서버가 따로 있어야 한다(없으면 bench가 돌기 전에 멈춘다).
+# 전환 이후 변경의 비교 기준은 paddle-crop이다 — --base paddle-crop.
 slug: baseline
 ref: WORKTREE
 env:
   VLM_BACKEND: local
+  VLM_MODEL: qwen3-vl:8b-instruct   # qwen 시절 측정 — 서버가 이 모델을 서빙해야 한다(bench가 먼저 확인)
   VLM_TARGET: gap
   VLM_DPI: "150"
   VISION_MAX_PAGES: "50"

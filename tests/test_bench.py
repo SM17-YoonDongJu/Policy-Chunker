@@ -226,3 +226,82 @@ def test_image_without_git_runs_its_own_code_only(bench, monkeypatch):
     assert code_dir == bench.REPO and version == "sha-abc1234"
     with pytest.raises(SystemExit):
         bench.checkout("main")
+
+
+# ── VLM 서버 사전 확인 ────────────────────────────────────────────────────────
+
+class _Models:
+    def __init__(self, ids):
+        self.ids = ids
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"data": [{"id": i} for i in self.ids]}
+
+
+def _serve(monkeypatch, ids):
+    import requests
+    calls = []
+
+    def get(url, timeout):
+        calls.append(url)
+        return _Models(ids)
+    monkeypatch.setattr(requests, "get", get)
+    return calls
+
+
+def _variant(**env):
+    return {"slug": "v", "ref": "WORKTREE", "env": {"VLM_BACKEND": "local", **env}}
+
+
+def test_run_stops_before_writing_when_server_lacks_the_model(bench, monkeypatch):
+    """qwen 변형을 Paddle 서버에 돌리면 표가 빠진 결과가 그 이름으로 덮어써진다.
+
+    돌기 전에 멈추고 결과 디렉터리도 만들지 않는다.
+    """
+    _serve(monkeypatch, ["PaddleOCR-VL-1.6-0.9B"])
+    _write(bench, "docsets", "smoke", {"name": "smoke", "documents": []})
+    _write(bench, "variants", "old", {**_variant(VLM_MODEL="qwen3-vl:8b-instruct"), "slug": "old"})
+    with pytest.raises(SystemExit, match="qwen3-vl:8b-instruct"):
+        bench.main(["run", "--docset", "smoke", "--variant", "old"])
+    assert not (bench.BENCH / "results" / "old").exists()
+
+
+def test_preflight_passes_when_the_model_is_served(bench, monkeypatch):
+    calls = _serve(monkeypatch, ["PaddleOCR-VL-1.6-0.9B"])
+    bench.vlm_preflight(_variant(VLM_MODEL="PaddleOCR-VL-1.6-0.9B", VLM_URL="http://vllm:8000"),
+                        "chunk")
+    assert calls == ["http://vllm:8000/v1/models"]
+
+
+@pytest.mark.parametrize("env,to", [
+    ({"VLM_BACKEND": "off", "VLM_MODEL": "m"}, "chunk"),            # VLM 끔
+    ({"VLM_MODEL": "m"}, "tables_cpu"),                             # vlm 단계 전에 멈춤
+    ({"VLM_MODEL": "m", "LAYOUT_BACKEND": "off",
+      "VISION_MAX_PAGES": "0"}, "chunk"),                           # vlm-plan — 대상만 정한다
+    ({"VLM_MODEL": ""}, "chunk"),                                   # llama-server — 모델명 없음
+])
+def test_preflight_skips_when_no_vlm_call_or_no_model(bench, monkeypatch, env, to):
+    """VLM을 안 부르는 실행은 GPU 없는 곳에서도 돌아야 한다(vlm-plan의 존재 이유)."""
+    calls = _serve(monkeypatch, [])
+    bench.vlm_preflight(_variant(**env), to)
+    assert calls == []
+
+
+def test_preflight_reports_an_unreachable_server(bench, monkeypatch):
+    import requests
+
+    def down(url, timeout):
+        raise requests.ConnectionError("refused")
+    monkeypatch.setattr(requests, "get", down)
+    with pytest.raises(SystemExit, match="모델 목록을 못 읽었다"):
+        bench.vlm_preflight(_variant(VLM_MODEL="m"), "chunk")
+
+
+def test_qwen_era_variants_pin_their_model():
+    """VLM_MODEL을 비우면 코드 기본값(PaddleOCR-VL)이 들어가 이름과 다른 것을 잰다."""
+    for slug in ("baseline", "baseline-r2", "vlm-c3", "vlm-c3-t600", "vlm-mt2048", "vlm-plan"):
+        v = yaml.safe_load((REPO / "eval" / "bench" / "variants" / f"{slug}.yaml").read_text())
+        assert v["env"]["VLM_MODEL"] == "qwen3-vl:8b-instruct", slug

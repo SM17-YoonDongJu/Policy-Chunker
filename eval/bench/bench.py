@@ -43,6 +43,8 @@ REPO = Path(__file__).resolve().parent.parent.parent
 DEFS = Path(os.environ.get("BENCH_HOME") or Path(__file__).resolve().parent)
 BENCH = Path(os.environ.get("BENCH_DATA") or DEFS)
 WORKTREE = "WORKTREE"  # ref 자리에 쓰면 커밋 안 된 변경까지 포함한 현재 작업 트리
+# stage_runner의 단계 순서(ORDER)와 같다. bench는 chunker를 import하지 않으므로 따로 둔다.
+STAGES = ["layout", "text", "tables_cpu", "vlm", "combine", "chunk", "embed"]
 
 sys.path.insert(0, str(REPO))
 
@@ -200,8 +202,45 @@ def run_doc(code_dir: Path, doc: dict[str, Any], variant: dict[str, Any], report
             "error": (r.stderr or "")[-800:] if r.returncode else None}
 
 
+def _calls_vlm(env: dict[str, str], to_stage: str) -> bool:
+    if env.get("VLM_BACKEND", "local") != "local":
+        return False
+    if STAGES.index(to_stage) < STAGES.index("vlm"):
+        return False
+    # vlm-plan처럼 페이지 전체 경로의 상한이 0이면 대상만 정하고 부르지 않는다
+    return not (env.get("LAYOUT_BACKEND") == "off" and env.get("VISION_MAX_PAGES") == "0")
+
+
+def vlm_preflight(variant: dict[str, Any], to_stage: str) -> None:
+    """VLM을 부르는 변형이면 서버가 그 모델을 서빙하는지 먼저 본다.
+
+    서버가 모르는 모델이면 chunker는 페이지마다 404를 받고 VLM_FAIL_STREAK로 문서를 접는다 —
+    실행은 끝나고, 표가 빠진 결과가 그 변형 이름으로 results/에 덮어써진다. 서버가 바뀐 뒤
+    (qwen3-vl → PaddleOCR-VL) 예전 변형을 돌리면 그렇게 된다. 그래서 돌기 전에 멈춘다.
+    VLM_MODEL이 비어 있으면(llama-server는 모델명을 안 받는다) 확인할 것이 없다.
+    """
+    env = {**os.environ, **{k: str(v) for k, v in variant["env"].items()}}
+    model = env.get("VLM_MODEL")
+    if not model or not _calls_vlm(env, to_stage):
+        return
+    import requests
+
+    url = env.get("VLM_URL", "http://localhost:11434")
+    try:
+        resp = requests.get(f"{url}/v1/models", timeout=5)
+        resp.raise_for_status()
+        served = [m.get("id") for m in resp.json().get("data", [])]
+    except (requests.RequestException, ValueError) as e:
+        raise SystemExit(f"{variant['slug']}: VLM 서버 {url}에서 모델 목록을 못 읽었다 — {e}")
+    if model not in served:
+        raise SystemExit(f"{variant['slug']}: VLM 서버 {url}가 {model}을 서빙하지 않는다 "
+                         f"(서빙 중: {', '.join(map(str, served)) or '없음'}). 이 변형이 재던 "
+                         "모델을 띄우거나, 변형의 VLM_MODEL을 확인한다")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     docset, variant = load_docset(args.docset), load_variant(args.variant)
+    vlm_preflight(variant, args.to_stage)
     code_dir, version = checkout(variant["ref"])
     out_dir = BENCH / "results" / variant["slug"] / docset["name"]
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -465,7 +504,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def main(argv: Optional[list[str]] = None) -> None:
-    stages = ["layout", "text", "tables_cpu", "vlm", "combine", "chunk", "embed"]
+    stages = STAGES
     p = argparse.ArgumentParser(description="고정 문서셋 × 변형 벤치마크")
     sub = p.add_subparsers(dest="cmd", required=True)
 
