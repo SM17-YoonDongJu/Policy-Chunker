@@ -96,6 +96,7 @@ def _stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
         import importlib.util
         return {"backend": layout_mod.LAYOUT_BACKEND, "model": layout_mod.LAYOUT_MODEL,
                 "min_score": layout_mod.LAYOUT_MIN_SCORE, "dpi": layout_mod.LAYOUT_DPI,
+                "device": layout_mod.LAYOUT_DEVICE,
                 # paddleocr가 없으면 enabled=False 산출물이 만들어진다. 설치 여부를 키에
                 # 넣어야 나중에 의존을 깔았을 때 그 '꺼진' 산출물을 재사용하지 않는다.
                 "installed": importlib.util.find_spec("paddleocr") is not None}

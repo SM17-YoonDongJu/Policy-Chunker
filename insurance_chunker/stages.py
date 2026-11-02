@@ -480,7 +480,8 @@ def overlapped(pdf_path: str, use_vision: bool = True
     lay = LayoutResult(enabled=True, boxes=boxes_by_page, ocr_pages=ocr_pages)
     s_layout = StageResult("layout", lay, round(sum(layout_secs), 2), CPU, {
         "enabled": True, "model": layout_mod.LAYOUT_MODEL, "min_score": layout_mod.LAYOUT_MIN_SCORE,
-        "blank_skipped": blank, "table_pages": len(boxes_by_page), "boxes": n_boxes,
+        "device": layout_mod.LAYOUT_DEVICE, "blank_skipped": blank,
+        "table_pages": len(boxes_by_page), "boxes": n_boxes,
         "ocr_pages": len(ocr_pages),
         "page_sec_p50": sorted(layout_secs)[len(layout_secs) // 2] if layout_secs else None,
         "page_sec_max": max(layout_secs) if layout_secs else None, "overlap": True})
