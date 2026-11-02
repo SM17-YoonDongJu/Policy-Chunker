@@ -362,9 +362,168 @@ def table_cell_match(pages: list[PageResult], pdf_path: str) -> dict[str, Any]:
             "cells": total, "per_page": per_page}
 
 
+# ── 레이아웃·VLM 겹치기 ──────────────────────────────────────────────────────
+# Paddle 전환으로 VLM(0.9B, 표 영역 단위)이 빨라지자 CPU 단계(레이아웃 쪽당 약 0.9초 + PyMuPDF
+# 표)와 GPU 단계(VLM)가 같은 규모가 됐다(2026-11-02, smoke 296쪽: CPU 약 330초, VLM 추정
+# 190~580초). 순차로 돌리면 문서 시간은 둘의 합이다. 표 영역은 레이아웃 결과에만 의존하므로,
+# 레이아웃이 쪽마다 박스를 찾는 대로 VLM에 넘기면 두 단계가 겹쳐 둘 중 큰 쪽에 가까워진다.
+#
+# 결과는 순차 경로와 같아야 한다 — VLM 대상의 내용과 순서(OCR 쪽 먼저, 그다음 쪽 순서대로
+# 박스), 상한(VISION_MAX_CROPS) 적용 순서가 같고, 결과는 대상 순서로 모인다(VlmStage.run).
+# 기본은 꺼짐. 켜고 끈 결과 동일성은 tests/test_overlap.py가 고정한다.
+PIPELINE_OVERLAP = os.environ.get("PIPELINE_OVERLAP", "0") == "1"
+# 흘려 받을 때 렌더해 두고 기다리게 하는 호출 수. 작으면 표 없는 쪽이 이어지는 동안 VLM이 논다.
+OVERLAP_WINDOW = int(os.environ.get("OVERLAP_WINDOW", "32"))
+
+
+class OverlapUnavailable(Exception):
+    """레이아웃 모델을 못 열었다 — 호출부는 순차 경로로 돌아간다(거기서 기존 경로로 떨어진다)."""
+
+
+def overlap_applicable(use_vision: bool = True) -> bool:
+    """겹치기 경로를 쓸 수 있는 설정인가. 아니면 순차 경로가 예전 그대로 돈다."""
+    from . import extractor
+    from . import layout as layout_mod
+
+    return (PIPELINE_OVERLAP and use_vision and extractor.VLM_BACKEND not in ("off", "surya")
+            and layout_mod.LAYOUT_BACKEND != "off" and layout_mod.available())
+
+
+def overlapped(pdf_path: str, use_vision: bool = True
+               ) -> tuple[StageResult, StageResult, StageResult, float]:
+    """레이아웃(S1)·PyMuPDF 표(S3)·VLM(S4)을 겹쳐 돌린다 → (layout, tables_cpu, vlm, 벽시계초).
+
+    메인 스레드가 쪽마다 레이아웃 → PyMuPDF 표를 하고, 찾은 박스를 바로 VLM 대상으로 내놓는다.
+    VLM은 작업 스레드에서 동시에 돈다. 단계 seconds는 각 단계가 실제로 일한 시간이다 — 레이아웃·
+    PyMuPDF는 쪽마다 잰 합, VLM은 호출이 진행 중이던 구간의 합(VlmStage.busy_seconds). 벽시계는
+    따로 돌려준다. 단계 합에서 벽시계를 빼면 겹쳐서 아낀 시간이다.
+    """
+    import pymupdf as fitz
+
+    from . import extractor
+    from . import layout as layout_mod
+    from .vlm_stage import VlmStage
+
+    extractor.reset_vision_counter()
+    t_wall = time.perf_counter()
+    boxes_by_page: dict[int, list[dict]] = {}
+    ocr_pages: list[int] = []
+    layout_secs: list[float] = []
+    pymupdf_tables: dict[int, str] = {}
+    pym_sec = 0.0
+    targets: list[dict] = []
+    blank = 0
+
+    with fitz.open(pdf_path) as doc:
+        n = doc.page_count
+        # 백지·OCR 대상은 싼 신호라 먼저 훑는다(쪽당 수 ms) — detect_tables와 같은 판정이다.
+        # OCR 대상을 먼저 알아야 대상 순서(OCR 먼저)를 순차 경로와 같게 지킬 수 있다.
+        nonblank: list[int] = []
+        for pno in range(1, n + 1):
+            page = doc[pno - 1]
+            if layout_mod.skip_blank(page):
+                blank += 1
+                continue
+            nonblank.append(pno)
+            if layout_mod.needs_ocr(page):
+                ocr_pages.append(pno)
+        nonblank_set = set(nonblank)
+
+        def layout_page(pno: int) -> list[dict]:
+            t0 = time.perf_counter()
+            boxes = layout_mod.page_table_boxes(doc[pno - 1])
+            layout_secs.append(round(time.perf_counter() - t0, 3))
+            if layout_mod._load_failed:
+                raise OverlapUnavailable()
+            if boxes:
+                boxes_by_page[pno] = boxes
+            return boxes
+
+        def gen():
+            nonlocal pym_sec
+            # 모델이 열리는지부터 본다 — 대상을 하나라도 내놓기 전에 실패해야 깔끔히 물러난다
+            first = layout_page(nonblank[0]) if nonblank else []
+            for pno in ocr_pages:
+                t = {"page": pno, "ocr": True}
+                targets.append(t)
+                yield t
+            for pno in range(1, n + 1):
+                if pno not in nonblank_set:
+                    boxes = []
+                elif pno == nonblank[0]:
+                    boxes = first
+                else:
+                    boxes = layout_page(pno)
+                t0 = time.perf_counter()
+                md = extractor.extract_pymupdf(doc[pno - 1])
+                pym_sec += time.perf_counter() - t0
+                if md:
+                    pymupdf_tables[pno] = md
+                for b in boxes:
+                    t = {"page": pno, "bbox": list(b["bbox_pdf"])}
+                    targets.append(t)
+                    yield t
+
+        stage = VlmStage(budget=extractor.VISION_MAX_CROPS)
+        vlm_tables = stage.run(doc, gen(), window=max(stage.concurrency * 2, OVERLAP_WINDOW))
+        if extractor.VLM_SNAP_TEXT and vlm_tables:
+            extractor._snap_tables(doc, [t for t in targets if "bbox" in t], vlm_tables)
+        extractor._publish(stage)
+    wall = round(time.perf_counter() - t_wall, 2)
+
+    n_boxes = sum(len(v) for v in boxes_by_page.values())
+    logger.info(f"VLM 대상: {len(targets)}영역 (전체 {n}페이지, layout crop, 겹치기, "
+                f"PyMuPDF표 {len(pymupdf_tables)}쪽, backend={extractor.VLM_BACKEND}, "
+                f"model={extractor.VLM_MODEL})",
+                extra={"event": "vlm_targets", "target": "crop", "pages": len(targets),
+                       "pymupdf_pages": len(pymupdf_tables), "gap_pages": 0, "overlap": True})
+    lay = LayoutResult(enabled=True, boxes=boxes_by_page, ocr_pages=ocr_pages)
+    s_layout = StageResult("layout", lay, round(sum(layout_secs), 2), CPU, {
+        "enabled": True, "model": layout_mod.LAYOUT_MODEL, "min_score": layout_mod.LAYOUT_MIN_SCORE,
+        "blank_skipped": blank, "table_pages": len(boxes_by_page), "boxes": n_boxes,
+        "ocr_pages": len(ocr_pages),
+        "page_sec_p50": sorted(layout_secs)[len(layout_secs) // 2] if layout_secs else None,
+        "page_sec_max": max(layout_secs) if layout_secs else None, "overlap": True})
+    info = {"pymupdf_pages": len(pymupdf_tables), "gap_pages": 0, "crops": len(targets),
+            "ocr_pages": len(ocr_pages)}
+    cpu = TablesCpu(sources={"pymupdf": pymupdf_tables}, targets=targets,
+                    page_numbers=list(range(1, n + 1)), info=info)
+    s_tables = StageResult("tables_cpu", cpu, round(pym_sec, 2), CPU, {
+        "table_pages": {"pymupdf": len(pymupdf_tables)}, "gap_pages": 0,
+        "ocr_pages": len(ocr_pages), "vlm_targets": len(targets), "overlap": True})
+    out = VlmOut(tables=vlm_tables, ocr_text=extractor.vision_ocr_texts())
+    s_vlm = StageResult("vlm", out, stage.busy_seconds(), GPU, {
+        "targets": len(targets), "concurrency": extractor.VLM_CONCURRENCY,
+        "calls": extractor._vision_call_count, "tables": len(vlm_tables),
+        "ocr_targets": len(ocr_pages), "ocr_recovered": len(out.ocr_text),
+        "circuit_open": extractor.vision_circuit_open(),
+        "snapped_cells": extractor._snap_count,
+        "overlap": True, "overlap_wall_s": wall,
+        **vlm_call_summary(extractor.vision_page_stats())})
+    return s_layout, s_tables, s_vlm, wall
+
+
 def parse(pdf_path: str, use_ocr: bool = True,
           use_vision: bool = True) -> tuple[list[PageResult], list[StageResult]]:
-    """S1~S5를 이어 부른다 — parse_pdf와 같은 결과에 단계별 기록이 붙는다."""
+    """S1~S5를 이어 부른다 — parse_pdf와 같은 결과에 단계별 기록이 붙는다.
+
+    PIPELINE_OVERLAP=1이고 레이아웃·VLM을 쓰는 설정이면 S1·S3·S4를 겹쳐 돈다(overlapped).
+    결과는 같고 시간만 다르다.
+    """
+    if overlap_applicable(use_vision):
+        try:
+            s1, s3, s4, _wall = overlapped(pdf_path, use_vision=use_vision)
+        except OverlapUnavailable:
+            logger.warning("레이아웃 모델을 못 열어 겹치기 없이 순차로 돈다",
+                           extra={"event": "overlap_fallback"})
+        else:
+            s2 = text(pdf_path, use_ocr=use_ocr, layout_result=s1.output)
+            pages, _ = s2.output
+            counts = {k: len(v) for k, v in table_sources(s3.output, s4.output.tables).items()}
+            logger.info(f"표 추출 완료: {counts}")
+            s5 = combine(pages, s3.output, s4.output, layout_result=s1.output)
+            logger.info(f"표 부착 완료: {s5.metrics['table_pages']}페이지")
+            return s5.output, [s1, s2, s3, s4, s5]
     s1 = layout(pdf_path)
     s2 = text(pdf_path, use_ocr=use_ocr, layout_result=s1.output)
     pages, page_numbers = s2.output

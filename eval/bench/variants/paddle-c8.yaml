@@ -1,0 +1,14 @@
+# 동시도 8. vLLM /metrics의 num_requests_waiting이 0을 넘기 시작하는 동시도가 실질 상한이다.
+slug: paddle-c8
+ref: WORKTREE
+env:
+  VLM_BACKEND: local
+  VLM_MODEL: PaddleOCR-VL-1.6-0.9B
+  VLM_DPI: "200"
+  VLM_TIMEOUT: "60"
+  VLM_CONCURRENCY: "8"
+  VISION_MAX_CROPS: "300"
+  LAYOUT_BACKEND: paddle
+  LAYOUT_MODEL: PP-DocLayoutV3
+  LAYOUT_MIN_SCORE: "0.5"
+status: draft
