@@ -200,7 +200,7 @@ def vlm(pdf_path: str, cpu: TablesCpu, use_vision: bool = True) -> StageResult:
     out = VlmOut(tables=tables, ocr_text=extractor.vision_ocr_texts())
     return StageResult("vlm", out, sec, GPU, {
         "targets": len(cpu.targets),
-        "concurrency": extractor.VLM_CONCURRENCY,
+        **extractor.vision_concurrency(),
         "calls": extractor._vision_call_count,
         "tables": len(tables),
         "ocr_targets": cpu.info.get("ocr_pages", 0),
@@ -500,7 +500,7 @@ def overlapped(pdf_path: str, use_vision: bool = True
         "ocr_pages": len(ocr_pages), "vlm_targets": len(targets), "overlap": True})
     out = VlmOut(tables=vlm_tables, ocr_text=extractor.vision_ocr_texts())
     s_vlm = StageResult("vlm", out, stage.busy_seconds(), GPU, {
-        "targets": len(targets), "concurrency": extractor.VLM_CONCURRENCY,
+        "targets": len(targets), **extractor.vision_concurrency(),
         "calls": extractor._vision_call_count, "tables": len(vlm_tables),
         "ocr_targets": len(ocr_pages), "ocr_recovered": len(out.ocr_text),
         "circuit_open": extractor.vision_circuit_open(),

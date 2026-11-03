@@ -16,6 +16,9 @@ continuous batching으로 여러 요청을 한 번에 디코딩할 수 있는데
     호출'이 나가지 않는다. 동시도 N이면 이미 날아간 N-1건까지는 끝난다(되돌릴 수 없다)
   - 결과는 페이지 번호로 모으므로 완료 순서와 무관하다. 동시도를 바꿔도 같은 입력이면 같은 결과다
 
+동시도는 VLM_CONCURRENCY가 상한이고, 자동 조정(vlm_limiter, 기본 켜짐)이면 작업 스레드가 호출 직전에
+조정기의 자리를 얻는다 — vLLM을 OCR worker와 나눠 쓰므로 서버 대기열이 생기면 이쪽이 물러선다.
+
 동시도의 상한은 서버가 정한다. vLLM은 KV 캐시 여유만큼만 동시에 처리하고(운영 설정에서 6,144토큰
 요청 기준 3.17배), 넘치면 대기시킨다. 대기 시간도 클라이언트 읽기 타임아웃(VLM_TIMEOUT)에 들어가므로
 동시도를 서버 여유보다 높이면 빨라지지 않고 타임아웃만 는다.
@@ -28,7 +31,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Iterable, Optional
 
-from . import extractor
+from . import extractor, vlm_limiter
 
 logger = logging.getLogger("insurance_chunker.extractor")  # 운영 로그 쿼리가 이 이름을 본다
 
@@ -49,6 +52,10 @@ class VlmStage:
         self.total_targets = 0               # 받은 대상 수(상한 밖 포함) — 흘려 받으면 끝나야 안다
         self._spans: list[tuple[float, float]] = []  # 호출마다 (시작, 끝) — busy_seconds 계산용
         self._lock = threading.Lock()
+        # 자동 조정이면 작업 스레드(= 상한 concurrency개)가 호출 직전에 이 안으로 들어간다.
+        # None이면 고정 동시도 — 스레드 수가 곧 동시도다.
+        self._limit = vlm_limiter.get()
+        self.limit_range: Optional[list[int]] = None  # 이 문서 동안 실제로 적용된 상한 [최소, 최대]
 
     # ── 작업 스레드 ──────────────────────────────────────────────────────────
 
@@ -60,10 +67,26 @@ class VlmStage:
 
     def _task(self, i: int, total: int, pno: int,
               rendered: Optional[tuple[str, int]], task: str = "table") -> object:
+        # 자동 조정이면 상한 자리를 얻은 뒤에 차단기를 본다 — 기다리는 사이 차단기가 열렸으면
+        # 부르지 않는다. 그래야 차단 뒤에 더 끝나는 호출이 '그 순간 날아가 있던 것'으로 묶인다.
+        if self._limit is not None:
+            self._limit.acquire()
+        try:
+            return self._call(i, total, pno, rendered, task)
+        finally:
+            if self._limit is not None:
+                self._limit.release()
+
+    def _call(self, i: int, total: int, pno: int,
+              rendered: Optional[tuple[str, int]], task: str) -> object:
         with self._lock:
             if self.circuit_open:
                 return _SKIPPED
             self.calls += 1
+            if self._limit is not None:
+                lim = self._limit.limit
+                lo, hi = self.limit_range or (lim, lim)
+                self.limit_range = [min(lo, lim), max(hi, lim)]
         logger.info(f"VLM [{i}/{total}] p{pno} 처리 중...")
         if rendered is None:  # 렌더 실패는 서버 장애가 아니다 — 연속 실패를 끊는다
             with self._lock:

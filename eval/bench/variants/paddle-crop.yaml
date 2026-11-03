@@ -15,6 +15,7 @@ env:
   VLM_DPI: "200"
   VLM_TIMEOUT: "60"
   VLM_CONCURRENCY: "3"
+  VLM_ADAPTIVE: "0"   # 고정 동시도 측정 — 코드 기본은 자동 조정
   VISION_MAX_CROPS: "300"
   LAYOUT_BACKEND: paddle
   LAYOUT_MODEL: PP-DocLayoutV3

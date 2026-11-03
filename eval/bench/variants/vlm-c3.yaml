@@ -11,6 +11,7 @@ env:
   VLM_DPI: "150"
   VISION_MAX_PAGES: "50"
   VLM_CONCURRENCY: "3"
+  VLM_ADAPTIVE: "0"   # 고정 동시도 측정 — 코드 기본은 자동 조정
   LAYOUT_BACKEND: "off"   # 코드 기본이 paddle로 바뀜 — 이 변형은 기존 경로 측정
   VLM_TIMEOUT: "300"      # 기본값이 60(crop 기준)으로 내려감 — 페이지 전체 경로는 300
 expect_identical_to: baseline

@@ -346,7 +346,8 @@ def test_document_loop_stops_calling_after_the_circuit_opens(ex, monkeypatch, ta
     없을 때 214페이지짜리 문서가 페이지마다 600초를 기다려 35.6시간을 태웠다.
     6페이지 문서에서 VLM_FAIL_STREAK=2면 호출은 2번에서 멈춰야 한다.
     """
-    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2", VLM_TARGET="tables")
+    extractor = ex(VLM_BACKEND="local", VLM_MODEL="m", VLM_FAIL_STREAK="2", VLM_TARGET="tables",
+               VLM_CONCURRENCY="1")  # 순차 계약 — 동시도 N의 차단은 test_vlm_stage가 본다
     calls = _always_fail(monkeypatch)
     sources = extractor.extract_tables_for_doc(table_pdf, list(range(1, 7)), use_vision=True)
     assert len(sources["pymupdf"]) == 6, "표 6페이지가 잡혀야 의미 있는 검증이다"

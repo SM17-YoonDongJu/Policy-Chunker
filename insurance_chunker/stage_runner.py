@@ -87,7 +87,7 @@ _OVERLAP_GROUP = ("layout", "tables_cpu", "vlm")
 
 
 def _stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
-    from . import embedder, extractor
+    from . import embedder, extractor, vlm_limiter
 
     if name == "layout":
         from . import layout as layout_mod
@@ -118,6 +118,7 @@ def _stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
                 # 결과는 바꾸지 않지만 시간을 바꾼다. 키에서 빼면 동시도만 바꾼 변형이 기준선의
                 # VLM 산출물(과 그때 잰 시간)을 재사용해 '개선 없음'으로 보인다.
                 "concurrency": extractor.VLM_CONCURRENCY,
+                "adaptive": vlm_limiter.settings()["adaptive"] and extractor.VLM_CONCURRENCY > 1,
                 "prompt": hashlib.sha256(extractor.VLM_PROMPT.encode()).hexdigest()[:12],
                 "ocr_prompt": hashlib.sha256(
                     extractor.VLM_OCR_PROMPT.encode()).hexdigest()[:12]}

@@ -11,6 +11,7 @@ env:
   VLM_TARGET: gap
   VLM_DPI: "150"
   VISION_MAX_PAGES: "50"
+  VLM_CONCURRENCY: "1"     # qwen 시절 순차 측정 — 코드 기본이 16으로 바뀜
   VLM_TIMEOUT: "301"
   LAYOUT_BACKEND: "off"   # 코드 기본이 paddle로 바뀜 — 이 변형은 기존 경로 측정
 expect_identical_to: baseline
