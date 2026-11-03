@@ -294,6 +294,7 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `LAYOUT_MODEL` | `PP-DocLayoutV3` | 레이아웃 모델. 로드 실패 시 V2 → plus-L 순 폴백 |
 | `LAYOUT_MIN_SCORE` | `0.5` | 표 박스 점수 임계 |
 | `LAYOUT_DPI` | `150` | 레이아웃 입력 렌더 해상도 (crop 렌더는 `VLM_DPI`) |
+| `LAYOUT_DEVICE` | `cpu` | 레이아웃 모델 장치. 운영은 `gpu:0`(T4에서 CPU의 34배, 결과 동일). GPU를 못 열면 CPU로 내려가고 `layout_device_fallback`을 남긴다 |
 | `INGEST_STATE_DIR` | `/data/state` | 실행 이력 디렉터리 (쓰기 불가 시 `./.state` 폴백) |
 | `INGEST_MAX_RETRY` | `3` | 0청크·오류 연속 N회면 문서를 격리 |
 | `INGEST_CONCURRENCY` | `1` | 동시 처리 문서 수 (프로세스). 노드 vCPU 4 기준 2가 현실적 |

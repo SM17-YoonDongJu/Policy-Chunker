@@ -10,9 +10,9 @@ PaddleOCR 공식 파이프라인(PaddleOCRVL)은 들이지 않는다 — 레이�
 쓰고 인식은 기존 VLM 경로(vLLM의 PaddleOCR-VL)가 한다. 결과는 실험에서 공식 파이프라인과
 동일했고, 공식 파이프라인은 vLLM 쪽 추가 플래그(trust-request-mm-kwargs)까지 요구한다.
 
-chunker 파드에는 GPU가 없으므로 기본은 device="cpu"다(LAYOUT_DEVICE로 바꾼다). 모델은
-프로세스당 한 번 lazy 로드한다 — paddle 런타임+모델이 수백 MB라 임포트 시점에 열면 레이아웃을
-안 쓰는 실행도 그 값을 낸다.
+기본은 device="cpu"이고 운영은 LAYOUT_DEVICE=gpu:0으로 vLLM과 같은 GPU에 올린다. GPU를 못 열면
+CPU로 내려간다(느리지만 레이아웃은 유지). 모델은 프로세스당 한 번 lazy 로드한다 — paddle
+런타임+모델이 수백 MB라 임포트 시점에 열면 레이아웃을 안 쓰는 실행도 그 값을 낸다.
 """
 from __future__ import annotations
 
@@ -39,7 +39,13 @@ LAYOUT_DEVICE = os.environ.get("LAYOUT_DEVICE", "cpu")
 
 _model = None
 _load_failed = False
+_device_in_use: str | None = None  # 실제로 모델을 연 장치 — GPU를 못 열어 CPU로 내려갔으면 "cpu"
 _lock = threading.Lock()
+
+
+def device() -> str:
+    """레이아웃이 도는 장치. 모델을 열기 전에는 요청값(LAYOUT_DEVICE), 연 뒤에는 실제 장치."""
+    return _device_in_use or LAYOUT_DEVICE
 
 
 def available() -> bool:
@@ -53,7 +59,7 @@ def _load_model():
     실패를 조용히 삼키면 운영에서 의존이 빠진 이미지가 "표 없는 문서"처럼 보인다 —
     반드시 소리를 내고, 호출부(stages.layout)는 enabled=False로 기존 경로로 간다.
     """
-    global _model, _load_failed
+    global _model, _load_failed, _device_in_use
     with _lock:
         if _model is not None or _load_failed:
             return _model
@@ -66,18 +72,39 @@ def _load_model():
                 extra={"event": "layout_disabled", "reason": "import"})
             return None
         names = [LAYOUT_MODEL] + [m for m in _MODEL_FALLBACKS if m != LAYOUT_MODEL]
+        # GPU를 못 열면(드라이버·장치가 없는 노드, CPU용 paddle 휠) 같은 모델을 CPU로 다시 연다.
+        # 레이아웃을 끄면 페이지 전체를 VLM에 보내는 경로로 가는데, 그 경로는 VLM_TIMEOUT 60초로
+        # 끝나지 않는다 — 34배 느린 CPU가 그보다 낫다.
+        devices = [LAYOUT_DEVICE] + (["cpu"] if LAYOUT_DEVICE != "cpu" else [])
+        last_err = ""
         for name in names:
-            try:
-                _model = LayoutDetection(model_name=name, device=LAYOUT_DEVICE)
-            except Exception as e:  # noqa: BLE001 - 모델 하나의 실패가 다음 후보를 막으면 안 된다
-                logger.warning(f"레이아웃 모델 {name} 로드 실패: {e}")
-                continue
-            if name != LAYOUT_MODEL:
-                logger.warning(f"레이아웃 모델 폴백: {LAYOUT_MODEL} → {name}",
-                               extra={"event": "layout_model_fallback", "model": name})
-            return _model
+            if "libcuda" in last_err:
+                break  # paddle 자체를 못 연다 — 다른 모델도 같은 이유로 실패하고 받기만 한다
+            for dev in devices:
+                try:
+                    _model = LayoutDetection(model_name=name, device=dev)
+                except Exception as e:  # noqa: BLE001 - 하나의 실패가 다음 후보를 막으면 안 된다
+                    logger.warning(f"레이아웃 모델 {name}({dev}) 로드 실패: {e}")
+                    last_err = str(e)
+                    if "libcuda" in last_err:
+                        break
+                    continue
+                _device_in_use = dev
+                if dev != LAYOUT_DEVICE:
+                    # 문서는 계속 처리되지만 레이아웃이 30배 넘게 느려진다 — 조용히 넘기지 않는다
+                    logger.error(f"레이아웃을 {LAYOUT_DEVICE}에서 못 열어 {dev}로 돈다",
+                                 extra={"event": "layout_device_fallback",
+                                        "requested": LAYOUT_DEVICE, "device": dev})
+                if name != LAYOUT_MODEL:
+                    logger.warning(f"레이아웃 모델 폴백: {LAYOUT_MODEL} → {name}",
+                                   extra={"event": "layout_model_fallback", "model": name})
+                return _model
         _load_failed = True
-        logger.error("레이아웃 모델을 하나도 못 열었다 — 기존 경로로 간다",
+        # GPU용 paddle은 드라이버 라이브러리에 직접 링크돼 CPU로도 못 연다(Dockerfile 주석).
+        hint = (" — GPU용 paddle인데 드라이버(libcuda)가 없다. 파드에 GPU를 주거나 "
+                "NVIDIA_VISIBLE_DEVICES=none으로 드라이버 라이브러리를 넣는다"
+                if "libcuda" in last_err else "")
+        logger.error(f"레이아웃 모델을 하나도 못 열었다 — 기존 경로로 간다{hint}",
                      extra={"event": "layout_disabled", "reason": "load"})
         return None
 
@@ -183,7 +210,7 @@ def detect_tables(
                 break  # 모델이 없다 — 남은 쪽을 돌아도 전부 빈손이다
     n_boxes = sum(len(v) for v in boxes_by_page.values())
     metrics = {
-        "model": LAYOUT_MODEL, "min_score": LAYOUT_MIN_SCORE, "device": LAYOUT_DEVICE,
+        "model": LAYOUT_MODEL, "min_score": LAYOUT_MIN_SCORE, "device": device(),
         "blank_skipped": blank, "table_pages": len(boxes_by_page), "boxes": n_boxes,
         "ocr_pages": len(ocr_pages),
         "page_sec_p50": sorted(secs)[len(secs) // 2] if secs else None,
@@ -194,7 +221,8 @@ def detect_tables(
 
 def reset_for_tests() -> None:
     """테스트 전용 — 로드 상태를 되돌린다(모듈 reload 없이 가짜 모델을 끼우기 위해)."""
-    global _model, _load_failed
+    global _model, _load_failed, _device_in_use
     with _lock:
         _model = None
         _load_failed = False
+        _device_in_use = None
