@@ -50,13 +50,15 @@ VLM_CONNECT_TIMEOUT = float(os.environ.get("VLM_CONNECT_TIMEOUT", "5"))
 # 없을 때 무슨 일이 생기는지 겪었다 — 표 214페이지짜리 문서가 페이지마다 600초를
 # 기다리며 35.6시간을 태웠다. 서버가 죽었으면 215번째 시도도 죽는다.
 VLM_FAIL_STREAK = int(os.environ.get("VLM_FAIL_STREAK", "3"))
-# 문서 하나 안에서 VLM을 동시에 몇 건까지 부를지. 기본 1 = 예전 순차 동작.
+# 문서 하나 안에서 VLM을 동시에 몇 건까지 부를지. 1이면 예전 순차 동작.
 # 페이지끼리 의존이 없고 서버(vLLM)는 continuous batching으로 여러 요청을 한 번에 디코딩한다.
-# 운영 VLM은 생성 속도가 병목이라(18.7토큰/초, 페이지당 p50 88.6초) 동시 요청이 곧 처리량이다.
-# 상한은 서버의 KV 캐시 여유다 — 운영 설정에서 6,144토큰 요청 기준 3.17배. 넘기면 서버가
-# 대기시키고 그 대기도 VLM_TIMEOUT에 들어가 타임아웃만 는다. 문서 병렬(INGEST_CONCURRENCY)과
-# 곱해진다는 점도 주의.
-VLM_CONCURRENCY = int(os.environ.get("VLM_CONCURRENCY", "1"))
+# 기본 16은 이 파이프라인이 vLLM을 혼자 쓸 때의 값이다(PaddleOCR-VL-0.9B, T4 실측 — 16에서도
+# 대기 0, KV 여유 34배). 같은 vLLM을 OCR worker와 나눠 쓰므로 이 값은 '상한'이고, 실제 동시도는
+# vlm_limiter가 vLLM /metrics의 num_requests_waiting을 보고 줄였다 늘린다(VLM_ADAPTIVE, 기본 켜짐).
+# 서버가 감당 못 하는 요청은 대기열에서 기다리고 그 대기도 VLM_TIMEOUT에 들어가 빨라지지 않고
+# 타임아웃만 늘기 때문이다. 문서 병렬(INGEST_CONCURRENCY)은 프로세스 단위라 프로세스마다 이 상한을
+# 따로 갖는다 — 서버에 걸리는 요청의 최대는 INGEST_CONCURRENCY x VLM_CONCURRENCY다.
+VLM_CONCURRENCY = max(1, int(os.environ.get("VLM_CONCURRENCY", "16")))
 # VLM을 어느 페이지에 투입할 것인가.
 #
 #   gap    (기본) PyMuPDF가 닿지 못한 페이지 — 텍스트 레이어가 없거나 표를 못 찾은 곳
@@ -154,6 +156,7 @@ _snap_count = 0
 # 이 문서에서 OCR로 복구한 쪽의 본문({page: text}). VlmStage가 만들고 _publish가 옮긴다 —
 # 표(extract_vlm_tables 반환값)와 수명은 같지만 쓰임이 달라(본문 채움) 따로 든다.
 _ocr_texts: dict[int, str] = {}
+_vision_limit_range: Optional[list[int]] = None  # 자동 조정이 이 문서에 적용한 상한 [최소, 최대]
 
 
 class _VLMCallFailed(Exception):
@@ -167,11 +170,13 @@ def reset_vision_counter() -> None:
     포기할 이유가 없다. 반대로 한 문서 안에서는 한 번 접었으면 끝까지 접는다.
     """
     global _vision_call_count, _vision_fail_streak, _vision_page_stats, _snap_count, _ocr_texts
+    global _vision_limit_range
     _vision_call_count = 0
     _vision_fail_streak = 0
     _vision_page_stats = []
     _snap_count = 0
     _ocr_texts = {}
+    _vision_limit_range = None
 
 
 def vision_page_stats() -> list[dict]:
@@ -188,6 +193,12 @@ def _vlm_outcome(exc: Exception) -> str:
     """실패를 타임아웃과 그 밖으로 가른다. 타임아웃 비율이 VLM_TIMEOUT 조정의 근거가 된다."""
     import requests
     return "timeout" if isinstance(exc, requests.Timeout) else "error"
+
+
+def vision_concurrency() -> dict:
+    """단계 지표용 동시도 — 상한(VLM_CONCURRENCY), 자동 조정 여부, 이 문서에 실제로 적용된 범위."""
+    return {"concurrency": VLM_CONCURRENCY, "adaptive": _vision_limit_range is not None,
+            "concurrency_range": _vision_limit_range}
 
 
 def vision_circuit_open() -> bool:
@@ -918,7 +929,9 @@ def _publish(stage) -> None:
     한 번 옮기므로 병렬 호출 중에는 모듈 상태를 아무도 건드리지 않는다.
     """
     global _vision_call_count, _vision_fail_streak, _vision_page_stats, _ocr_texts
+    global _vision_limit_range
     _vision_call_count = stage.calls
+    _vision_limit_range = stage.limit_range
     _vision_fail_streak = VLM_FAIL_STREAK if stage.circuit_open else stage.streak
     _vision_page_stats = list(stage.stats)
     _ocr_texts = dict(stage.ocr_texts)

@@ -279,6 +279,11 @@ regex 기반 자동 분류다. 오분류 가능성이 있으므로 MVP 단계에
 | `VLM_DPI` | `200` | VLM 렌더링 해상도. crop 입력은 원본 해상도가 거의 그대로 들어가 200이 유효하다 |
 | `VLM_TIMEOUT` | `60` | VLM **읽기** 타임아웃(초). 영역 하나 1~3초 기준. `LAYOUT_BACKEND=off`(페이지 전체)로 되돌리면 `300`을 줘야 한다 |
 | `VLM_CONNECT_TIMEOUT` | `5` | 접속 타임아웃(초). 서버가 없으면 즉시 실패해야 한다 |
+| `VLM_CONCURRENCY` | `16` | VLM 동시 호출 수의 **상한**(프로세스당). 자동 조정이 켜져 있으면 실제 동시도는 이 안에서 움직인다. 서버에 걸리는 요청의 최대는 `INGEST_CONCURRENCY` × 이 값. `1`이면 순차(조정 없음) |
+| `VLM_ADAPTIVE` | `1` | vLLM `/metrics`의 `num_requests_waiting`을 보고 동시도를 자동 조정. 대기 > 0이면 절반으로, 대기 0이 이어지고 상한에 막혀 있으면 +1. vLLM을 OCR worker와 나눠 쓰므로 붐비면 이쪽이 물러선다. `/metrics`를 못 읽으면 상한 고정. `0`이면 `VLM_CONCURRENCY` 고정 |
+| `VLM_CONCURRENCY_MIN` | `1` | 자동 조정이 내려갈 수 있는 바닥 |
+| `VLM_ADAPT_INTERVAL` | `2` | `/metrics` 폴링 간격(초) |
+| `VLM_ADAPT_COOLDOWN` | `3` | 내린 뒤 다시 올리기 시작할 때까지 필요한 '대기 0' 폴링 수 |
 | `VLM_FAIL_STREAK` | `3` | 연속 실패 N회면 그 문서의 남은 페이지는 VLM 건너뜀 |
 | `VLM_TARGET` | `gap` | VLM 투입 대상. `gap`=PyMuPDF가 못 닿은 페이지 \| `tables`=표 탐지 페이지(구동작) \| `both` |
 | `TABLE_BORDER_FRAC` | `0.6` | find_tables 박스가 쪽 면적의 이 비율 이상 + 셀 희박이면 본문 테두리로 보고 표에서 뺀다 |
