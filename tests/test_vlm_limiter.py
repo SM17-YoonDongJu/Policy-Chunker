@@ -125,11 +125,14 @@ def test_server_queue_drives_the_limit_down_during_a_document(adaptive, monkeypa
     srv = _install(monkeypatch, _Server(delay=0.15))
     with caplog.at_level(logging.INFO, logger="insurance_chunker.extractor"):
         _, vlm = _run(extractor, table_pdf)
-    lo, hi = vlm.metrics["concurrency_range"]
-    assert lo == 1 and hi == 8, f"대기열을 보고 바닥까지 물러서야 한다: {lo}~{hi}"
+    # 첫 호출이 언제 자리를 얻느냐는 러너 속도에 달렸다 — 느린 CI에선 첫 호출 전에 폴러가 이미
+    # 8 → 4로 내려 범위가 1~4로 찍혔다(2026-11-03). 그래서 범위의 위쪽 대신 조정 기록으로 본다.
+    lo, _ = vlm.metrics["concurrency_range"]
+    assert lo == 1, f"대기열을 보고 바닥까지 물러서야 한다: {vlm.metrics['concurrency_range']}"
     assert srv.calls == 8 and vlm.metrics["tables"] == 8, "물러서도 대상은 다 부른다"
-    changes = [r for r in caplog.records if getattr(r, "event", "") == "vlm_concurrency_change"]
-    assert changes and changes[0].old == 8 and changes[0].new == 4
+    changes = [(r.old, r.new) for r in caplog.records
+               if getattr(r, "event", "") == "vlm_concurrency_change"]
+    assert changes[:3] == [(8, 4), (4, 2), (2, 1)]
 
 
 def test_limit_recovers_when_the_queue_clears(adaptive, monkeypatch, table_pdf):  # noqa: F811
