@@ -329,3 +329,27 @@ def test_pool_worker_crash_becomes_an_error_result(monkeypatch):
     out = {t["name"]: r["status"] for t, r in
            ingest_catalog._run_tasks([{"name": n} for n in ("a.pdf", "b.pdf", "c.pdf")], 2)}
     assert out == {"a.pdf": "OK", "b.pdf": "ERROR", "c.pdf": "OK"}
+
+
+def test_process_one_tags_its_logs_with_the_document(monkeypatch, tmp_path):
+    """문서를 처리하는 동안 찍히는 로그에 그 문서가 실린다 — VLM 타임아웃 줄 하나로 어느 보험사의
+    어느 약관인지 알고 S3에서 원본을 받을 수 있어야 한다. 끝나면 다음 문서로 새지 않는다."""
+    import types
+
+    from insurance_chunker import logctx
+    seen: dict = {}
+
+    def fake_run(spec, args, dry_run_dir):
+        seen.update(logctx.current())
+        return {"status": "OK", "chunks": 1}
+
+    monkeypatch.setitem(sys.modules, "ingest_many", types.SimpleNamespace(run_one_safe=fake_run))
+    monkeypatch.setattr(ingest_catalog, "_download", lambda bucket, key, dest: True)
+    row = {"sha256": "abc123", "company": "메리츠화재", "product_name": "단체안심생활보험",
+           "product_code": None, "effective_date": None, "category": "terms",
+           "s3_key": "corpus/terms/abc123.pdf"}
+    ingest_catalog._process_one({"row": row, "args": None, "name": "약관.pdf", "bucket": "b",
+                                 "dest": str(tmp_path / "x.pdf"), "dry_run_dir": str(tmp_path)})
+    assert seen == {"sha256": "abc123", "document": "약관.pdf", "insurer": "메리츠화재",
+                    "product": "단체안심생활보험", "s3_key": "corpus/terms/abc123.pdf"}
+    assert logctx.current() == {}

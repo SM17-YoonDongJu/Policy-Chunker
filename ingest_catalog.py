@@ -30,6 +30,7 @@ from pathlib import Path
 import logging_setup
 import runlog
 import shutdown
+from insurance_chunker import logctx
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -208,17 +209,23 @@ def _process_one(task: dict) -> dict:
     공유 상태를 건드리지 않는 것이 이 함수의 계약이다 — runlog(attempts.json은
     읽고-고쳐-쓰기라 경합한다)도, 부모의 DB 커넥션도 여기서는 쓰지 않는다. 기록은
     결과를 받은 부모가 순차로 한다.
+
+    처리하는 동안 찍히는 로그에는 이 문서의 sha256·파일명·보험사·상품·S3 키가 실린다
+    (logctx). VLM 타임아웃 줄 하나만 보고도 어느 약관인지 찾아 원본을 받을 수 있게 하려는 것이다.
     """
     from ingest_many import run_one_safe
 
     row, args, name = task["row"], task["args"], task["name"]
     dest = Path(task["dest"])
-    if not _download(task["bucket"], row["s3_key"], dest):
-        return {"pdf": name, "status": "ERROR", "error": "S3 다운로드 실패", "phases": {}}
-    try:
-        result = run_one_safe(_prepare_doc(row, name, dest), args, Path(task["dry_run_dir"]))
-    finally:
-        dest.unlink(missing_ok=True)  # 디스크 점유를 건별로 반환
+    with logctx.bind(sha256=row.get("sha256"), document=name, insurer=row.get("company"),
+                     product=row.get("product_name"), s3_key=row.get("s3_key")):
+        if not _download(task["bucket"], row["s3_key"], dest):
+            return {"pdf": name, "status": "ERROR", "error": "S3 다운로드 실패", "phases": {}}
+        try:
+            result = run_one_safe(_prepare_doc(row, name, dest), args,
+                                  Path(task["dry_run_dir"]))
+        finally:
+            dest.unlink(missing_ok=True)  # 디스크 점유를 건별로 반환
 
     result["pdf"] = name  # 임시 파일명이 아니라 원래 이름으로 남긴다
     # 0청크는 성공이 아니다 — 적재가 0건이므로 EMPTY로 따로 센다(재시도 상한 대상).

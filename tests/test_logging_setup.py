@@ -99,3 +99,19 @@ def test_configure_is_idempotent(log_lines):
 def test_log_level_is_configurable(log_lines):
     lines = log_lines(lambda log: log.debug("보이면 안 됨"), LOG_FORMAT="json", LOG_LEVEL="INFO")
     assert lines == []
+
+
+def test_bound_context_is_carried_into_lines_inside_the_block(log_lines):
+    """처리 중인 문서·표(logctx)가 그 안에서 찍힌 줄마다 실려야 Loki의 타임아웃 줄로 원본을
+    찾을 수 있다. extra로 직접 넘긴 값이 이기고, 블록 밖 줄에는 남지 않는다."""
+    from insurance_chunker import logctx
+
+    def _emit(log):
+        with logctx.bind(document="약관.pdf", insurer="테스트손해보험"):
+            log.info("안", extra={"insurer": "직접"})
+        log.info("밖")
+
+    inside, outside = (json.loads(ln) for ln in log_lines(_emit, LOG_FORMAT="json"))
+    assert inside["document"] == "약관.pdf"
+    assert inside["insurer"] == "직접"
+    assert "document" not in outside
