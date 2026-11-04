@@ -22,6 +22,8 @@ import threading
 import time
 from typing import Any
 
+from . import progress
+
 logger = logging.getLogger(__name__)
 
 # "paddle"(기본) | "off". off면 기존 경로 그대로다 — 텍스트의 표 영역 제외는 find_tables,
@@ -195,6 +197,7 @@ def detect_tables(
     blank = 0
     with fitz.open(pdf_path) as doc:
         for pno in range(1, doc.page_count + 1):
+            progress.report("layout", pno, doc.page_count)
             page = doc[pno - 1]
             if skip_blank(page):
                 blank += 1

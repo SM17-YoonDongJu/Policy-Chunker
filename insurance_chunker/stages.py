@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from . import progress
 from .models import DocMeta, InsuranceChunk, PageResult, TableMeta
 
 logger = logging.getLogger(__name__)
@@ -454,6 +455,9 @@ def overlapped(pdf_path: str, use_vision: bool = True
                 targets.append(t)
                 yield t
             for pno in range(1, n + 1):
+                # 겹치기에선 detect_tables·extract_cpu_tables가 안 불려 그쪽 쪽 보고가 없다.
+                # 이 스윕(레이아웃+PyMuPDF 표)이 문서의 진행 위치다 — VLM은 window 안에서 따라온다.
+                progress.report("layout", pno, n)
                 if pno not in nonblank_set:
                     boxes = []
                 elif pno == nonblank[0]:

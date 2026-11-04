@@ -16,6 +16,7 @@ from typing import Optional
 
 import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
 
+from . import progress
 from .extractor import is_border_box
 from .models import PageResult
 
@@ -56,6 +57,7 @@ def parse_text(
         logger.info(f"PDF 파싱 시작: {Path(pdf_path).name} ({total}페이지)")
 
         for pno in range(1, total + 1):
+            progress.report("text", pno, total)
             page = doc[pno - 1]
             page_numbers.append(pno)
 

@@ -93,7 +93,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
     from collections import Counter
     from dataclasses import asdict
 
-    from insurance_chunker import stages
+    from insurance_chunker import progress, stages
     from insurance_chunker.chunker import auto_doc_type
     from insurance_chunker.models import DocMeta, compute_doc_hash
 
@@ -147,6 +147,9 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
             pages, parsed = stages.parse(str(pdf_path), use_ocr=not args.no_ocr,
                                          use_vision=not args.no_vision)
         stage_log.update({r.name: r.summary() for r in parsed})
+        # 파싱 뒤 단계는 쪽 루프가 없다 — 전환만 알려 "쪽 다 지났는데 VLM 중"으로 보이지 않게.
+        # force: 다음 보고가 올 때까지 이 값이 화면에 남으므로 시간 묶기에 걸려 빠지면 안 된다.
+        progress.report("chunk", len(pages), len(pages), force=True)
         with runlog.phase(timings, "chunk"):
             s5 = stages.chunk(
                 pages, meta,
@@ -159,6 +162,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
         warnings, chunk_report = s5.output.warnings, s5.output.report
 
         if not args.no_embed and doc_type != "product_summary":
+            progress.report("embed", len(pages), len(pages), force=True)
             with runlog.phase(timings, "embed"):
                 s6 = stages.embed(chunks, ollama_url=args.ollama_url, model=args.embed_model)
             stage_log["embed"] = s6.summary()
@@ -186,6 +190,7 @@ def _run_one(doc: dict, args: argparse.Namespace, dry_run_dir: Path) -> dict:
         else:
             from db.storage import upsert_chunks, verify_upsert
             from ingest import _upload_tables_to_s3
+            progress.report("store", len(pages), len(pages), force=True)
             with runlog.phase(timings, "store"):
                 if table_metas:
                     _upload_tables_to_s3(table_metas)

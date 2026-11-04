@@ -236,6 +236,9 @@ def status_snapshot(limit: int = _RECENT_DEFAULT) -> dict[str, Any]:
     attempts.json의 STARTED는 두 가지가 섞여 있다 — 지금 처리 중인 문서와, 지난 시도가 끝을
     못 본 문서. 이번 실행이 살아 있고 그 시작 뒤에 시작한 것만 processing으로, 나머지는
     unfinished로 가른다(다음 시도에서 격리 상한에 걸릴 수 있는 문서들이다).
+
+    processing 행에는 워커가 남기는 단계·쪽 진행(runlog.doc_progress)을 붙인다 — 아직
+    보고 전이면 stage·page·pages가 None으로 온다(키는 항상 있다).
     """
     daemon = runlog.daemon_state()
     progress = runlog.progress()
@@ -251,6 +254,8 @@ def status_snapshot(limit: int = _RECENT_DEFAULT) -> dict[str, Any]:
                "attempts": a.get("attempts", 0)}
         at = _iso_to_epoch(a.get("last_at"))
         if state == "running" and run_start is not None and at is not None and at >= run_start:
+            dp = runlog.doc_progress(sha) or {}
+            row.update({k: dp.get(k) for k in ("stage", "page", "pages")})
             processing.append(row)
         else:
             unfinished.append(row)
