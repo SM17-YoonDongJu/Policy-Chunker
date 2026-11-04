@@ -207,3 +207,44 @@ def test_stats_match_calls(load, monkeypatch, table_pdf):
     assert len(vlm.metrics["latencies"]) == srv.calls == 8
     assert vlm.metrics["concurrency"] == 4
     assert sorted(s["page"] for s in extractor.vision_page_stats()) == list(range(1, 9))
+
+
+# ── 로그 문맥 ─────────────────────────────────────────────────────────────────
+
+def test_calls_carry_document_and_table_context(load, monkeypatch, table_pdf):
+    """타임아웃 줄 하나로 어느 약관의 몇 쪽, 그 쪽의 몇째 표인지 찾을 수 있어야 한다.
+
+    문서 문맥은 적재 루프가 문서를 연 스레드에서 묶는다. 호출은 작업 스레드에서 나가므로
+    그쪽으로 넘어가는지 본다. 표 순번(쪽마다 1부터)과 bbox는 호출마다 따로 붙고, 쪽 전체를
+    보내는 OCR 대상에는 붙지 않는다.
+    """
+    import pymupdf
+
+    from insurance_chunker import logctx
+    extractor, vlm_stage = load(VLM_BACKEND="local", VLM_MODEL="m", VLM_CONCURRENCY="3")
+    seen: list[tuple[int, str, dict]] = []
+
+    def fake_call(img_b64, pno, image_px=0, record=None, task="table"):
+        seen.append((pno, task, logctx.current()))
+        return None
+
+    monkeypatch.setattr(extractor, "call_vlm", fake_call)
+    monkeypatch.setattr(extractor, "render_page", lambda page, pno, clip=None: ("img", 1))
+    targets = [{"page": 3, "ocr": True},
+               {"page": 2, "bbox": [10.04, 20.0, 300.0, 400.0]},
+               {"page": 2, "bbox": [10.0, 420.0, 300.0, 700.0]},
+               {"page": 5, "bbox": [0.0, 0.0, 50.0, 50.0]},
+               {"page": 5, "bbox": [0.0, 60.0, 50.0, 110.0]}]   # 상한(4) 밖 — 부르지 않는다
+    with pymupdf.open(table_pdf) as doc, logctx.bind(document="약관.pdf", insurer="테스트손해보험"):
+        vlm_stage.VlmStage(concurrency=3, budget=4).run(doc, targets)
+
+    assert len(seen) == 4
+    assert all(ctx["document"] == "약관.pdf" and ctx["insurer"] == "테스트손해보험"
+               for _, _, ctx in seen)
+    crops = sorted((pno, ctx["table_no"], ctx["bbox"]) for pno, task, ctx in seen
+                   if task == "table")
+    assert crops == [(2, 1, [10.0, 20.0, 300.0, 400.0]), (2, 2, [10.0, 420.0, 300.0, 700.0]),
+                     (5, 1, [0.0, 0.0, 50.0, 50.0])]
+    [ocr] = [ctx for _, task, ctx in seen if task == "ocr"]
+    assert "table_no" not in ocr and "bbox" not in ocr
+    assert logctx.current() == {}  # 블록을 나오면 다음 문서로 새지 않는다

@@ -8,6 +8,9 @@ level="error" 필터가 안 된다.
 값은 본문에만 남는다. 그래서 이 포매터는 고정 필드(service·level·logger)와 가변 컨텍스트를
 같은 평면에 두되, 라벨로 승격할 것은 Alloy 쪽 설정이 고른다.
 
+insurance_chunker.logctx로 묶어 둔 문맥(처리 중인 문서의 sha256·보험사·상품, VLM이 부르는
+표의 순번·bbox)도 그 안에서 찍힌 줄마다 같은 평면에 실린다. extra로 직접 넘긴 값이 이긴다.
+
 환경변수:
   LOG_FORMAT   json | text. 기본 text(로컬에서 사람이 읽기 좋게).
                운영은 compose가 json으로 준다.
@@ -21,6 +24,8 @@ import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
+
+from insurance_chunker import logctx
 
 _TEXT_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 _TEXT_DATEFMT = "%H:%M:%S"
@@ -60,6 +65,19 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
+class _ContextFilter(logging.Filter):
+    """logctx로 묶어 둔 필드를 레코드에 붙인다. 레코드를 만든 스레드에서 돈다.
+
+    포매터가 아니라 핸들러 필터에서 붙인다. 나중에 QueueHandler처럼 다른 스레드에서 포맷하는
+    핸들러로 바꿔도 문맥은 찍은 스레드 것으로 남게 하려는 것이다.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        for k, v in logctx.current().items():
+            record.__dict__.setdefault(k, v)
+        return True
+
+
 def configure(service: str | None = None) -> None:
     """루트 로거를 설정한다. 각 진입점(CLI·데몬)이 맨 위에서 한 번 부른다.
 
@@ -75,6 +93,7 @@ def configure(service: str | None = None) -> None:
         JsonFormatter(svc) if fmt == "json"
         else logging.Formatter(_TEXT_FORMAT, datefmt=_TEXT_DATEFMT)
     )
+    handler.addFilter(_ContextFilter())
 
     root = logging.getLogger()
     for h in list(root.handlers):
