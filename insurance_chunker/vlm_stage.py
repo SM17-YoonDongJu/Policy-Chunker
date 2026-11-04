@@ -25,13 +25,14 @@ continuous batching으로 여러 요청을 한 번에 디코딩할 수 있는데
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Iterable, Optional
 
-from . import extractor, vlm_limiter
+from . import extractor, logctx, vlm_limiter
 
 logger = logging.getLogger("insurance_chunker.extractor")  # 운영 로그 쿼리가 이 이름을 본다
 
@@ -66,16 +67,20 @@ class VlmStage:
                     extra={"event": "vlm_page", **stat})
 
     def _task(self, i: int, total: int, pno: int,
-              rendered: Optional[tuple[str, int]], task: str = "table") -> object:
-        # 자동 조정이면 상한 자리를 얻은 뒤에 차단기를 본다 — 기다리는 사이 차단기가 열렸으면
-        # 부르지 않는다. 그래야 차단 뒤에 더 끝나는 호출이 '그 순간 날아가 있던 것'으로 묶인다.
-        if self._limit is not None:
-            self._limit.acquire()
-        try:
-            return self._call(i, total, pno, rendered, task)
-        finally:
+              rendered: Optional[tuple[str, int]], task: str = "table",
+              table_no: Optional[int] = None, bbox: Optional[list[float]] = None) -> object:
+        # 이 호출에서 찍히는 로그(vlm_page·vlm_call_failed·vlm_output_discarded)에 그 쪽의 몇째
+        # 표인지와 bbox(PDF 포인트)를 싣는다. 쪽 전체 대상(OCR·예전 경로)은 둘 다 없다.
+        with logctx.bind(table_no=table_no, bbox=bbox):
+            # 자동 조정이면 상한 자리를 얻은 뒤에 차단기를 본다 — 기다리는 사이 차단기가 열렸으면
+            # 부르지 않는다. 그래야 차단 뒤에 더 끝나는 호출이 '그 순간 날아가 있던 것'으로 묶인다.
             if self._limit is not None:
-                self._limit.release()
+                self._limit.acquire()
+            try:
+                return self._call(i, total, pno, rendered, task)
+            finally:
+                if self._limit is not None:
+                    self._limit.release()
 
     def _call(self, i: int, total: int, pno: int,
               rendered: Optional[tuple[str, int]], task: str) -> object:
@@ -139,6 +144,9 @@ class VlmStage:
 
         window는 렌더해 두고 기다리게 하는 호출 수의 상한이다(메모리). 기본은 동시도 x 2.
         흘려 받을 때는 크게 준다 — 작으면 표 없는 쪽이 이어지는 동안 VLM이 놀게 된다.
+
+        crop 호출의 로그에는 그 쪽에서 몇째 박스인지(table_no, 레이아웃 박스 순서로 1부터)와
+        bbox(PDF 포인트)가 실린다.
         """
         if total is None and isinstance(targets, (list, tuple)):
             total = len(targets)
@@ -148,6 +156,7 @@ class VlmStage:
         results: dict[int, str] = {}  # 대상 인덱스 → markdown/본문
         pending: dict[Future, int] = {}
         consumed = 0
+        boxes_seen: dict[int, int] = {}  # 쪽 → 지금까지 받은 박스 수(로그의 table_no)
 
         def collect(done) -> None:
             for fut in done:
@@ -162,6 +171,8 @@ class VlmStage:
                                 thread_name_prefix="vlm") as pool:
             for t in targets:
                 consumed += 1
+                if isinstance(t, dict) and t.get("bbox") is not None:
+                    boxes_seen[t["page"]] = boxes_seen.get(t["page"], 0) + 1
                 if len(jobs) >= self.budget or self.circuit_open:
                     continue  # 호출은 안 하지만 대상(=레이아웃 진행)은 끝까지 받는다
                 if isinstance(t, dict):
@@ -176,7 +187,13 @@ class VlmStage:
                     collect(done)
                 rendered = (extractor.render_page(doc[pno - 1], pno) if clip is None
                             else extractor.render_page(doc[pno - 1], pno, clip))
-                pending[pool.submit(self._task, i + 1, shown, pno, rendered, task)] = i
+                where = ({} if clip is None else
+                         {"table_no": boxes_seen[pno], "bbox": [round(v, 1) for v in clip]})
+                # 작업 스레드는 이 스레드의 로그 문맥(적재 루프가 묶은 문서)을 물려받지 않는다.
+                # 작업마다 따로 복사해 넘긴다 — Context 하나를 여러 스레드가 동시에 들어가면
+                # RuntimeError다.
+                pending[pool.submit(contextvars.copy_context().run, self._task, i + 1, shown,
+                                    pno, rendered, task, **where)] = i
             if self.circuit_open:
                 for fut in pending:
                     fut.cancel()  # 아직 시작 안 한 것만 취소된다
