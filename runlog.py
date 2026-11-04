@@ -19,6 +19,9 @@
   daemon.json    데몬 기동 시각과 마지막 사이클 성패. healthcheck가 읽는다.
   progress.json  지금(또는 마지막) 실행의 처리 대상 수·시작 시각·pid. /status가 "N/M건 처리"와
                  "진짜 처리 중인 문서"를 가르는 기준이다(exporter.status_snapshot).
+  doc_progress/  sha256.json — 지금 처리 중인 문서의 단계·쪽 진행. 워커 프로세스가 직접
+                 쓴다(attempts.json과 달리 문서당 파일 하나라 읽고-고쳐-쓰기 경합이 없다).
+                 실행이 시작되면 통째로 비우고, 문서 결과가 기록되면 그 파일을 지운다.
 
 환경변수:
   INGEST_STATE_DIR  상태 디렉터리. 기본 /data/state (쓰기 불가면 ./.state로 폴백).
@@ -47,6 +50,7 @@ _ITEMS = "items.jsonl"
 _ATTEMPTS = "attempts.json"
 _DAEMON = "daemon.json"
 _PROGRESS = "progress.json"
+_DOC_PROGRESS_DIR = "doc_progress"
 
 _TAIL_BLOCK = 64 * 1024
 
@@ -153,6 +157,10 @@ def record_item(*, sha256: Optional[str], name: str, status: str,
            # 신뢰할 수 없다는 뜻이라 상태(status)와 따로 들고 간다.
            "boundary_confidence": boundary_confidence, **extra}
     _append(_ITEMS, rec)
+
+    # 결과가 남았으면 쪽 진행은 끝난 이야기다 — 두면 다음 시도가 지난 쪽 수를 이어받아 보인다.
+    if sha256:
+        _clear_doc_progress(sha256)
 
     # 생략은 시도가 아니다 — 카운터도 상태도 건드리지 않는다.
     #   SKIPPED     이미 적재돼 다운로드조차 안 했다
@@ -267,6 +275,12 @@ def record_progress_start(*, total: int, pending: int, skipped: int, quarantined
     강제 종료)가 구분되지 않는다. 실행 시작 시각과 pid를 같이 두면, 그 뒤에 시작했고 그
     프로세스가 살아 있는 것만 '처리 중'으로 셀 수 있다. pending은 진행률(N/M)의 분모다.
     """
+    # 지난 실행이 중간에 죽으면 쪽 진행 파일이 남는다 — 새 실행의 것만 보이게 쓸어낸다.
+    try:
+        for stale in (state_dir() / _DOC_PROGRESS_DIR).glob("*"):
+            stale.unlink(missing_ok=True)
+    except OSError:
+        pass
     _write_json(_PROGRESS, {"started_at": now_iso(), "pid": os.getpid(), "total": total,
                             "pending": pending, "skipped": skipped,
                             "quarantined": quarantined, "concurrency": concurrency,
@@ -285,6 +299,38 @@ def record_progress_end(*, stopped: bool) -> None:
 
 def progress() -> dict[str, Any]:
     return _read_json(_PROGRESS, {})
+
+
+def record_doc_progress(sha256: Optional[str], *, stage: str,
+                        page: Optional[int], pages: Optional[int]) -> None:
+    """지금 처리 중인 문서가 어느 단계의 몇째 쪽을 지나는지 남긴다(뷰어의 '처리 중' 행).
+
+    워커 프로세스가 직접 부르는 유일한 기록이다 — 문서당 파일 하나(sha256 이름)에
+    원자 교체라 부모·다른 워커와 경합하지 않는다. 호출 빈도는 insurance_chunker.progress가
+    묶는다(단계 전환 즉시, 같은 단계는 초당 1회).
+    """
+    if not sha256:
+        return
+    try:
+        (state_dir() / _DOC_PROGRESS_DIR).mkdir(exist_ok=True)
+    except OSError:
+        return
+    _write_json(f"{_DOC_PROGRESS_DIR}/{sha256}.json",
+                {"stage": stage, "page": page, "pages": pages, "at": now_iso()})
+
+
+def doc_progress(sha256: Optional[str]) -> Optional[dict[str, Any]]:
+    """이 문서의 쪽 진행. 아직 보고가 없으면 None."""
+    if not sha256:
+        return None
+    return _read_json(f"{_DOC_PROGRESS_DIR}/{sha256}.json", None)
+
+
+def _clear_doc_progress(sha256: str) -> None:
+    try:
+        (state_dir() / _DOC_PROGRESS_DIR / f"{sha256}.json").unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def all_attempts() -> dict[str, Any]:

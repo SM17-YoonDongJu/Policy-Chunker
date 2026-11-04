@@ -60,6 +60,32 @@ def test_processing_and_unfinished_are_told_apart(st):
     assert _shas(snap["unfinished"]) == ["old"]
 
 
+def test_processing_rows_carry_page_progress(st):
+    """워커가 남긴 단계·쪽 진행이 처리 중 행에 붙는다 — 보고 전이면 None(키는 있다)."""
+    rl = st._rl
+    rl.record_start()
+    rl.record_progress_start(total=2, pending=2, skipped=0, quarantined=0, concurrency=2)
+    rl.record_attempt_start(sha256="a", name="a.pdf")
+    rl.record_attempt_start(sha256="b", name="b.pdf")
+    rl.record_doc_progress("a", stage="vlm", page=102, pages=434)
+
+    rows = {r["sha256"]: r for r in st.status_snapshot()["processing"]}
+    assert (rows["a"]["stage"], rows["a"]["page"], rows["a"]["pages"]) == ("vlm", 102, 434)
+    assert (rows["b"]["stage"], rows["b"]["page"], rows["b"]["pages"]) == (None, None, None)
+
+    # 결과가 기록되면 진행 파일은 지워진다 — 다음 시도가 지난 쪽 수를 이어받으면 안 된다.
+    rl.record_item(sha256="a", name="a.pdf", status="OK", chunks=1)
+    assert rl.doc_progress("a") is None
+
+
+def test_a_new_run_sweeps_stale_page_progress(st):
+    """중간에 죽은 실행이 남긴 쪽 진행은 다음 실행이 시작될 때 쓸려 나간다."""
+    rl = st._rl
+    rl.record_doc_progress("dead", stage="layout", page=400, pages=434)
+    rl.record_progress_start(total=1, pending=1, skipped=0, quarantined=0, concurrency=1)
+    assert rl.doc_progress("dead") is None
+
+
 def test_progress_counts_only_this_run(st):
     """진행률의 분자는 이번 실행 안에서 실제로 처리한 건수다. 생략·지난 실행은 빼야 한다."""
     rl = st._rl
@@ -148,6 +174,37 @@ def test_endpoint_serves_status_next_to_metrics(st):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_worker_wires_page_progress_to_its_own_sha(st, monkeypatch, tmp_path):
+    """_process_one이 reporter를 끼워야 쪽 진행이 남는다 — 배선이 빠지면 페이지 열이 빈다."""
+    import argparse
+
+    import ingest_catalog
+    import ingest_many
+    from insurance_chunker import progress
+
+    rl = st._rl
+    seen = {}
+
+    def fake_run_one_safe(doc, args, dry_run_dir):
+        progress.report("layout", 3, 10)
+        seen["during"] = rl.doc_progress("sha-1")
+        return {"pdf": "a.pdf", "status": "OK", "chunks": 1, "warnings": 0,
+                "elapsed_s": 0.1, "phases": {}}
+
+    monkeypatch.setattr(ingest_many, "run_one_safe", fake_run_one_safe)
+    monkeypatch.setattr(ingest_catalog, "_download", lambda bucket, key, dest: True)
+    task = {"row": {"sha256": "sha-1", "s3_key": "k", "company": "A생명", "product_name": "P",
+                    "product_code": None, "effective_date": None, "category": "terms"},
+            "args": argparse.Namespace(dry_run=False), "name": "a.pdf", "bucket": "b",
+            "dest": str(tmp_path / "a.pdf"), "dry_run_dir": str(tmp_path), "prev_attempts": 0}
+
+    assert ingest_catalog._process_one(task)["status"] == "OK"
+    assert (seen["during"]["stage"], seen["during"]["page"]) == ("layout", 3)
+    # 문서가 끝나면 reporter는 빠진다 — 풀 워커가 재사용돼도 다음 문서로 새지 않는다.
+    progress.report("text", 9, 10)
+    assert rl.doc_progress("sha-1")["stage"] == "layout"
 
 
 def test_catalog_run_leaves_progress_for_the_viewer(st, monkeypatch):

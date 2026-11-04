@@ -18,6 +18,8 @@ import tempfile
 import time
 from typing import Callable, Optional
 
+from . import progress
+
 logger = logging.getLogger(__name__)
 
 # 문서당 VLM 호출 상한 — 페이지 전체 입력(LAYOUT_BACKEND=off) 경로의 예산.
@@ -831,6 +833,7 @@ def extract_cpu_tables(
 
     with fitz.open(pdf_path) as doc:
         for pno in page_numbers:
+            progress.report("tables_cpu", pno, len(page_numbers))
             fitz_page = doc[pno - 1]
             md = extract_pymupdf(fitz_page)
             if md:

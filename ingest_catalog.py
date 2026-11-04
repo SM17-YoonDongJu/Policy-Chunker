@@ -207,17 +207,25 @@ def _process_one(task: dict) -> dict:
 
     공유 상태를 건드리지 않는 것이 이 함수의 계약이다 — runlog(attempts.json은
     읽고-고쳐-쓰기라 경합한다)도, 부모의 DB 커넥션도 여기서는 쓰지 않는다. 기록은
-    결과를 받은 부모가 순차로 한다.
+    결과를 받은 부모가 순차로 한다. 예외는 쪽 진행(record_doc_progress) 하나 —
+    문서당 파일이 따로라 경합이 없고, 처리 중인 문서 안에서만 의미가 있는 값이라
+    끝나고 부모가 적기엔 늦다.
     """
     from ingest_many import run_one_safe
+    from insurance_chunker import progress
 
     row, args, name = task["row"], task["args"], task["name"]
+    sha = row["sha256"]
     dest = Path(task["dest"])
     if not _download(task["bucket"], row["s3_key"], dest):
         return {"pdf": name, "status": "ERROR", "error": "S3 다운로드 실패", "phases": {}}
+    if sha and not args.dry_run:
+        progress.set_reporter(lambda stage, page, pages: runlog.record_doc_progress(
+            sha, stage=stage, page=page, pages=pages))
     try:
         result = run_one_safe(_prepare_doc(row, name, dest), args, Path(task["dry_run_dir"]))
     finally:
+        progress.set_reporter(None)  # 풀 워커는 재사용된다 — 다음 문서로 새지 않게 되돌린다
         dest.unlink(missing_ok=True)  # 디스크 점유를 건별로 반환
 
     result["pdf"] = name  # 임시 파일명이 아니라 원래 이름으로 남긴다

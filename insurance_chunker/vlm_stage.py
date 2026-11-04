@@ -31,7 +31,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Iterable, Optional
 
-from . import extractor, vlm_limiter
+from . import extractor, progress, vlm_limiter
 
 logger = logging.getLogger("insurance_chunker.extractor")  # 운영 로그 쿼리가 이 이름을 본다
 
@@ -171,6 +171,10 @@ class VlmStage:
                 jobs.append(job)
                 i = len(jobs) - 1
                 pno, clip, task = job
+                # 쪽 진행 보고는 여기(렌더하는 호출 스레드)에서 한다 — 미리 렌더해 두는 양이
+                # window로 묶여 있어 실제 호출과 몇 쪽 이상 벌어지지 않는다. 상한·차단으로
+                # 호출하지 않는 대상은 일이 아니므로 보고하지 않는다.
+                progress.report("vlm", pno, doc.page_count)
                 while len(pending) >= window:
                     done, _ = wait(pending, return_when=FIRST_COMPLETED)
                     collect(done)
