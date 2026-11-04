@@ -39,9 +39,9 @@ CPU, GPU, IO = "cpu", "gpu", "io"
 
 
 def _layout_resource() -> str:
-    """레이아웃은 LAYOUT_DEVICE에 따라 CPU 또는 GPU 단계다 — 하한 계산이 병목 자원을 고르는 근거."""
+    """레이아웃은 실제로 도는 장치에 따라 CPU 또는 GPU 단계다 — 하한 계산이 병목 자원을 고른다."""
     from . import layout as layout_mod
-    return GPU if layout_mod.LAYOUT_DEVICE.startswith("gpu") else CPU
+    return GPU if layout_mod.device().startswith("gpu") else CPU
 
 
 def rss_mb() -> Optional[float]:
@@ -486,7 +486,7 @@ def overlapped(pdf_path: str, use_vision: bool = True
     lay = LayoutResult(enabled=True, boxes=boxes_by_page, ocr_pages=ocr_pages)
     s_layout = StageResult("layout", lay, round(sum(layout_secs), 2), _layout_resource(), {
         "enabled": True, "model": layout_mod.LAYOUT_MODEL, "min_score": layout_mod.LAYOUT_MIN_SCORE,
-        "device": layout_mod.LAYOUT_DEVICE, "blank_skipped": blank,
+        "device": layout_mod.device(), "blank_skipped": blank,
         "table_pages": len(boxes_by_page), "boxes": n_boxes,
         "ocr_pages": len(ocr_pages),
         "page_sec_p50": sorted(layout_secs)[len(layout_secs) // 2] if layout_secs else None,

@@ -52,17 +52,33 @@ COPY eval/bench/variants ./eval/bench/variants
 EXPOSE 9101
 
 # base 의존 + 패키지 + 레이아웃 모델 의존 설치. setuptools packages.find가
-# insurance_chunker/db를 포함한다. paddlepaddle(CPU 휠)은 자체 인덱스에만 있어
-# 따로 깐다 — [layout]을 먼저 깔면 numpy 등 공통 의존이 PyPI에서 해결된 뒤라
-# paddle 인덱스에서는 paddlepaddle 휠 하나만 받는다. chunker 파드는 GPU가 없다.
-# 주의: paddle 런타임+모델 의존으로 이미지가 수백 MB 늘어난다 — 첫 CI 빌드에서
-# 이미지 크기와 빌드 시간을 재서 여기에 기록할 것.
-# 마지막 줄은 빌드 시점 import 검사다 — 레이아웃 의존이 깨진 이미지는 런타임에 조용히
-# 폴백하므로 여기서 빌드를 실패시킨다. paddleocr만 import하면 paddle 코어는 안 열리므로
-# paddle도 같이 연다. 모델은 받지 않는다.
+# insurance_chunker/db를 포함한다.
+#
+# paddle은 GPU 휠(paddlepaddle-gpu, CUDA 12.6)을 깐다. 레이아웃을 chunker 파드에서 GPU로 돌린다
+# (LAYOUT_DEVICE=gpu:0) — T4에서 쪽당 4.77초 → 0.14초, 표 박스는 CPU와 같았다(2026-11-02 smoke).
+# CUDA 런타임·cuDNN은 휠이 nvidia-* 의존으로 끌어오므로 CUDA 베이스 이미지는 필요 없고, 드라이버는
+# 노드의 nvidia 런타임이 넣는다. 드라이버는 있는데 GPU를 못 열면 layout.py가 CPU로 내려간다.
+# paddle 휠은 자체 인덱스에만 있고 nvidia-* 의존은 PyPI에 있어 두 인덱스를 함께 본다.
+# [layout]을 먼저 깔면 numpy 등 공통 의존이 PyPI에서 해결된 뒤라 paddle 쪽은 휠과 CUDA 의존만 받는다.
+# 주의: CUDA 의존으로 이미지가 GB 단위로 커진다(paddle GPU 휠만 1.9GB).
+#
+# GPU 휠의 paddle 코어(libpaddle.so)는 드라이버 라이브러리(libcuda.so.1)에 직접 링크돼 있어,
+# 드라이버가 없으면 device=cpu로도 import 자체가 안 된다. 그래서 파드는 GPU를 받거나(레이아웃 GPU),
+# GPU 없이 CPU로 돌릴 때도 NVIDIA_VISIBLE_DEVICES=none으로 nvidia 런타임이 드라이버 라이브러리만
+# 넣게 해야 한다(K8s-manifests의 chunker 차트가 layoutDevice에 따라 둘 중 하나를 넣는다).
+# 같은 이유로 빌드 머신(드라이버 없음)에서는 paddle을 import할 수 없다. 빌드 시점 검사는 대신
+# paddle 코어의 동적 링크를 본다 — 드라이버 말고 빠진 라이브러리(libgomp·libGL 등)가 있으면
+# 런타임에 레이아웃이 조용히 꺼지므로 여기서 빌드를 실패시킨다. paddleocr는 import해도 paddle
+# 코어를 열지 않으므로 그대로 import로 본다. 모델은 받지 않는다.
 RUN pip install ".[layout]" \
-    && pip install paddlepaddle==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
-    && python -c "import paddle; from paddleocr import LayoutDetection"
+    && pip install paddlepaddle-gpu==3.2.1 \
+        -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+        --extra-index-url https://pypi.org/simple \
+    && python -c "import importlib.metadata as m; from paddleocr import LayoutDetection; \
+print('paddlepaddle-gpu', m.version('paddlepaddle-gpu'))" \
+    && missing=$(ldd /usr/local/lib/python3.12/site-packages/paddle/base/libpaddle.so \
+        | awk '/not found/ {print $1}' | grep -vx 'libcuda.so.1' || true) \
+    && if [ -n "$missing" ]; then echo "paddle 코어가 못 여는 라이브러리: $missing"; exit 1; fi
 
 # 비루트 실행. uid를 1000으로 못박는다 — /data는 chunker-state PVC가 마운트되는 자리이고
 # 쓰기 권한이 uid에 달려 있어서, 여기가 바뀌면 /data/state에 이력을 못 써 로컬 폴백으로
