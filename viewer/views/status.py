@@ -11,6 +11,9 @@ from viewer import widgets as w
 RUN_STATE = {"running": "처리 중", "finished": "완료", "stopped": "정지 신호로 중단",
              "interrupted": "중간에 끊김", "none": "기록 없음"}
 RESULT = {"OK": "적재", "EMPTY": "0청크", "ERROR": "오류"}
+# 쪽 진행의 단계 이름(stages.py의 StageResult 이름) → 화면 표기
+STAGE = {"layout": "레이아웃", "text": "본문 추출", "tables_cpu": "표 추출(CPU)",
+         "vlm": "표 추출(VLM)", "chunk": "청킹", "embed": "임베딩", "store": "저장"}
 
 st.title("처리 현황")
 
@@ -28,21 +31,25 @@ def chunker_panel() -> None:
     daemon, run = s.get("daemon") or {}, s.get("run") or {}
     state = run.get("state", "none")
     pending, done = run.get("pending") or 0, run.get("done") or 0
+    total, skipped = run.get("total") or 0, run.get("skipped") or 0
+    # 카탈로그 기준 진행 — 기적재(skipped)에 이번 실행 처리분을 더한 양이 "끝난 몫"이다.
+    processed = skipped + done
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("이번 실행", RUN_STATE.get(state, state),
               help=f"시작 {w.kst(run.get('started_at'))}" if run else None)
-    c2.metric("처리", f"{done} / {pending}건" if run else "-",
-              help=f"카탈로그 {run.get('total')}건 중 생략 {run.get('skipped')} · "
+    c2.metric("처리", f"{processed} / {total}건" if run and total else "-",
+              help=f"전체 카탈로그 대비 — 기적재 {skipped} + 이번 실행 {done}/{pending}건 · "
                    f"격리 {run.get('quarantined')}" if run else None)
     last_ok = daemon.get("last_run_ok")
     c3.metric("마지막 사이클", "-" if last_ok is None else ("성공" if last_ok else "실패"),
               help=daemon.get("last_run_detail"))
     c4.metric("마지막 성공", w.ago(daemon.get("last_success_at")))
 
-    if state == "running" and pending:
-        st.progress(min(done / pending, 1.0),
-                    text=f"{done}/{pending}건 · 시작 {w.ago(run.get('started_at'))}")
+    if state == "running" and total:
+        st.progress(min(processed / total, 1.0),
+                    text=f"카탈로그 {processed}/{total}건 · 이번 실행 {done}/{pending}건 · "
+                         f"시작 {w.ago(run.get('started_at'))}")
     elif daemon.get("last_run_at") and s.get("interval_s"):
         nxt = w.to_dt(daemon["last_run_at"]) + timedelta(seconds=int(s["interval_s"]))
         st.caption(f"다음 사이클 예정: {w.kst(nxt)} 무렵 (주기 {w.duration(s['interval_s'])})")
@@ -50,7 +57,10 @@ def chunker_panel() -> None:
     processing = s.get("processing") or []
     st.markdown(f"**처리 중인 문서 {len(processing)}건**")
     if processing:
-        st.dataframe([{"문서": p["name"], "시작": w.kst(p["started_at"], "%m-%d %H:%M:%S"),
+        st.dataframe([{"문서": p["name"],
+                       "단계": STAGE.get(p.get("stage"), p.get("stage") or ""),
+                       "페이지": f"{p['page']}/{p['pages']}" if p.get("pages") else "",
+                       "시작": w.kst(p["started_at"], "%m-%d %H:%M:%S"),
                        "경과": w.ago(p["started_at"]).replace(" 전", ""),
                        "시도": p["attempts"]} for p in processing], hide_index=True)
     else:

@@ -49,7 +49,8 @@ STATUS = {
             "quarantined": 0, "concurrency": 1, "started_at": "2026-10-30T01:00:00+00:00",
             "finished_at": None, "stopped": False},
     "processing": [{"sha256": "b" * 64, "name": "big.pdf",
-                    "started_at": "2026-10-30T01:05:00+00:00", "attempts": 1}],
+                    "started_at": "2026-10-30T01:05:00+00:00", "attempts": 1,
+                    "stage": "vlm", "page": 102, "pages": 434}],
     "unfinished": [],
     "recent": [{"at": "2026-10-30T01:04:00+00:00", "sha256": DOC, "name": "실손약관.pdf",
                 "status": "OK", "chunks": 3, "elapsed_s": 40, "insurer": "테스트생명"},
@@ -123,12 +124,25 @@ def _page_heading(at: AppTest) -> str:
 def test_status_page_shows_the_running_cycle(fake):
     at = _run(AppTest.from_file(APP, default_timeout=30))
     metrics = {m.label: m.value for m in at.metric}
-    assert metrics["이번 실행"] == "처리 중" and metrics["처리"] == "1 / 3건"
+    # 처리 지표는 전체 카탈로그 기준이다 — 기적재 7 + 이번 실행 1 / 카탈로그 10
+    assert metrics["이번 실행"] == "처리 중" and metrics["처리"] == "8 / 10건"
     processing, recent, docs = (df.value for df in at.dataframe)
     assert list(processing["문서"]) == ["big.pdf"]
+    assert list(processing["단계"]) == ["표 추출(VLM)"]
+    assert list(processing["페이지"]) == ["102/434"]
     # 적재된 결과만 문서 보기로 열 수 있다 — 실패 문서는 청크가 없다
     assert list(recent["열기"]) == [f"document?doc={DOC}", ""]
     assert list(docs["파트"]) == ["1/2"]  # part_order는 0부터 센다
+
+
+def test_status_page_tolerates_a_chunker_without_page_progress(fake, monkeypatch):
+    """롤링 배포로 옛 청커와 새 뷰어가 겹쳐도 — 쪽 진행 필드가 없으면 빈칸으로 둔다."""
+    old = {**STATUS, "processing": [{"sha256": "b" * 64, "name": "big.pdf",
+                                     "started_at": "2026-10-30T01:05:00+00:00", "attempts": 1}]}
+    monkeypatch.setattr(fake.chunker_status, "fetch", lambda url, **kw: old)
+    at = _run(AppTest.from_file(APP, default_timeout=30))
+    processing = at.dataframe[0].value
+    assert list(processing["단계"]) == [""] and list(processing["페이지"]) == [""]
 
 
 def test_status_page_survives_without_the_chunker(fake, monkeypatch):
