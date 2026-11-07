@@ -103,6 +103,8 @@ def _stage_config(name: str, opts: dict[str, Any]) -> dict[str, Any]:
     if name == "tables_cpu":
         return {"use_vision": opts["use_vision"], "backend_off": extractor.VLM_BACKEND == "off",
                 "target": extractor.VLM_TARGET,
+                # 결과는 같고 시간만 바뀐다 — 빼면 작업자 수만 바꾼 변형이 이전 시간을 재사용한다
+                "workers": extractor.TABLES_CPU_WORKERS,
                 "hints": [extractor._HINT_DRAWINGS, extractor._HINT_MIN_TEXT,
                           extractor._HINT_IMG_FRAC]}
     if name == "vlm":

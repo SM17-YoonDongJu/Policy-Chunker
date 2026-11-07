@@ -254,6 +254,108 @@ def extract_pymupdf(fitz_page) -> Optional[str]:
         return None
 
 
+# PyMuPDF 표(find_tables)를 몇 개의 작업 프로세스로 나눠 뽑을지. 0이면 예전처럼 이 프로세스에서
+# 쪽 순서대로 뽑는다. 쪽당 약 0.5초(smoke 296쪽 145.5초)라, 레이아웃을 GPU로 옮긴 뒤로는 겹치기
+# 경로에서 레이아웃과 같은 스레드에 번갈아 끼어 문서 시간의 가장 큰 몫이 됐다(겹친 묶음 247.6초 ≈
+# 레이아웃 66.6 + PyMuPDF 145.5 + VLM 꼬리 35.5). 같은 함수를 같은 쪽에 부르므로 결과는 같다.
+# 스레드가 아니라 프로세스인 이유: PyMuPDF 객체는 스레드 간에 안전하지 않고, find_tables는 GIL을
+# 쥔 채 도는 CPU 작업이다. 작업 프로세스(pymupdf_worker)는 문서를 따로 연다.
+TABLES_CPU_WORKERS = max(0, int(os.environ.get("TABLES_CPU_WORKERS", "2")))
+# 작업 하나(프로세스 한 번)가 맡는 연속 쪽 수. 끝난 작업자가 다음 묶음을 가져간다. 표는 몰려 있다 —
+# smoke에서 257~288쪽이 전체 PyMuPDF 시간의 3분의 1이라, 32쪽 묶음이면 그 묶음 하나가 꼬리가 됐다
+# (작업자 2: 46.0초 → 29.7초). 16쪽이면 28.6초, 8쪽은 프로세스 기동이 늘어 31.5초였다(M5 Pro).
+_TABLES_CHUNK = 16
+_TABLES_CHUNK_TIMEOUT = 600  # 묶음 하나의 상한(초). 넘기면 그 묶음은 이 프로세스에서 다시 뽑는다
+
+
+def _pymupdf_chunk(pdf_path: str, pages: list[int]) -> tuple[dict[int, str], float, int]:
+    """작업 프로세스 하나로 쪽 묶음의 PyMuPDF 표 → ({page: md}, 걸린 초, pid)."""
+    import json
+    import sys
+    proc = subprocess.run(
+        [sys.executable, "-m", "insurance_chunker.pymupdf_worker", pdf_path,
+         ",".join(map(str, pages))],
+        capture_output=True, text=True, timeout=_TABLES_CHUNK_TIMEOUT, check=True)
+    data = json.loads(proc.stdout)
+    return {int(k): v for k, v in data["tables"].items()}, float(data["seconds"]), data["pid"]
+
+
+class PymupdfTables:
+    """문서 하나의 PyMuPDF 표를 작업 프로세스에서 뽑는다 — start() 뒤 다른 일을 하고 result().
+
+    작업자 수만큼의 스레드가 묶음마다 작업 프로세스를 띄우고 기다린다(스레드는 기다리기만 한다).
+    작업자가 0이면 result()가 이 프로세스에서 뽑는다. 작업 프로세스가 실패한 묶음도 여기서 마저
+    뽑는다 — 결과는 같고, 표 하나 때문에 문서를 잃지 않는다.
+    """
+
+    def __init__(self, pdf_path: str, pages: list[int], workers: Optional[int] = None) -> None:
+        self.pdf_path = pdf_path
+        self.pages = list(pages)
+        self.workers = TABLES_CPU_WORKERS if workers is None else workers
+        self.seconds = 0.0          # 쪽마다 뽑은 시간의 합(작업자들이 쓴 CPU 시간에 가깝다)
+        self.pids: set[int] = set()
+        self._pool = None
+        self._futures: dict = {}
+
+    def start(self) -> "PymupdfTables":
+        if self.workers <= 0 or not self.pages:
+            return self
+        from concurrent.futures import ThreadPoolExecutor
+        chunks = [self.pages[i:i + _TABLES_CHUNK]
+                  for i in range(0, len(self.pages), _TABLES_CHUNK)]
+        self._pool = ThreadPoolExecutor(max_workers=min(self.workers, len(chunks)),
+                                        thread_name_prefix="pymupdf")
+        self._futures = {self._pool.submit(_pymupdf_chunk, self.pdf_path, c): c for c in chunks}
+        return self
+
+    def result(self, stage: Optional[str] = "tables_cpu") -> dict[int, str]:
+        """{page: md}. progress는 stage 이름으로 묶음이 끝날 때마다 보고한다(None이면 안 한다)."""
+        out: dict[int, str] = {}
+        done: set[int] = set()
+        failed = 0
+        if self._futures:
+            from concurrent.futures import as_completed
+            for fut in as_completed(self._futures):
+                try:
+                    part, sec, pid = fut.result()
+                except Exception as e:  # noqa: BLE001 - 실패한 묶음은 아래에서 마저 뽑는다
+                    failed += 1
+                    if failed == 1:
+                        err = getattr(e, "stderr", "") or ""
+                        logger.warning(f"PyMuPDF 표 작업 프로세스 실패 — 그 쪽들은 이 프로세스에서 "
+                                       f"뽑는다: {e} {err[-300:]}",
+                                       extra={"event": "tables_workers_failed"})
+                    continue
+                out.update(part)
+                done.update(self._futures[fut])
+                self.seconds += sec
+                self.pids.add(pid)
+                if stage:
+                    progress.report(stage, max(done), len(self.pages))
+            self.close()
+        rest = [p for p in self.pages if p not in done]
+        if rest:
+            import pymupdf as fitz
+            t0 = time.perf_counter()
+            with fitz.open(self.pdf_path) as doc:
+                for pno in rest:
+                    if stage:
+                        progress.report(stage, pno, len(self.pages))
+                    md = extract_pymupdf(doc[pno - 1])
+                    if md:
+                        out[pno] = md
+            self.seconds += time.perf_counter() - t0
+            self.pids.add(os.getpid())
+        return dict(sorted(out.items()))
+
+    def close(self) -> None:
+        """남은 묶음은 취소한다. 이미 떠 있는 작업 프로세스는 끝까지 기다린다(길어야 묶음 하나)."""
+        if self._pool is not None:
+            self._pool.shutdown(wait=True, cancel_futures=True)
+            self._pool = None
+        self._futures = {}
+
+
 # ── VLM Vision (OpenAI 호환) ──────────────────────────────────────────────────
 
 def _strip_fences(s: str) -> str:
@@ -829,16 +931,10 @@ def extract_cpu_tables(
     """
     import pymupdf as fitz  # 'fitz'는 구 이름 — 그대로 쓰면 임포트마다 경고가 찍힌다
 
-    pymupdf_tables: dict[int, str] = {}
+    tables = PymupdfTables(pdf_path, page_numbers).start()
+    pymupdf_tables = tables.result("tables_cpu")
 
     with fitz.open(pdf_path) as doc:
-        for pno in page_numbers:
-            progress.report("tables_cpu", pno, len(page_numbers))
-            fitz_page = doc[pno - 1]
-            md = extract_pymupdf(fitz_page)
-            if md:
-                pymupdf_tables[pno] = md
-
         table_pages = sorted(pymupdf_tables.keys())
         gaps = [] if layout_boxes is not None else gap_pages(doc, page_numbers, pymupdf_tables)
 
@@ -856,7 +952,8 @@ def extract_cpu_tables(
             targets = vlm_target_pages(table_pages, gaps)
     info = {"pymupdf_pages": len(table_pages), "gap_pages": len(gaps),
             "crops": len(targets) if layout_boxes is not None else 0,
-            "ocr_pages": len(ocr_pages or []) if layout_boxes is not None else 0}
+            "ocr_pages": len(ocr_pages or []) if layout_boxes is not None else 0,
+            "workers": tables.workers, "pymupdf_cpu_s": round(tables.seconds, 2)}
     return table_sources, targets, info
 
 

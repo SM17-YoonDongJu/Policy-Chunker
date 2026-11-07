@@ -186,6 +186,8 @@ def tables_cpu(pdf_path: str, page_numbers: list[int], use_vision: bool = True,
         "gap_pages": info.get("gap_pages", 0),
         "ocr_pages": info.get("ocr_pages", 0),
         "vlm_targets": len(targets),
+        "workers": info.get("workers", 0),
+        "pymupdf_cpu_s": info.get("pymupdf_cpu_s"),
     })
 
 
@@ -400,10 +402,11 @@ def overlapped(pdf_path: str, use_vision: bool = True
                ) -> tuple[StageResult, StageResult, StageResult, float]:
     """레이아웃(S1)·PyMuPDF 표(S3)·VLM(S4)을 겹쳐 돌린다 → (layout, tables_cpu, vlm, 벽시계초).
 
-    메인 스레드가 쪽마다 레이아웃 → PyMuPDF 표를 하고, 찾은 박스를 바로 VLM 대상으로 내놓는다.
-    VLM은 작업 스레드에서 동시에 돈다. 단계 seconds는 각 단계가 실제로 일한 시간이다 — 레이아웃·
-    PyMuPDF는 쪽마다 잰 합, VLM은 호출이 진행 중이던 구간의 합(VlmStage.busy_seconds). 벽시계는
-    따로 돌려준다. 단계 합에서 벽시계를 빼면 겹쳐서 아낀 시간이다.
+    메인 스레드가 쪽마다 레이아웃을 하고, 찾은 박스를 바로 VLM 대상으로 내놓는다. VLM은 작업
+    스레드에서, PyMuPDF 표는 작업 프로세스(TABLES_CPU_WORKERS)에서 동시에 돈다. 작업자가 0이면
+    PyMuPDF 표는 레이아웃이 끝난 뒤 이 프로세스에서 뽑는다. 단계 seconds는 각 단계가 실제로 일한
+    시간이다 — 레이아웃은 쪽마다 잰 합, PyMuPDF는 작업자들이 쪽마다 쓴 시간의 합, VLM은 호출이
+    진행 중이던 구간의 합(VlmStage.busy_seconds). 벽시계는 따로 돌려준다.
     """
     import pymupdf as fitz
 
@@ -416,8 +419,6 @@ def overlapped(pdf_path: str, use_vision: bool = True
     boxes_by_page: dict[int, list[dict]] = {}
     ocr_pages: list[int] = []
     layout_secs: list[float] = []
-    pymupdf_tables: dict[int, str] = {}
-    pym_sec = 0.0
     targets: list[dict] = []
     blank = 0
 
@@ -435,6 +436,8 @@ def overlapped(pdf_path: str, use_vision: bool = True
             if layout_mod.needs_ocr(page):
                 ocr_pages.append(pno)
         nonblank_set = set(nonblank)
+        # 쪽 전체를 작업 프로세스에 먼저 맡긴다 — 레이아웃·VLM과 같은 시간에 돈다
+        tables = extractor.PymupdfTables(pdf_path, list(range(1, n + 1))).start()
 
         def layout_page(pno: int) -> list[dict]:
             t0 = time.perf_counter()
@@ -447,7 +450,6 @@ def overlapped(pdf_path: str, use_vision: bool = True
             return boxes
 
         def gen():
-            nonlocal pym_sec
             # 모델이 열리는지부터 본다 — 대상을 하나라도 내놓기 전에 실패해야 깔끔히 물러난다
             first = layout_page(nonblank[0]) if nonblank else []
             for pno in ocr_pages:
@@ -456,7 +458,7 @@ def overlapped(pdf_path: str, use_vision: bool = True
                 yield t
             for pno in range(1, n + 1):
                 # 겹치기에선 detect_tables·extract_cpu_tables가 안 불려 그쪽 쪽 보고가 없다.
-                # 이 스윕(레이아웃+PyMuPDF 표)이 문서의 진행 위치다 — VLM은 window 안에서 따라온다.
+                # 이 스윕(레이아웃)이 문서의 진행 위치다 — VLM은 window 안에서 따라온다.
                 progress.report("layout", pno, n)
                 if pno not in nonblank_set:
                     boxes = []
@@ -464,18 +466,18 @@ def overlapped(pdf_path: str, use_vision: bool = True
                     boxes = first
                 else:
                     boxes = layout_page(pno)
-                t0 = time.perf_counter()
-                md = extractor.extract_pymupdf(doc[pno - 1])
-                pym_sec += time.perf_counter() - t0
-                if md:
-                    pymupdf_tables[pno] = md
                 for b in boxes:
                     t = {"page": pno, "bbox": list(b["bbox_pdf"])}
                     targets.append(t)
                     yield t
 
         stage = VlmStage(budget=extractor.VISION_MAX_CROPS)
-        vlm_tables = stage.run(doc, gen(), window=max(stage.concurrency * 2, OVERLAP_WINDOW))
+        try:
+            vlm_tables = stage.run(doc, gen(), window=max(stage.concurrency * 2, OVERLAP_WINDOW))
+        except BaseException:
+            tables.close()  # 순차 경로로 물러날 때 작업 프로세스를 남기지 않는다
+            raise
+        pymupdf_tables = tables.result(None)  # 진행은 레이아웃 스윕이 알린다
         if extractor.VLM_SNAP_TEXT and vlm_tables:
             extractor._snap_tables(doc, [t for t in targets if "bbox" in t], vlm_tables)
         extractor._publish(stage)
@@ -499,9 +501,10 @@ def overlapped(pdf_path: str, use_vision: bool = True
             "ocr_pages": len(ocr_pages)}
     cpu = TablesCpu(sources={"pymupdf": pymupdf_tables}, targets=targets,
                     page_numbers=list(range(1, n + 1)), info=info)
-    s_tables = StageResult("tables_cpu", cpu, round(pym_sec, 2), CPU, {
+    s_tables = StageResult("tables_cpu", cpu, round(tables.seconds, 2), CPU, {
         "table_pages": {"pymupdf": len(pymupdf_tables)}, "gap_pages": 0,
-        "ocr_pages": len(ocr_pages), "vlm_targets": len(targets), "overlap": True})
+        "ocr_pages": len(ocr_pages), "vlm_targets": len(targets), "overlap": True,
+        "workers": tables.workers})
     out = VlmOut(tables=vlm_tables, ocr_text=extractor.vision_ocr_texts())
     s_vlm = StageResult("vlm", out, stage.busy_seconds(), GPU, {
         "targets": len(targets), **extractor.vision_concurrency(),
