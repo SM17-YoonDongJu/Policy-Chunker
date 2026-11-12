@@ -238,6 +238,17 @@ def test_phrase_search_highlights_the_match(fake):
     assert any("**골절**" in m.value for m in at.markdown)
 
 
+# ── 조회가 테이블 전체를 읽지 않는가 ──────────────────────────────────────────
+# SQL 자체의 답은 tests/test_viewer_queries_pg.py가 실제 Postgres에서 본다(로컬 전용).
+
+def test_chunk_types_come_from_the_validator_not_the_db(monkeypatch):
+    from insurance_chunker.validator import VALID_CHUNK_TYPES
+    from viewer import queries
+
+    monkeypatch.setattr(queries, "_rows", lambda *a, **k: pytest.fail("DB를 부르면 안 된다"))
+    assert queries.chunk_types() == sorted(VALID_CHUNK_TYPES)
+
+
 # ── 운영 검색 래퍼 ────────────────────────────────────────────────────────────
 
 def test_prod_dsn_forces_read_only_and_the_corpus_schema():
