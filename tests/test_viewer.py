@@ -238,8 +238,56 @@ def test_phrase_search_highlights_the_match(fake):
     assert any("**골절**" in m.value for m in at.markdown)
 
 
+def test_phrase_search_warns_when_the_phrase_has_no_words(fake, monkeypatch):
+    def too_short(text, **kw):
+        raise fake.queries.PhraseTooShort("형태소로 좁힐 단어가 없어요")
+
+    monkeypatch.setattr(fake.queries, "find_phrase", too_short)
+    at = _run(AppTest.from_file(APP, default_timeout=30))
+    at.switch_page("views/search.py")
+    _run(at)
+    next(t for t in at.text_input if t.label == "문구").input("을")
+    next(b for b in at.button if b.label == "찾기").click()
+    _run(at)
+    assert any("형태소로 좁힐 단어가 없어요" in m.value for m in at.warning)
+    assert not at.error
+
+
 # ── 조회가 테이블 전체를 읽지 않는가 ──────────────────────────────────────────
 # SQL 자체의 답은 tests/test_viewer_queries_pg.py가 실제 Postgres에서 본다(로컬 전용).
+
+def test_phrase_without_searchable_words_is_refused_before_the_db(monkeypatch):
+    from viewer import queries
+
+    monkeypatch.setattr(queries, "tokenize_korean", lambda text: "")
+    monkeypatch.setattr(queries, "_rows", lambda *a, **k: pytest.fail("DB를 부르면 안 된다"))
+    with pytest.raises(queries.PhraseTooShort):
+        queries.find_phrase("을")
+
+
+def test_phrase_hits_are_newest_first_and_in_document_order(monkeypatch):
+    from datetime import datetime, timezone
+
+    from viewer import queries
+
+    old, new = (datetime(2026, 11, d, tzinfo=timezone.utc) for d in (1, 2))
+    rows = [{"doc_hash": "a", "chunk_index": 5, "ingested_at": old},
+            {"doc_hash": "c", "chunk_index": None, "ingested_at": None},
+            {"doc_hash": "b", "chunk_index": 2, "ingested_at": new},
+            {"doc_hash": "a", "chunk_index": 1, "ingested_at": old}]
+    seen: dict = {}
+
+    def fake_rows(sql, params):
+        seen.update(params)
+        return [dict(r) for r in rows]
+
+    monkeypatch.setattr(queries, "tokenize_korean", lambda text: "골절 진단")
+    monkeypatch.setattr(queries, "_rows", fake_rows)
+    out = queries.find_phrase("골절진단비")
+    assert [(r["doc_hash"], r["chunk_index"]) for r in out] == \
+        [("b", 2), ("a", 1), ("a", 5), ("c", None)]
+    assert seen["tokens"] == "골절 진단" and seen["pat"] == "%골절진단비%"
+
 
 def test_chunk_types_come_from_the_validator_not_the_db(monkeypatch):
     from insurance_chunker.validator import VALID_CHUNK_TYPES

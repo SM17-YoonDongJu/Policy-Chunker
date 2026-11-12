@@ -1,7 +1,7 @@
 """청크 뷰어 조회 SQL을 진짜 Postgres에서 돌려 본다 — 예전 전체 집계와 같은 답을 내는지.
 
-문서 목록·보험사 목록은 인덱스를 건너뛰는 재귀 CTE로 바꿨다(viewer/queries.py 머리말).
-그 SQL은 가짜 DB로는 검증할 수 없어서 여기서 실제로 실행한다.
+문서 목록·보험사 목록은 인덱스를 건너뛰는 재귀 CTE로, 문구 찾기는 전문검색 인덱스로 바꿨다
+(viewer/queries.py 머리말). 그 SQL은 가짜 DB로는 검증할 수 없어서 여기서 실제로 실행한다.
 
 VIEWER_TEST_PG_ADMIN_DSN(데이터베이스를 만들 수 있는 계정)을 줘야 돈다. 그 서버에 임시
 데이터베이스를 새로 만들어 쓰고 끝나면 지운다 — 기존 데이터베이스는 건드리지 않는다.
@@ -177,3 +177,17 @@ def test_empty_table_lists_nothing(db):
     assert queries.recent_documents(limit=10) == []
     assert queries.insurers() == []
 
+
+def test_find_phrase_is_exact_and_newest_first(db):
+    from viewer import queries
+
+    hits = queries.find_phrase("골절진단비")
+    # 형태소(골절·진단)가 같아도 글자가 그대로 이어지지 않으면 빠진다
+    # — A의 2번째 청크 '골절 수술비와 진단비'
+    assert [(h["doc_hash"], h["chunk_index"]) for h in hits] == [(B, 2), (C, 2), (A, 1)]
+    assert all("골절진단비" in h["content"] for h in hits)
+    by_insurer = queries.find_phrase("골절진단비", insurer="KB손해보험")
+    assert [h["doc_hash"] for h in by_insurer] == [C, A]
+    by_type = queries.find_phrase("골절진단비", chunk_types=["schedule"])
+    assert [h["doc_hash"] for h in by_type] == [B]
+    assert len(queries.find_phrase("골절진단비", limit=1)) == 1

@@ -19,17 +19,20 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Iterator, Optional
 
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
+from insurance_chunker.tokenizer import tokenize_korean
 from insurance_chunker.validator import VALID_CHUNK_TYPES
 from viewer import env
 
 _STATEMENT_TIMEOUT_MS = 30_000
 _POOL_MAX = 8
+_NO_TIME = datetime.min.replace(tzinfo=timezone.utc)  # 적재 시각이 없는 행은 맨 뒤로
 
 _pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 _lock = threading.Lock()
@@ -248,20 +251,42 @@ def chunk_types() -> list[str]:
     return sorted(VALID_CHUNK_TYPES)
 
 
+class PhraseTooShort(ValueError):
+    """형태소 인덱스로 좁힐 단어가 없는 문구. 받으면 본문 전체를 훑게 되므로 거절한다."""
+
+
 def find_phrase(text: str, *, insurer: Optional[str] = None,
                 chunk_types: Optional[list[str]] = None, limit: int = 50) -> list[dict[str, Any]]:
-    """청크 본문에서 문구를 글자 그대로 찾는다(형태소·임베딩 없이). 최근 적재 문서부터."""
-    return _rows("""
+    """청크 본문에서 문구를 글자 그대로 찾는다. 찾은 것 안에서 최근 적재 문서부터.
+
+    본문 ILIKE만으로는 13GB 본문을 전부 읽는다. 그래서 운영 키워드 검색과 같은 전문검색
+    인덱스(to_tsvector('simple', content_tokens) — AI 마이그레이션 corpus/001, rag.search와 같은
+    식)로 먼저 좁히고, 그 안에서 글자 그대로 맞는 것만 남긴다. content_tokens는 청커가
+    tokenize_korean으로 만든 값이라 문구도 같은 함수로 자른다. 형태소는 문맥을 타므로, 단어
+    중간에서 자른 문구는 못 찾을 수 있다.
+
+    정렬은 SQL에서 하지 않는다 — 전부 정렬하려면 맞는 것을 전부 읽어야 한다. 상한만큼
+    찾으면 멈추고, 찾은 것만 최근 적재 순으로 놓는다.
+    """
+    tokens = tokenize_korean(text).strip()
+    if not tokens:
+        raise PhraseTooShort("형태소로 좁힐 단어가 없어요 — 두 글자 이상인 낱말을 넣어 주세요.")
+    rows = _rows("""
         SELECT chunk_id, doc_hash, page_number, chunk_index, chunk_type, article_number,
                article_title, insurer, product_name, content, ingested_at
         FROM corpus.policy_chunks
-        WHERE content ILIKE %(pat)s ESCAPE '\\'
+        WHERE to_tsvector('simple', coalesce(content_tokens, ''))
+              @@ plainto_tsquery('simple', %(tokens)s)
+          AND content ILIKE %(pat)s ESCAPE '\\'
           AND (%(insurer)s::text IS NULL OR insurer = %(insurer)s)
           AND (%(types)s::text[] IS NULL OR chunk_type = ANY(%(types)s))
-        ORDER BY ingested_at DESC NULLS LAST, doc_hash, chunk_index
         LIMIT %(limit)s
-    """, {"pat": like_pattern(text), "insurer": insurer or None,
+    """, {"tokens": tokens, "pat": like_pattern(text), "insurer": insurer or None,
           "types": list(chunk_types) if chunk_types else None, "limit": limit})
+    # 같은 문서는 문서 순서대로, 문서끼리는 최근 적재부터(정렬이 안정적이라 두 번 나눠 건다)
+    rows.sort(key=lambda r: (r["doc_hash"], r["chunk_index"] is None, r["chunk_index"] or 0))
+    rows.sort(key=lambda r: r["ingested_at"] or _NO_TIME, reverse=True)
+    return rows
 
 
 def chunk_locations(chunk_ids: list[str]) -> dict[str, dict[str, Any]]:
