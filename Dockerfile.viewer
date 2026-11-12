@@ -24,7 +24,10 @@ WORKDIR /app
 # 의존 먼저 — 코드만 바뀐 빌드는 이 층을 캐시로 건너뛴다. ai-engine은 pyproject의 viewer extra가
 # 커밋을 고정한 tarball이라 git이 없어도 받는다. 클러스터에서는 이 ai-engine의 코드 대신 report
 # 이미지에서 받은 소스(/ai-src)를 먼저 import한다 — 여기서 깔리는 건 사실상 의존 패키지다.
+# insurance_chunker는 문구 찾기가 청커와 같은 형태소 분석(tokenizer — content_tokens를 만든 함수)과
+# 청크 유형 목록(validator)을 쓰려고 넣는다. 순수 파이썬이고, 레이아웃(paddle)은 깔지 않는다.
 COPY pyproject.toml ./
+COPY insurance_chunker ./insurance_chunker
 COPY viewer ./viewer
 RUN pip install ".[viewer]"
 
