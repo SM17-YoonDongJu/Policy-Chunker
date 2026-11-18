@@ -30,6 +30,7 @@ from pathlib import Path
 import logging_setup
 import runlog
 import shutdown
+from insurance_chunker import logctx
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -210,6 +211,9 @@ def _process_one(task: dict) -> dict:
     결과를 받은 부모가 순차로 한다. 예외는 쪽 진행(record_doc_progress) 하나 —
     문서당 파일이 따로라 경합이 없고, 처리 중인 문서 안에서만 의미가 있는 값이라
     끝나고 부모가 적기엔 늦다.
+
+    처리하는 동안 찍히는 로그에는 이 문서의 sha256·파일명·보험사·상품·S3 키가 실린다
+    (logctx). VLM 타임아웃 줄 하나만 보고도 어느 약관인지 찾아 원본을 받을 수 있게 하려는 것이다.
     """
     from ingest_many import run_one_safe
     from insurance_chunker import progress
@@ -217,16 +221,19 @@ def _process_one(task: dict) -> dict:
     row, args, name = task["row"], task["args"], task["name"]
     sha = row["sha256"]
     dest = Path(task["dest"])
-    if not _download(task["bucket"], row["s3_key"], dest):
-        return {"pdf": name, "status": "ERROR", "error": "S3 다운로드 실패", "phases": {}}
-    if sha and not args.dry_run:
-        progress.set_reporter(lambda stage, page, pages: runlog.record_doc_progress(
-            sha, stage=stage, page=page, pages=pages))
-    try:
-        result = run_one_safe(_prepare_doc(row, name, dest), args, Path(task["dry_run_dir"]))
-    finally:
-        progress.set_reporter(None)  # 풀 워커는 재사용된다 — 다음 문서로 새지 않게 되돌린다
-        dest.unlink(missing_ok=True)  # 디스크 점유를 건별로 반환
+    with logctx.bind(sha256=sha, document=name, insurer=row.get("company"),
+                     product=row.get("product_name"), s3_key=row.get("s3_key")):
+        if not _download(task["bucket"], row["s3_key"], dest):
+            return {"pdf": name, "status": "ERROR", "error": "S3 다운로드 실패", "phases": {}}
+        if sha and not args.dry_run:
+            progress.set_reporter(lambda stage, page, pages: runlog.record_doc_progress(
+                sha, stage=stage, page=page, pages=pages))
+        try:
+            result = run_one_safe(_prepare_doc(row, name, dest), args,
+                                  Path(task["dry_run_dir"]))
+        finally:
+            progress.set_reporter(None)  # 풀 워커는 재사용된다 — 다음 문서로 새지 않게 되돌린다
+            dest.unlink(missing_ok=True)  # 디스크 점유를 건별로 반환
 
     result["pdf"] = name  # 임시 파일명이 아니라 원래 이름으로 남긴다
     # 0청크는 성공이 아니다 — 적재가 0건이므로 EMPTY로 따로 센다(재시도 상한 대상).
