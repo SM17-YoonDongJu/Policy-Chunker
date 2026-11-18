@@ -6,6 +6,7 @@ import streamlit as st
 from viewer import data
 from viewer import widgets as w
 from viewer.prod_search import ai_engine_ref
+from viewer.queries import PhraseTooShort
 
 NAMESPACE_LABEL = {"terms": "약관(terms)", "case": "판례(case)", "level": "장해분류표(level)"}
 
@@ -91,8 +92,9 @@ with prod_tab:
                 for ct in result.citations))
 
 with phrase_tab:
-    st.caption("청크 본문에서 문구를 글자 그대로 찾아요(형태소·임베딩 없이). "
-               "최근 적재 문서부터 나와요.")
+    st.caption("청크 본문에서 문구를 글자 그대로 찾아요. 운영 키워드 검색과 같은 형태소 "
+               "인덱스로 후보를 좁힌 뒤 글자가 그대로 맞는 것만 남겨요 — 낱말 중간에서 자른 "
+               "문구는 못 찾을 수 있어요. 찾은 것 안에서 최근 적재 문서부터 보여요.")
     with st.form("phrase_search"):
         text = st.text_input("문구", placeholder="예: 보험금을 지급하지 않는 사유")
         p1, p2, p3 = st.columns([2, 3, 1])
@@ -109,6 +111,8 @@ with phrase_tab:
         try:
             hits = data.find_phrase(text.strip(), None if p_insurer == "(없음)" else p_insurer,
                                     tuple(types), int(limit))
+        except PhraseTooShort as e:
+            st.warning(str(e))
         except Exception as e:  # noqa: BLE001
             st.error(f"찾지 못했어요 — {e}")
         else:

@@ -27,7 +27,13 @@ kubectl port-forward svc/chunk-viewer 8501:8501
 ## 무엇이 어디서 오나
 
 - **문서 목록·청크**: `corpus.policy_chunks`. 문서는 `doc_hash`(원본 파일 sha256) 하나이고, 최신순은
-  `max(ingested_at)`이다. `--overwrite`로 다시 적재하면 그 시각으로 올라온다.
+  `ingested_at`이다. `--overwrite`로 다시 적재하면 그 시각으로 올라온다. 목록은 테이블 전체를 읽지
+  않는다 — `doc_hash` 인덱스를 건너뛰며 문서만 꺼내고 문서마다 첫 행에서 적재 시각을 읽는다(한 문서는
+  한 트랜잭션으로 들어가 시각이 같다). 청크 수는 화면에 보일 문서만 센다. 전체를 묶던 예전 쿼리는
+  청크가 약 227만 행이 되자 dev RDS(db.t4g.small)에서 30초 제한에 걸렸다.
+- **문구 찾기**: 운영 키워드 검색과 같은 전문검색 인덱스(`content_tokens` 형태소)로 후보를 좁힌 뒤 본문
+  글자 일치로 거른다. 문구는 청커와 같은 `tokenize_korean`으로 자른다. 낱말 중간에서 자른 문구는
+  형태소가 달라 못 찾을 수 있다.
 - **원본 PDF**: `ai.corpus_file_part`의 `sha256 = doc_hash`로 S3 키를 찾아 받는다(내용 주소 키라 다시
   검증하지 않는다). 카탈로그를 읽을 권한이 없으면 파일명·원본 없이 청크만 보인다.
 - **표 원문**: S3 `policy-tables/{table_id}.md`.
